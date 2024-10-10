@@ -1,0 +1,97 @@
+criterion:
+  name: distanceLoss
+  min_distance: 0.12
+
+aux_criterion:
+  aspect_ratio_loss:
+    aspect_ratio: 0.1
+    weight: 0.1
+  curl_loss:
+    weight: 0.0
+  tv_loss:
+    weight: 0.0
+    norm: False
+
+test_criterion:
+  name: nmse
+
+optimizer:
+  name: adam
+  lr: 0.1
+  weight_decay: 0.000
+  line_search_fn: None
+
+lr_scheduler:
+  name: cosine
+  lr_gamma: 0.99
+  lr_min: 1e-3
+
+sharp_scheduler:
+  name: sharpness
+  init_sharp: 1
+  final_sharp: 20
+  sharp_threshold: 0.05
+
+res_scheduler:
+  name: resolution
+  init_res: 20
+  final_res: 20
+  test_res: 20
+
+run:
+  experiment: "metalens_local_search"
+  n_epochs: 20
+  use_cuda: 1
+  gpu_id: 0
+  deterministic: 1
+  random_state: 42
+  log_interval: 10
+  fp16: False
+  wandb:
+    project: robust_inverse_design
+    entity: scopex
+    name: local_search
+
+quantize:
+  weight_bit: 32
+  input_bit: 32
+
+checkpoint:
+  save_best_model_k: 3
+  checkpoint_dir: "metacoupler/local_search/train_local_search"
+  model_comment: ""
+  resume: 0
+  restore_checkpoint: ""
+  no_linear: 0
+
+model:
+  name: "MetaCouplerOptimization"
+  device_type: "MetaCoupler"
+  sim_cfg:
+    solver: "ceviche"
+    binary_projection:
+        fw_threshold: 100
+        bw_threshold: 100
+        mode: "regular"
+    border_width: [0, 0, 6, 6]
+    PML: [1, 1]
+    cell_size: None
+    resolution: 50
+    wl_cen: 1.55
+    wl_width: 0
+    n_wl: 1
+    plot_root: "./figs/metacoupler"
+
+
+debug:
+  verbose: 1
+
+plot:
+  train: True
+  valid: True
+  test: True
+  interval: 1
+  phase_intensity_profile_interval: 5
+  dir_name: local_search
+  output_video: False
+  solve_cw: False

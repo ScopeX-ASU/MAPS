@@ -1,0 +1,71 @@
+criterion:
+  name: distanceLoss
+  max_distance: 0.15
+
+aux_criterion:
+  curl_loss:
+    weight: 0.0
+  tv_loss:
+    weight: 0.0
+    norm: False
+
+optimizer:
+  name: adam
+  lr: 0.002
+  weight_decay: 0.000
+
+lr_scheduler:
+  name: cosine
+  lr_gamma: 0.99
+  lr_min: 0
+
+run:
+  experiment: "default"
+  n_epochs: 100
+  use_cuda: 1
+  gpu_id: 0
+  deterministic: 1
+  random_state: 42
+  log_interval: 10
+
+quantize:
+  weight_bit: 32
+  input_bit: 32
+
+checkpoint:
+  save_best_model_k: 3
+  checkpoint_dir: "metacoupler/local_search/train_local_search"
+  model_comment: ""
+  resume: 0
+  restore_checkpoint: ""
+  no_linear: 0
+
+model:
+  name: "MetaCouplerOptimization"
+  device_type: "MetaCoupler"
+  sim_cfg:
+    solver: "ceviche"
+    binary_projection:
+        fw_threshold: 100
+        bw_threshold: 100
+        mode: "regular"
+    border_width: [0, 0, 6, 6]
+    PML: [1, 1]
+    cell_size: None
+    resolution: 50
+    wl_cen: 1.55
+    wl_width: 0
+    n_wl: 1
+    # plot_root: "./figs/metacoupler"
+
+debug:
+  verbose: 1
+
+plot:
+  train: True
+  valid: True
+  test: True
+  interval: 10
+  root: plot
+  dir_name: default
+
