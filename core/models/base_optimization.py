@@ -21,7 +21,9 @@ from .layers.device_base import N_Ports
 from .layers.fom_layer import SimulatedFoM
 from .layers.parametrization import parametrization_builder
 from .layers.utils import ObjectiveFunc, plot_eps_field
+from .utils import nparray_as_real
 import h5py
+from copy import deepcopy
 
 __all__ = [
     "DefaultSimulationConfig",
@@ -349,10 +351,46 @@ class BaseOptimization(nn.Module):
         with torch.no_grad():
             with h5py.File(filename, 'w') as f:
                 f.create_dataset('eps_map', data=self._eps_map.detach().cpu().numpy()) # 2d numpy array
-                f.create_dataset('norm_run_profiles', data=self.norm_run_profiles) #({(wl, mode): [profile, ht_m, et_m, SCALE], ...}, ...)
-                f.create_dataset('field_solutions', data=self.objective.solutions) # {port_name: [source_profile, ht_m, et_m, SCALE], ...}
-                f.create_dataset('s_params', data=self.objective.s_params) # {(name, wl, out_mode): {"s_p": xxx, "s_m": xxx}, ...}
-                f.create_dataset('adj_src', data=self.objective.obtain_adj_srcs()) # scalar
+                # norm_run_profiles = []
+                # for i in range(len(self.norm_run_profiles)):
+                #     norm_run_profile = deepcopy(self.norm_run_profiles[i])
+                #     for (wl, mode), profile in norm_run_profile.items():
+                #         for j in range(len(profile)):
+                #             print("this is the type of the profile[j]", type(profile[j]))
+                #             if isinstance(profile[j], np.ndarray):
+                #                 profile[j] = nparray_as_real(profile[j]) if profile[j].dtype == np.complex128 else profile[j]
+                #                 print("this is the dtype of the profile[j]", profile[j].dtype)
+                #     norm_run_profiles.append(norm_run_profile)
+                # f.create_dataset('norm_run_profiles', data=norm_run_profiles) #({(wl, mode): [profile, ht_m, et_m, SCALE], ...}, ...)
+                for (port_name, wl, mode), fields in self.objective.solutions.items():
+                    fields = deepcopy(fields)
+                    for key, field in fields.items():
+                        if isinstance(fields[key], ArrayBox):
+                            fields[key] = fields[key]._value
+                        if isinstance(field, np.ndarray):
+                            if field.dtype == np.complex128:
+                                fields[key] = nparray_as_real(field)
+                    fields = np.stack((fields["Hx"], fields["Hy"], fields["Ez"]), axis=0)
+                    f.create_dataset(f'field_solutions-{port_name}-{wl}-{mode}', data=fields) # 3d numpy array
+                for (port_name, wl, out_mode), s_params in self.objective.s_params_dump.items():
+                    s_params = deepcopy(s_params)
+                    for key, s_param in s_params.items():
+                        if isinstance(s_param, ArrayBox):
+                            s_param = s_param._value
+                        if isinstance(s_param, np.ndarray):
+                            if s_param.dtype == np.complex128:
+                                s_param = nparray_as_real(s_param)
+                    s_params = np.stack((s_params["s_p"], s_params["s_m"]), axis=0)
+                    f.create_dataset(f's_params-{port_name}-{wl}-{out_mode}', data=s_params) # 3d numpy array
+                adj_srcs = self.objective.obtain_adj_srcs()
+                if isinstance(adj_srcs, ArrayBox):
+                    adj_srcs = adj_srcs._value
+                if isinstance(adj_srcs, np.ndarray):
+                    if adj_srcs.dtype == np.complex128:
+                        adj_srcs = nparray_as_real(adj_srcs)
+                f.create_dataset('adj_src', data=adj_srcs) # 2d numpy array
+                if isinstance(self.current_eps_grad, ArrayBox):
+                    self.current_eps_grad = self.current_eps_grad._value
                 f.create_dataset('gradient', data=self.current_eps_grad) # 2d numpy array
 
     def forward(

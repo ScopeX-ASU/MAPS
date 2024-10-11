@@ -1048,6 +1048,7 @@ class ObjectiveFunc(object):
         self.eps = None
         self.Ez = None
         self.Js = {}  # forward from fields to foms
+        self.adj_Js = {}  # Js for adjoint source calculation
         self.dJ = None  # backward from fom to permittivity
         self.breakdown = {}
         self.solutions = {}
@@ -1383,6 +1384,8 @@ class ObjectiveFunc(object):
         mode: str = "forward",
     ):
         if mode == "forward":
-            return self.obtain_objective(permittivity)
+            objective = self.obtain_objective(permittivity)
+            self.s_params_dump = deepcopy(self.s_params)
+            return objective
         elif mode == "backward":
             return self.obtain_gradient(permittivity, eps_shape)
