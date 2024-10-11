@@ -29,7 +29,7 @@ class LevelSetInterp(object):
         z0: Tensor = None,
         sigma: float = 0.02,
         device: Device = torch.device("cuda:0"),
-    ):  
+    ):
         ## z0 is a tensor: first dimension is x-axis, second dimension is y-axis
         # Input data.
         x0 = x0.to(device)
@@ -64,7 +64,7 @@ class LevelSetInterp(object):
         # ls = self.gaussian(self.xy0, xy1).T @ self.model
         ls = self.gaussian(xy1, self.xy0) @ self.model
         ls = ls.reshape(shape)
-        return ls ## level set surface with the same shape as z0
+        return ls  ## level set surface with the same shape as z0
 
 
 class GetLevelSetEps(nn.Module):
@@ -168,10 +168,9 @@ class LeveSetParameterization(BaseParametrization):
         ]
         ### this makes sure n_phi is the same as design_region_mask
         ## add 1 here due to leveset needs to have one more point than the design region
-        n_phi = [
-            (m.stop - m.start)
-            for m in self.device.design_region_masks[self.region_name]
-        ]
+        n_phi = [(m.stop - m.start) for m in self.design_region_mask]
+
+        n_hr_phi = [(m.stop - m.start) for m in self.hr_design_region_mask]
 
         rho = [
             torch.linspace(-region_s / 2, region_s / 2, n, device=self.operation_device)
@@ -188,7 +187,22 @@ class LeveSetParameterization(BaseParametrization):
             )
             for region_s, n, rho_res in zip(region_size, n_phi, rho_resolution)
         ]
-        param_dict = dict(n_rho=n_rho, n_phi=n_phi, rho=rho, phi=phi)
+
+        ## if one dimension has rho_resolution=0, then this dimension need to be duplicated, e.g., ridge
+        ## then all n_phi points need to be the same number, which is -region_s/2
+        hr_phi = [
+            torch.linspace(
+                -region_s / 2,
+                region_s / 2 if rho_res > 0 else -region_s / 2,
+                n,
+                device=self.operation_device,
+            )
+            for region_s, n, rho_res in zip(region_size, n_hr_phi, rho_resolution)
+        ]
+
+        param_dict = dict(
+            n_rho=n_rho, n_phi=n_phi, rho=rho, phi=phi, n_hr_phi=n_hr_phi, hr_phi=hr_phi
+        )
 
         return param_dict
 
@@ -214,20 +228,17 @@ class LeveSetParameterization(BaseParametrization):
         elif init_method == "rectangle":
             weight = weight_dict["ls_knots"]
             weight.data.fill_(-0.2)
-            weight.data[
-                :, weight.shape[1] // 4 : 3 * weight.shape[1] // 4
-            ] = 0.05
+            weight.data[:, weight.shape[1] // 4 : 3 * weight.shape[1] // 4] = 0.05
             # weight.data += torch.randn_like(weight) * 0.01
         else:
             raise ValueError(f"Unsupported initialization method: {init_method}")
 
-    def build_permittivity(self, weights, sharpness: float):
-        rho, phi = self.params["rho"], self.params["phi"]
+    def _build_permittivity(self, weights, rho, phi, n_phi, sharpness: float):
         sigma = 1 / max(self.cfgs["rho_resolution"])
         design_param = weights["ls_knots"]
         ### to avoid all knots becoming unreasonable large to make it stable
         ### also to avoid most knots concentrating near threshold, otherwise, binarization will not work
-        design_param = design_param / design_param.std() * 1/4
+        design_param = design_param / design_param.std() * 1 / 4
         phi_model = LevelSetInterp(
             x0=rho[0],
             y0=rho[1],
@@ -236,12 +247,7 @@ class LeveSetParameterization(BaseParametrization):
             device=design_param.device,
         )
 
-        n_phi = self.params["n_phi"]
-
         phi = phi_model.get_ls(x1=phi[0], y1=phi[1], shape=n_phi)
-   
-        
-
 
         phi = phi + self.eta
         eps_phi = self.binary_projection(phi, sharpness, self.eta)
@@ -249,3 +255,14 @@ class LeveSetParameterization(BaseParametrization):
         self.phi = torch.reshape(phi, n_phi)
 
         return eps_phi
+
+    def build_permittivity(self, weights, sharpness: float):
+        ## this is the high resolution, e.g., res=200, 310 permittivity
+        ## return: 
+        #   1. we need the first one for gds dump out
+        #   2. we need the second one for evaluation, do not need to downsample it here. transform will handle it.
+        hr_permittivity = self._build_permittivity(
+            weights, self.params["rho"], self.params["hr_phi"], self.params["n_hr_phi"], sharpness
+        )
+
+        return hr_permittivity

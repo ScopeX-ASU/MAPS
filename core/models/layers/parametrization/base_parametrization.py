@@ -6,6 +6,7 @@ FilePath: /Metasurface-Opt/core/models/base_parametrization.py
 """
 
 from copy import deepcopy
+from typing import List, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -15,7 +16,7 @@ from core.utils import padding_to_tiles, rip_padding
 from core.NVILT_Share.photonic_model import *
 
 
-def mirror_symmetry(x, dims):
+def _mirror_symmetry(x, dims):
     for dim in dims:
         y1, y2 = x.chunk(2, dim=dim)
         if x.shape[dim] % 2 != 0:
@@ -28,7 +29,12 @@ def mirror_symmetry(x, dims):
     return x
 
 
-def transpose_symmetry(x, flag):
+def mirror_symmetry(xs: Tuple | List, dims):
+    xs = [_mirror_symmetry(x, dims) for x in xs]
+    return xs
+
+
+def _transpose_symmetry(x, flag: bool = True):
     assert x.shape[0] == x.shape[1], "Only support square matrix for transpose symmetry"
     if flag:
         x_t = torch.transpose(x, 0, 1)
@@ -37,35 +43,63 @@ def transpose_symmetry(x, flag):
     return x
 
 
-def convert_resolution(
-    x, source_resolution: int, target_resolution: int, intplt_mode="nearest"
-):
-    target_nx, target_ny = [
-        int(round(i * target_resolution / source_resolution)) for i in x.shape
-    ]
+def transpose_symmetry(xs: Tuple | List, flag: bool = True) -> List:
+    xs = [_transpose_symmetry(x, flag=flag) for x in xs]
+    return xs
 
+
+def _convert_resolution(
+    x,
+    source_resolution: int = None,
+    target_resolution: int = None,
+    intplt_mode="nearest",
+    target_size=None,
+):
+    if target_size is None:
+        target_nx, target_ny = [
+            int(round(i * target_resolution / source_resolution)) for i in x.shape
+        ]
+        target_size = (target_nx, target_ny)
+    if x.shape[-2:] == tuple(target_size):
+        return x
     if len(x.shape) == 2:
         x = (
             F.interpolate(
                 x.unsqueeze(0).unsqueeze(0),
-                size=(target_nx, target_ny),
+                size=target_size,
                 mode=intplt_mode,
             )
             .squeeze(0)
             .squeeze(0)
         )
     elif len(x.shape) == 3:
-        x = F.interpolate(
-            x.unsqueeze(0), size=(target_nx, target_ny), mode=intplt_mode
-        ).squeeze(0)
+        x = F.interpolate(x.unsqueeze(0), size=target_size, mode=intplt_mode).squeeze(0)
     return x
 
-def litho(x, mask_steepness, resist_steepness, device):
+
+def convert_resolution(
+    xs: Tuple | List,
+    source_resolution: int = None,
+    target_resolution: int = None,
+    intplt_mode="nearest",
+    target_size=None,
+):
+    x = _convert_resolution(
+        xs[1],
+        source_resolution=source_resolution,
+        target_resolution=target_resolution,
+        intplt_mode=intplt_mode,
+        target_size=target_size,
+    )
+    return list(xs[:-1]) + [x]
+
+
+def _litho(x_310, mask_steepness, resist_steepness, device):
+    ## hr_x is the high resolution pattern 1 nm/pixel, x is the low resolution pattern following sim_cfg resolution
     # in this case, we only consider the nominal corner of lithography
     # TODO ensure that the input x is a (0, 1) pattern
-    entire_eps, pady_0, pady_1, padx_0, padx_1 = padding_to_tiles(
-        x, 620
-    )
+    ### make sure input x is the correct resolution=310!
+    entire_eps, pady_0, pady_1, padx_0, padx_1 = padding_to_tiles(x_310, 620)
     # remember to set the resist_steepness to a smaller value so that the output three mask is not strictly binarized for later etching
     nvilt = My_nvilt2(
         target_img_shape=entire_eps.shape,
@@ -76,21 +110,45 @@ def litho(x, mask_steepness, resist_steepness, device):
         scale_factor=1,
         device=device,
     )
-    x_out, _, _ = nvilt.forward_batch(
-        batch_size=1, target_img=entire_eps
-    )
+    x_out, _, _ = nvilt.forward_batch(batch_size=1, target_img=entire_eps)
 
-    x_out_norm = rip_padding(x_out.squeeze(), pady_0, pady_1, padx_0, padx_1)
+    x_out = rip_padding(x_out.squeeze(), pady_0, pady_1, padx_0, padx_1)
 
-    return x_out_norm
+    ### x_outis also resolution=310
 
-def etching(x, sharpness, eta, binary_projection):
+    return x_out
+
+
+def litho(xs, mask_steepness, resist_steepness, device):
+    outs = [xs[0]]
+    outs += [_litho(x, mask_steepness, resist_steepness, device) for x in xs[1:]]
+    return outs
+
+
+def _etching(x, sharpness, eta, binary_projection):
     # in this case, we only consider the nominal corner for etching
-    sharpness = torch.tensor([sharpness,], device=x.device)
-    eta = torch.tensor([eta,], device=x.device)
+    sharpness = torch.tensor(
+        [
+            sharpness,
+        ],
+        device=x.device,
+    )
+    eta = torch.tensor(
+        [
+            eta,
+        ],
+        device=x.device,
+    )
     x = binary_projection(x, sharpness, eta)
 
     return x
+
+
+def etching(xs, sharpness, eta, binary_projection):
+    outs = [xs[0]]
+    outs += [_etching(x, sharpness, eta, binary_projection) for x in xs[1:]]
+    return outs
+
 
 permittivity_transform_collections = dict(
     mirror_symmetry=mirror_symmetry,
@@ -105,6 +163,7 @@ class BaseParametrization(nn.Module):
     def __init__(
         self,
         device,  # BaseDevice
+        hr_device,  # BaseDevice
         sim_cfg: dict,
         region_name: str = "design_region_1",
         cfgs: dict = dict(
@@ -122,6 +181,8 @@ class BaseParametrization(nn.Module):
         self.device = device
         self.design_region_mask = device.design_region_masks[region_name]
         self.design_region_cfg = device.design_region_cfgs[region_name]
+
+        self.hr_design_region_mask = hr_device.design_region_masks[region_name]
         self.operation_device = operation_device
         self._parameter_build_per_region_fns = {}
         self._parameter_reset_per_region_fns = {}
@@ -159,10 +220,10 @@ class BaseParametrization(nn.Module):
             raise ValueError(f"Unsupported parameterization reset method: {method}")
 
     def build_permittivity(self, weights, sharpness: float):
-        ### return: permittivity
+        ### return: permittivity that you would like to dumpout as final solution, typically should be high resolution
         raise NotImplementedError
 
-    def permittivity_transform(self, permittivity, cfgs):
+    def permittivity_transform(self, hr_permittivity, permittivity, cfgs):
         transform_cfg_list = cfgs["transform"]
 
         for transform_cfg in transform_cfg_list:
@@ -170,15 +231,33 @@ class BaseParametrization(nn.Module):
             cfg = deepcopy(transform_cfg)
             del cfg["type"]
             if "device" in cfg.keys():
-                assert cfg["device"] == 'cuda', "running on cpu is not supported"
+                assert cfg["device"] == "cuda", "running on cpu is not supported"
                 cfg["device"] = self.operation_device
             if "binary_proj_layer" in cfg.keys():
                 cfg["binary_projection"] = self.binary_projection
-            permittivity = permittivity_transform_collections[transform_type](
-                permittivity, **cfg
+            hr_permittivity, permittivity = permittivity_transform_collections[
+                transform_type
+            ]((hr_permittivity, permittivity), **cfg)
+
+        ### we have to match the design region size to be able to be placed in the design region
+        target_size = [(m.stop - m.start) for m in self.design_region_mask]
+
+        permittivity = _convert_resolution(
+            permittivity,
+            intplt_mode="nearest",
+            target_size=target_size,
+        )
+
+        with torch.inference_mode():
+            target_size = [(m.stop - m.start) for m in self.hr_design_region_mask]
+
+            hr_permittivity = _convert_resolution(
+                hr_permittivity,
+                intplt_mode="nearest",
+                target_size=target_size,
             )
 
-        return permittivity
+        return hr_permittivity, permittivity
 
     def denormalize_permittivity(self, permittivity):
         eps_r = self.design_region_cfg["eps"]
@@ -189,16 +268,26 @@ class BaseParametrization(nn.Module):
 
     def forward(self, sharpness: float):
         ## first build the normalized device permittivity using weights
+        ## the built one is the high resolution permittivity for evaluation
         permittivity = self.build_permittivity(self.weights, sharpness)
+
+        ## this is the cloned and detached permittivity for gds dumpout
+        hr_permittivity = permittivity.detach().clone()
 
         # I swap the order of the denormalize and transform, it should be fine
 
         ### then transform the permittivity for all regions using transform settings
         ## e.g., mirror symmetry, transpose symmetry, convert resolution, ...
-        permittivity = self.permittivity_transform(permittivity, self.cfgs)
+
+        ## after this, permittivity will be downsampled to match the sim_cfg resolution, e.g., res=50 or 100
+        ## hr_permittivity will maintain the high resolution
+        hr_permittivity, permittivity = self.permittivity_transform(
+            hr_permittivity, permittivity, self.cfgs
+        )
 
         ## we need to denormalize the permittivity to the real permittivity values
         ## for the simulation
         permittivity = self.denormalize_permittivity(permittivity)
+        hr_permittivity = self.denormalize_permittivity(hr_permittivity)
 
-        return permittivity
+        return hr_permittivity, permittivity

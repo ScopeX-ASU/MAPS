@@ -208,7 +208,7 @@ class N_Ports(BaseDevice):
         ## but need to consider this in bounding box
         # self.add_geometries(design_region_cfgs)
 
-        if self.sim_cfg["cell_size"] is None or self.sim_cfg["cell_size"] == 'None':
+        if self.sim_cfg["cell_size"] is None or self.sim_cfg["cell_size"] == "None":
             self.cell_size = self.get_geometry_box(
                 border_width=sim_cfg["border_width"], PML=sim_cfg["PML"]
             )
@@ -267,9 +267,15 @@ class N_Ports(BaseDevice):
         right, upper = float("-inf"), float("-inf")
         for design_region in self.design_region_cfgs.values():
             left = min(left, design_region["center"][0] - design_region["size"][0] / 2)
-            right = max(right, design_region["center"][0] + design_region["size"][0] / 2)
-            lower = min(lower, design_region["center"][1] - design_region["size"][1] / 2)
-            upper = max(upper, design_region["center"][1] + design_region["size"][1] / 2)
+            right = max(
+                right, design_region["center"][0] + design_region["size"][0] / 2
+            )
+            lower = min(
+                lower, design_region["center"][1] - design_region["size"][1] / 2
+            )
+            upper = max(
+                upper, design_region["center"][1] + design_region["size"][1] / 2
+            )
 
         for geometry in self.geometry.values():
             if isinstance(geometry, mp.Block):
@@ -351,6 +357,42 @@ class N_Ports(BaseDevice):
         )
         return ports_regions.astype(np.bool_)
 
+    def add_monitor_slice(
+        self,
+        slice_name: str,
+        center: Tuple[int, int],
+        size: Tuple[int, int],
+        direction: str | None = None,
+    ):
+        assert size[0] == 1 or size[1] == 1, "Only 1D slice is supported"
+        if direction is None:
+            direction = "x" if size[0] == 1 else "y"
+
+        if direction == "x":
+            monitor_center = [int(round(c / self.grid_step)) for c in center]
+            monitor_half_width = int(round(size[1] / 2 / self.grid_step))
+            monitor_slice = Slice(
+                x=np.array(monitor_center[0]),
+                y=np.arange(
+                    monitor_center[1] - monitor_half_width,
+                    monitor_center[1] + monitor_half_width,
+                ),
+            )
+        elif direction == "y":
+            monitor_center = [int(round(c / self.grid_step)) for c in center]
+            monitor_half_width = int(round(size[0] / 2 / self.grid_step))
+            monitor_slice = Slice(
+                x=np.arange(
+                    monitor_center[0] - monitor_half_width,
+                    monitor_center[0] + monitor_half_width,
+                ),
+                y=np.array(monitor_center[1]),
+            )
+        else:
+            raise ValueError(f"Direction {direction} not supported")
+        self.port_monitor_slices[slice_name] = monitor_slice
+        return monitor_slice
+
     def build_port_monitor_slice(
         self,
         port_name: str = "in_port_1",
@@ -367,34 +409,18 @@ class N_Ports(BaseDevice):
                 center[0] - size[0] / 2 + rel_loc * size[0] + self.cell_size[0] / 2,
                 center[1] + self.cell_size[1] / 2,
             ]
-
-            monitor_center = [int(round(c / self.grid_step)) for c in monitor_center]
-            monitor_half_width = int(round(size[1] * rel_width / 2 / self.grid_step))
-            monitor_slice = Slice(
-                x=np.array(monitor_center[0]),
-                y=np.arange(
-                    monitor_center[1] - monitor_half_width,
-                    monitor_center[1] + monitor_half_width,
-                ),
-            )
+            monitor_size = [1, size[1] * rel_width]
         elif direction == "y":
             monitor_center = [
                 center[0] + self.cell_size[0] / 2,
                 center[1] - size[1] / 2 + rel_loc * size[1] + self.cell_size[1] / 2,
             ]
-            monitor_center = [int(round(c / self.grid_step)) for c in monitor_center]
-            monitor_half_width = int(round(size[0] * rel_width / 2 / self.grid_step))
-            monitor_slice = Slice(
-                x=np.arange(
-                    monitor_center[0] - monitor_half_width,
-                    monitor_center[0] + monitor_half_width,
-                ),
-                y=np.array(monitor_center[1]),
-            )
+            monitor_size = [size[0] * rel_width, 1]
         else:
             raise ValueError(f"Direction {direction} not supported")
-        self.port_monitor_slices[slice_name] = monitor_slice
-        return monitor_slice
+        return self.add_monitor_slice(
+            slice_name, monitor_center, monitor_size, direction
+        )
 
     def build_radiation_monitor(
         self, monitor_name: str = "rad_monitor", distance_to_PML=[0.2, 0.2]
@@ -421,7 +447,12 @@ class N_Ports(BaseDevice):
         self.port_monitor_slices[monitor_name + "_yp"] = radiation_monitor_yp
         self.port_monitor_slices[monitor_name + "_ym"] = radiation_monitor_ym
 
-        return radiation_monitor_xp, radiation_monitor_xm, radiation_monitor_yp, radiation_monitor_ym
+        return (
+            radiation_monitor_xp,
+            radiation_monitor_xm,
+            radiation_monitor_yp,
+            radiation_monitor_ym,
+        )
 
     def insert_modes(
         self,
@@ -614,6 +645,20 @@ class N_Ports(BaseDevice):
         eps_map = copy.deepcopy(self.epsilon_map)
         eps_map[self.design_region_mask] = permittivity.flatten()
         return eps_map  # return the copy of the permittivity map
+
+    def copy(self, resolution: int = 310):
+        sim_cfg = copy.deepcopy(self.sim_cfg)
+        sim_cfg["resolution"] = resolution
+        new_device = self.__class__()
+        super(new_device.__class__, new_device).__init__(
+            eps_bg=self.eps_bg,
+            port_cfgs=self.port_cfgs,
+            geometry_cfgs=self.geometry_cfgs,
+            design_region_cfgs=self.design_region_cfgs,
+            sim_cfg=sim_cfg,
+            device=self.device,
+        )
+        return new_device
 
     def __str__(self):
         return f"{self.__class__.__name__}(size={self.cell_size}, Nx={self.Nx}, Ny={self.Ny})"
