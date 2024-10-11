@@ -237,10 +237,12 @@ class BaseOptimization(nn.Module):
 
         obj_cfgs = copy.deepcopy(obj_cfgs)
         self.objective.add_objective(obj_cfgs)
+        self.objective.add_adj_objective(obj_cfgs)
 
         ### create static backward computational graph from J to eps, no actual execution.'
         self.gradient_region = "global_region"
         self.objective.build_jacobian()
+        self.objective.build_adj_jacobian()
 
         return self.objective
 
@@ -276,6 +278,7 @@ class BaseOptimization(nn.Module):
                 self.device.epsilon_map.shape,
                 mode="backward",
             )
+            self.current_eps_grad = total_value
 
         else:
             raise NotImplementedError
@@ -321,7 +324,7 @@ class BaseOptimization(nn.Module):
             zoom_eps_factor=2,
         )
 
-    def dump_data(self, filename, data):
+    def dump_data(self, filename):
         # TODO implement this function
         '''
         data needed to be dumped:
@@ -329,17 +332,16 @@ class BaseOptimization(nn.Module):
             2. E field, H field, corrresponding to different resolution eps_map
             3. Source_profile
             4. Scattering matrix
+            5. gradient 
         '''
         with torch.no_grad():
-            # write eps_map to a h5 file
-            eps_map = self._eps_map.detach().cpu().numpy()
             with h5py.File(filename, 'w') as f:
-                f.create_dataset('eps_map', data=eps_map) # 2d numpy array
+                f.create_dataset('eps_map', data=self._eps_map.detach().cpu().numpy()) # 2d numpy array
                 f.create_dataset('norm_run_profiles', data=self.norm_run_profiles) #({(wl, mode): [profile, ht_m, et_m, SCALE], ...}, ...)
                 f.create_dataset('field_solutions', data=self.objective.solutions) # {port_name: [source_profile, ht_m, et_m, SCALE], ...}
-                f.create_dataset('s_params', data=self.objective.s_params) # 2d numpy array
-
-        pass
+                f.create_dataset('s_params', data=self.objective.s_params) # {(name, wl, out_mode): {"s_p": xxx, "s_m": xxx}, ...}
+                f.create_dataset('adj_src', data=self.objective.obtain_adj_srcs()) # scalar
+                f.create_dataset('gradient', data=self.current_eps_grad) # 2d numpy array
 
     def forward(
         self,
