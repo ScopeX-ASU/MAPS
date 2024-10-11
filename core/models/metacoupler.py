@@ -192,6 +192,7 @@ class MetaCouplerOptimization(BaseOptimization):
     def __init__(
         self,
         device,
+        hr_device,
         design_region_param_cfgs=dict(),
         sim_cfg: dict = dict(),
         obj_cfgs=dict(),
@@ -223,6 +224,7 @@ class MetaCouplerOptimization(BaseOptimization):
 
         super().__init__(
             device=device,
+            hr_device=hr_device,
             design_region_param_cfgs=cfgs.design_region_param_cfgs,
             sim_cfg=cfgs.sim_cfg,
             obj_cfgs=cfgs.obj_cfgs,

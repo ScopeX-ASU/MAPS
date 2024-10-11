@@ -111,6 +111,7 @@ class BaseOptimization(nn.Module):
     def __init__(
         self,
         device: N_Ports,
+        hr_device: N_Ports,
         design_region_param_cfgs: dict = dict(),
         sim_cfg: dict = dict(),
         obj_cfgs=dict(),
@@ -119,6 +120,7 @@ class BaseOptimization(nn.Module):
         super().__init__()
 
         self.device = device
+        self.hr_device = hr_device
         self.operation_device = operation_device
         self._cfgs = DefaultOptimizationConfig()  ## default optimization config
         self._cfgs.update(
@@ -133,6 +135,9 @@ class BaseOptimization(nn.Module):
             setattr(self, name, cfg)
 
         self.epsilon_map = torch.from_numpy(device.epsilon_map).to(
+            self.operation_device
+        )
+        self.hr_eps_map = torch.from_numpy(hr_device.epsilon_map).to(
             self.operation_device
         )
         self.design_region_masks = device.design_region_masks
@@ -166,6 +171,7 @@ class BaseOptimization(nn.Module):
         logger.info("Start building design region parametrizations ...")
         self.design_region_param_dict = parametrization_builder(
             device=self.device,
+            hr_device=self.hr_device,
             sim_cfg=self.sim_cfg,
             parametrization_cfgs=self.design_region_param_cfgs,
         )  ## nn.ModuleDict = {region_name: nn.Module, ...}
@@ -177,18 +183,24 @@ class BaseOptimization(nn.Module):
         sharpness: float = 1,
     ):
         design_region_eps_dict = {}
+        hr_design_region_eps_dict = {}
         for region_name, design_region in self.design_region_param_dict.items():
             ## obtain each design region's denormalized permittivity only in the design region
-            design_region_eps_dict[region_name] = design_region(sharpness)
+            hr_region, region = design_region(sharpness)
+            design_region_eps_dict[region_name] = region
+            hr_design_region_eps_dict[region_name] = hr_region
 
         ### then we need to fill in the permittivity of each design region to the whole device eps_map
         eps_map = self.epsilon_map.data.clone()
+        hr_eps_map = self.hr_eps_map
 
         for region_name, design_region_eps in design_region_eps_dict.items():
             region_mask = self.design_region_masks[region_name]
             eps_map[region_mask] = design_region_eps
+            hr_region_mask = self.hr_device.design_region_masks[region_name]
+            hr_eps_map[hr_region_mask] = hr_design_region_eps_dict[region_name]
 
-        return eps_map, design_region_eps_dict
+        return eps_map, design_region_eps_dict, hr_eps_map, hr_design_region_eps_dict
 
     def build_objective(
         self,
@@ -347,10 +359,14 @@ class BaseOptimization(nn.Module):
         self,
         sharpness: float = 1,
     ):
-        eps_map, design_region_eps_dict = self.build_device(sharpness)
+        # eps_map, design_region_eps_dict = self.build_device(sharpness)
+        eps_map, design_region_eps_dict, hr_eps_map, hr_design_region_eps_dict = (
+            self.build_device(sharpness)
+        )
         ## need to create objective layer during forward, because all Simulations need to know the latest permittivity_list
 
         self._eps_map = eps_map
+        self._hr_eps_map = hr_eps_map
         obj = self.objective_layer([eps_map])
         self._obj = obj
         results = {"obj": obj, "breakdown": self.objective.breakdown}

@@ -14,7 +14,7 @@ _param_registry = {"levelset": LeveSetParameterization}
 __all__ = ["parametrization_builder"]
 
 def parametrization_builder(
-    device, sim_cfg, parametrization_cfgs, **kwargs
+    device, hr_device, sim_cfg, parametrization_cfgs, **kwargs
 ):     
     ### build multiple design regions as a dictionary of nn.Module
     param_dict = nn.ModuleDict()
@@ -24,6 +24,7 @@ def parametrization_builder(
             raise ValueError(f"Invalid parametrization method: {method}")
         param_dict[region_name] = _param_registry[method](
             device=device,
+            hr_device=hr_device,
             sim_cfg=sim_cfg,
             region_name=region_name,
             cfgs=param_cfg,

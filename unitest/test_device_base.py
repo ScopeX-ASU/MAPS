@@ -11,6 +11,7 @@ LastEditors: Jiaqi Gu && jiaqigu@asu.edu
 LastEditTime: 2024-10-04 00:50:55
 FilePath: /Metasurface-Opt/unitest/test_device_base.py
 """
+from copy import deepcopy
 import torch
 
 from core.models.layers.device_base import N_Ports, Si_eps
@@ -228,8 +229,10 @@ def test_isolator_opt():
     obj_cfgs = dict(_fusion_func=fom_func)
 
     device = Isolator(sim_cfg=sim_cfg, device="cuda:0")
-    print(device)
-    opt = IsolatorOptimization(device=device, sim_cfg=sim_cfg, obj_cfgs=obj_cfgs)
+    hr_device = device.copy(resolution=310)
+    print(device, flush=True)
+    print(hr_device, flush=True)
+    opt = IsolatorOptimization(device=device, hr_device=hr_device, sim_cfg=sim_cfg, obj_cfgs=obj_cfgs)
     print(opt)
 
     optimizer = torch.optim.Adam(opt.parameters(), lr=0.02)
