@@ -382,7 +382,7 @@ class BaseOptimization(nn.Module):
                                 s_param = nparray_as_real(s_param)
                     s_params = np.stack((s_params["s_p"], s_params["s_m"]), axis=0)
                     f.create_dataset(f's_params-{port_name}-{wl}-{out_mode}', data=s_params) # 3d numpy array
-                adj_srcs = self.objective.obtain_adj_srcs()
+                adj_srcs = self.objective.obtain_adj_srcs(self.obj_cfgs)
                 if isinstance(adj_srcs, ArrayBox):
                     adj_srcs = adj_srcs._value
                 if isinstance(adj_srcs, np.ndarray):

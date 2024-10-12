@@ -1022,6 +1022,85 @@ def insert_mode(omega, dx, x, y, epsr, target=None, npml=0, m=1, filtering=False
     target[x, y] = np.atleast_2d(e)[:, m - 1].squeeze()
     return h[:, m - 1], e[:, m - 1], beta, target
 
+class sParamFromEfield(object):
+    '''
+    a callable class that calculates the s-parameters from the e_fields
+    so that we can use jacobian reverse to calculate the gradient of the s-parameters 
+    w.r.t the e-fields for adjoint source calculation
+    '''
+    def __init__(
+            self, 
+            port_profile, 
+            port_slice, 
+            grid_step, 
+            sim, 
+            direction, 
+            in_port_name,
+            out_port_name,
+            wl,
+            in_mode,
+            out_mode,
+            avg_coefficient,
+            type,
+        ):
+        self.port_profile = port_profile
+        self.port_slice = port_slice
+        self.grid_step = grid_step
+        self.sim = sim
+        self.direction = direction
+        self.monitor_slice = self.port_slice[out_port_name]
+        self.norm_power = self.port_profile[in_port_name][
+            (wl, in_mode)
+        ][3]
+        if type == "eigenmode":
+            _, self.ht_m, self.et_m, _ = self.port_profile[out_port_name][
+                (wl, out_mode)
+            ]
+        self.avg_coefficient = avg_coefficient
+        self.type = type
+        assert type in {"eigenmode", "flux", "flux_minus_src"}, f"type {type} not supported"
+    
+    def __call__(self, Efield):
+        Efield_vec = self.sim._grid_to_vec(Efield)
+        Hx_vec, Hy_vec = self.sim._Ez_to_Hx_Hy(Efield_vec)
+        hx = self.sim._vec_to_grid(Hx_vec)
+        hy = self.sim._vec_to_grid(Hy_vec)
+        if self.type == "eigenmode":
+            s_p, s_m = get_eigenmode_coefficients(
+                hx,
+                hy,
+                Efield,
+                self.ht_m,
+                self.et_m,
+                self.monitor_slice,
+                grid_step=self.grid_step,
+                direction=self.direction[0],
+                autograd=True,
+                energy=True,
+            )
+            if self.direction[1] == "+":
+                s = s_p
+            elif self.direction[1] == "-":
+                s = s_m
+            else:
+                raise ValueError("Invalid direction")
+            s = s / self.norm_power / self.avg_coefficient
+        elif self.type in {"flux", "flux_minus_src"}:
+            s = get_flux(
+                hx,
+                hy,
+                Efield,
+                self.monitor_slice,
+                grid_step=self.grid_step,
+                direction=self.direction[0],
+                autograd=True,
+            )
+            s = npa.abs(s / self.norm_power / self.avg_coefficient)  # we only need absolute flux
+            if type == "flux_minus_src":
+                s = npa.abs(
+                    s - 1
+                )  ## if it is larger than 1, then this slice must include source, we minus the power from source
+        return s
 
 class ObjectiveFunc(object):
     def __init__(
@@ -1211,96 +1290,24 @@ class ObjectiveFunc(object):
             out_modes = cfg["out_modes"]
             direction = cfg["direction"]
 
-            if type == "eigenmode":
-
-                def adj_objfn(
-                    fields,
-                    in_port_name=in_port_name,
-                    out_port_name=out_port_name,
-                    in_mode=in_mode,
-                    out_modes=out_modes,
-                    direction=direction,
-                ):
-                    s_list = []
-                    ## for each wavelength, we evaluate the objective
-                    for wl, sim in self.sims.items():
-                        ## we calculate the average eigen energy for all output modes
-                        for out_mode in out_modes:
-                            _, ht_m, et_m, _ = self.port_profiles[out_port_name][
-                                (wl, out_mode)
-                            ]
-                            norm_power = self.port_profiles[in_port_name][
-                                (wl, in_mode)
-                            ][3]
-                            monitor_slice = self.port_slices[out_port_name]
-                            field = fields[(in_port_name, wl, in_mode)]
-
-                            ez = field["Ez"]
-                            hx, hy = sim._Ez_to_Hx_Hy(ez)
-
-                            s_p, s_m = get_eigenmode_coefficients(
-                                hx,
-                                hy,
-                                ez,
-                                ht_m,
-                                et_m,
-                                monitor_slice,
-                                grid_step=self.grid_step,
-                                direction=direction[0],
-                                autograd=True,
-                                energy=True,
-                            )
-                            if direction[1] == "+":
-                                s = s_p
-                            elif direction[1] == "-":
-                                s = s_m
-                            else:
-                                raise ValueError("Invalid direction")
-                            s_list.append(s / norm_power)
-                    return npa.mean(npa.array(s_list))
-            elif type in {"flux", "flux_minus_src"}:
-
-                def adj_objfn(
-                    fields,
-                    in_port_name=in_port_name,
-                    out_port_name=out_port_name,
-                    in_mode=in_mode,
-                    direction=direction,
-                    type=type,
-                ):
-                    s_list = []
-                    ## for each wavelength, we evaluate the objective
-                    for wl, sim in self.sims.items():
-                        monitor_slice = self.port_slices[out_port_name]
-                        norm_power = self.port_profiles[in_port_name][(wl, in_mode)][3]
-                        field = fields[(in_port_name, wl, in_mode)]
-                        # hx, hy, ez = (
-                        #     field["Hx"],
-                        #     field["Hy"],
-                        #     field["Ez"],
-                        # )  # fetch fields
-                        ez = field["Ez"]
-
-                        hx, hy = sim._Ez_to_Hx_Hy(ez)
-                        s = get_flux(
-                            hx,
-                            hy,
-                            ez,
-                            monitor_slice,
-                            grid_step=self.grid_step,
-                            direction=direction[0],
-                            autograd=True,
-                        )
-                        s = npa.abs(s / norm_power)  # we only need absolute flux
-                        if type == "flux_minus_src":
-                            s = npa.abs(
-                                s - 1
-                            )  ## if it is larger than 1, then this slice must include source, we minus the power from source
-
-                        s_list.append(s)
-                    return npa.mean(npa.array(s_list))  # we only need absolute flux
-            else:
-                raise ValueError("Invalid type")
+            adj_objfn = {}
+            for wl, sim in self.sims.items():
+                for out_mode in out_modes:
+                    objfn = sParamFromEfield(
+                        port_profile=self.port_profiles, 
+                        port_slice=self.port_slices, 
+                        grid_step=self.grid_step, 
+                        sim=sim, 
+                        direction=direction, 
+                        in_port_name=in_port_name,
+                        out_port_name=out_port_name,
+                        wl=wl,
+                        in_mode=in_mode,
+                        out_mode=out_mode,
+                        avg_coefficient=len(self.sims.keys()) * len(out_modes),
+                        type=type,
+                    )
+                    adj_objfn[(wl, out_mode)] = objfn
 
             ### note that this is not the final objective! this is partial objective from fields to fom
             ### complete autograd graph is from permittivity (np.ndarray) to fields and to fom
@@ -1313,16 +1320,35 @@ class ObjectiveFunc(object):
     def build_adj_jacobian(self):
         self.dJ_dE = {}
         for name, obj in self.adj_Js.items():
-            dJ_dE_fn = jacobian(obj["fn"], mode="reverse")
+            dJ_dE_fn = {}
+            for (wl, out_mode), obj_fn in obj["fn"].items():
+                dJ_dE = jacobian(obj_fn, mode="reverse")
+                dJ_dE_fn[(wl, out_mode)] = dJ_dE
             self.dJ_dE[name] = {"weight": obj["weight"], "fn": dJ_dE_fn}
 
-    def obtain_adj_srcs(self):
+    def obtain_adj_srcs(self, cfgs):
         # this should be called after obtain_objective, other wise self.solutions is empty
+        cfgs = deepcopy(cfgs)
+        del cfgs["_fusion_func"]
         adj_sources = {}
-        for name, obj in self.Js.items():
-            weight, value = obj["weight"], obj["fn"](fields=self.solutions)
+        for name, obj in self.dJ_dE.items():
+            cfg = cfgs[name]
+            in_port_name = cfg["in_port_name"]
+            in_mode = cfg["in_mode"]
+            out_modes = cfg["out_modes"]
+            dummy_key = next(iter(self.sims.keys()))
+            value = np.zeros_like(
+                self.sims[dummy_key].eps_r, 
+                dtype=np.complex128
+            )
+            for wl, _ in self.sims.items():
+                EField = self.solutions[(in_port_name, wl, in_mode)]["Ez"]
+                for out_mode in out_modes:
+                    grad = obj["fn"][(wl, out_mode)](EField)
+                    grad = grad.reshape(value.shape)
+                    value = value + grad
             adj_sources[name] = {
-                "weight": weight,
+                "weight": obj["weight"],
                 "value": value,
             }
         ## here we accept customized fusion function, e.g., weighted sum by default.
