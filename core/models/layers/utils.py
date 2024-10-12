@@ -19,6 +19,8 @@ from torch import Tensor
 from torch.types import Device
 from torch_sparse import spmm
 from pyutils.general import print_stat
+from ceviche.primitives import sp_solve, sp_mult, spsp_mult
+from ceviche.derivatives import compute_derivative_matrices
 
 __all__ = [
     "material_fn_dict",
@@ -1075,6 +1077,7 @@ class ObjectiveFunc(object):
         self.eps = None
         self.Ez = None
         self.Js = {}  # forward from fields to foms
+        self.adj_Js = {}  # Js for adjoint source calculation
         self.dJ = None  # backward from fom to permittivity
         self.breakdown = {}
         self.solutions = {}
@@ -1228,9 +1231,165 @@ class ObjectiveFunc(object):
             ### complete autograd graph is from permittivity (np.ndarray) to fields and to fom
             self.Js[name] = {"weight": cfg["weight"], "fn": objfn}
 
+    def add_adj_objective(
+        self,
+        cfgs: dict = dict(
+            fwd_trans=dict(
+                weight=1,
+                type="eigenmode",
+                #### objective is evaluated at this port
+                in_port_name="in_port_1",
+                out_port_name="out_port_1",
+                #### objective is evaluated at all points by sweeping the wavelength and modes
+                in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                out_modes=(
+                    1,
+                ),  # can evaluate on multiple output modes and get average transmission
+                direction="x+",
+            )
+        ),
+    ):
+        cfgs = deepcopy(cfgs)
+        del cfgs["_fusion_func"]
+        ### build objective functions from solved fields to fom
+        for name, cfg in cfgs.items():
+            type = cfg["type"]
+            in_port_name = cfg["in_port_name"]
+            out_port_name = cfg["out_port_name"]
+            in_mode = cfg["in_mode"]
+            out_modes = cfg["out_modes"]
+            direction = cfg["direction"]
+
+            if type == "eigenmode":
+
+                def adj_objfn(
+                    fields,
+                    in_port_name=in_port_name,
+                    out_port_name=out_port_name,
+                    in_mode=in_mode,
+                    out_modes=out_modes,
+                    direction=direction,
+                ):
+                    s_list = []
+                    ## for each wavelength, we evaluate the objective
+                    for wl, sim in self.sims.items():
+                        ## we calculate the average eigen energy for all output modes
+                        for out_mode in out_modes:
+                            _, ht_m, et_m, _ = self.port_profiles[out_port_name][
+                                (wl, out_mode)
+                            ]
+                            norm_power = self.port_profiles[in_port_name][
+                                (wl, in_mode)
+                            ][3]
+                            monitor_slice = self.port_slices[out_port_name]
+                            field = fields[(in_port_name, wl, in_mode)]
+
+                            ez = field["Ez"]
+                            hx, hy = sim._Ez_to_Hx_Hy(ez)
+
+                            s_p, s_m = get_eigenmode_coefficients(
+                                hx,
+                                hy,
+                                ez,
+                                ht_m,
+                                et_m,
+                                monitor_slice,
+                                grid_step=self.grid_step,
+                                direction=direction[0],
+                                autograd=True,
+                                energy=True,
+                            )
+                            if direction[1] == "+":
+                                s = s_p
+                            elif direction[1] == "-":
+                                s = s_m
+                            else:
+                                raise ValueError("Invalid direction")
+                            s_list.append(s / norm_power)
+                    return npa.mean(npa.array(s_list))
+            elif type in {"flux", "flux_minus_src"}:
+
+                def adj_objfn(
+                    fields,
+                    in_port_name=in_port_name,
+                    out_port_name=out_port_name,
+                    in_mode=in_mode,
+                    direction=direction,
+                    type=type,
+                ):
+                    s_list = []
+                    ## for each wavelength, we evaluate the objective
+                    for wl, sim in self.sims.items():
+                        monitor_slice = self.port_slices[out_port_name]
+                        norm_power = self.port_profiles[in_port_name][(wl, in_mode)][3]
+                        field = fields[(in_port_name, wl, in_mode)]
+                        # hx, hy, ez = (
+                        #     field["Hx"],
+                        #     field["Hy"],
+                        #     field["Ez"],
+                        # )  # fetch fields
+                        ez = field["Ez"]
+
+                        hx, hy = sim._Ez_to_Hx_Hy(ez)
+                        s = get_flux(
+                            hx,
+                            hy,
+                            ez,
+                            monitor_slice,
+                            grid_step=self.grid_step,
+                            direction=direction[0],
+                            autograd=True,
+                        )
+                        if isinstance(s, Tensor):
+                            abs = torch.abs
+                        else:
+                            abs = npa.abs
+                        s = abs(s / norm_power)  # we only need absolute flux
+                        if type == "flux_minus_src":
+                            s = abs(
+                                s - 1
+                            )  ## if it is larger than 1, then this slice must include source, we minus the power from source
+
+                        s_list.append(s)
+                    if isinstance(s_list[0], Tensor):
+                        return torch.mean(torch.stack(s_list))
+                    else:
+                        return npa.mean(npa.array(s_list))  # we only need absolute flux
+            else:
+                raise ValueError("Invalid type")
+
+            ### note that this is not the final objective! this is partial objective from fields to fom
+            ### complete autograd graph is from permittivity (np.ndarray) to fields and to fom
+            self.adj_Js[name] = {"weight": cfg["weight"], "fn": adj_objfn}
+
     def build_jacobian(self):
         ## obtain_objective is the complete forward function starts from permittivity to solved fields, then to fom
         self.dJ = jacobian(self.obtain_objective, mode="reverse")
+
+    def build_adj_jacobian(self):
+        self.dJ_dE = {}
+        for name, obj in self.adj_Js.items():
+            dJ_dE_fn = jacobian(obj["fn"], mode="reverse")
+            self.dJ_dE[name] = {"weight": obj["weight"], "fn": dJ_dE_fn}
+
+    def obtain_adj_srcs(self):
+        # this should be called after obtain_objective, other wise self.solutions is empty
+        adj_sources = {}
+        for name, obj in self.Js.items():
+            weight, value = obj["weight"], obj["fn"](fields=self.solutions)
+            adj_sources[name] = {
+                "weight": weight,
+                "value": value,
+            }
+        ## here we accept customized fusion function, e.g., weighted sum by default.
+        fusion_results = self._obj_fusion_func(adj_sources)
+        if isinstance(fusion_results, tuple):
+            total_src, _ = fusion_results
+        else:
+            total_src = fusion_results
+        if self.verbose:
+            print(f"Shape of total source: {total_src.shape}")
+        return total_src
 
     def obtain_objective(
         self, permittivity: np.ndarray | Tensor
@@ -1284,7 +1443,9 @@ class ObjectiveFunc(object):
         mode: str = "forward",
     ):
         if mode == "forward":
-            return self.obtain_objective(permittivity)
+            objective = self.obtain_objective(permittivity)
+            self.s_params_dump = deepcopy(self.s_params)
+            return objective
         elif mode == "backward":
             return self.obtain_gradient(permittivity, eps_shape)
 
