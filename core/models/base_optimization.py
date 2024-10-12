@@ -254,9 +254,11 @@ class BaseOptimization(nn.Module):
         self.objective.add_adj_objective(obj_cfgs)
 
         ### create static backward computational graph from J to eps, no actual execution.'
+        ### only usedful for autograd, not for torch autodiff
         self.gradient_region = "global_region"
-        self.objective.build_jacobian()
-        self.objective.build_adj_jacobian()
+        if self.sim_cfg["solver"] == "ceviche":
+            self.objective.build_jacobian()
+            self.objective.build_adj_jacobian()
 
         return self.objective
 
@@ -271,6 +273,10 @@ class BaseOptimization(nn.Module):
         ## here permittivity_list is a list of tensors (no grad required, since it is from autograd.Function)
         if adjoint_mode == "ceviche":
             total_value = self._cal_obj_grad_ceviche(
+                need_item, [p.cpu().numpy() for p in permittivity_list], *args
+            )
+        elif adjoint_mode == "ceviche_torch":
+            total_value = self._cal_obj_grad_ceviche(
                 need_item, permittivity_list, *args
             )
         else:
@@ -278,15 +284,18 @@ class BaseOptimization(nn.Module):
 
         return total_value
 
-    def _cal_obj_grad_ceviche(self, need_item, permittivity_list: List[Tensor], *args):
+    def _cal_obj_grad_ceviche(
+        self, need_item, permittivity_list: List[np.ndarray | Tensor], *args
+    ):
         ## here permittivity_list is a list of tensors (no grad required, since it is from autograd.Function)
-        permittivity = permittivity_list[0].cpu().numpy()
+        permittivity = permittivity_list[0]
 
         if need_item == "need_value":
             total_value = self.objective(
                 permittivity, mode="forward"
-            )  # here we do not need to pass permittivity anymore
+            ) 
         elif need_item == "need_gradient":
+            ### this is explicitly called for autograd, not needed for torch autodiff
             total_value = self.objective(
                 permittivity,
                 self.device.epsilon_map.shape,

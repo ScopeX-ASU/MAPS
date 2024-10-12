@@ -118,6 +118,7 @@ class Isolator(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
+            solver=self.sim_cfg["solver"],
             plot=True,
         )
 
@@ -128,6 +129,7 @@ class Isolator(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
+            solver=self.sim_cfg["solver"],
             plot=True,
         )
         norm_refl_profiles_2 = self.build_norm_sources(
@@ -137,6 +139,7 @@ class Isolator(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
+            solver=self.sim_cfg["solver"],
             plot=True,
         )
 
@@ -147,6 +150,7 @@ class Isolator(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
+            solver=self.sim_cfg["solver"],
             plot=True,
         )
         return (
