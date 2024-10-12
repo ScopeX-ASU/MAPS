@@ -14,7 +14,9 @@ from typing import Tuple
 import meep as mp
 import numpy as np
 import torch
+
 from ceviche import fdfd_ez
+from core.models.fdfd import fdfd_ez as fdfd_ez_torch
 
 # from ceviche.modes import insert_mode
 from ceviche.constants import C_0
@@ -487,15 +489,17 @@ class N_Ports(BaseDevice):
     def create_simulation(self, omega, dl, eps, NPML, solver="ceviche"):
         if solver == "ceviche":
             return fdfd_ez(omega, dl, eps, NPML)
+        elif solver == "ceviche_torch":
+            return fdfd_ez_torch(omega, dl, eps, NPML)
         else:
             raise ValueError(f"Solver {solver} not supported")
 
-    def solve_ceviche(self, eps, source, wl: float = 1.55, grid_step=None):
+    def solve_ceviche(self, eps, source, wl: float = 1.55, grid_step=None, solver: str="ceviche"):
         omega = 2 * np.pi * C_0 / (wl * 1e-6)
         grid_step = grid_step or self.grid_step
         dl = grid_step * 1e-6
         # simulation = fdfd_ez(omega, dl, eps, [self.NPML[0], self.NPML[1]])
-        simulation = self.create_simulation(omega, dl, eps, self.NPML, solver="ceviche")
+        simulation = self.create_simulation(omega, dl, eps, self.NPML, solver=solver)
         Hx, Hy, Ez = simulation.solve(source)
 
         return Hx, Hy, Ez
@@ -523,9 +527,9 @@ class N_Ports(BaseDevice):
         """
         grid_step = grid_step or self.grid_step
         fields = {}
-        if solver == "ceviche":
+        if solver in {"ceviche", "ceviche_torch"}:
             for (wl, mode), (source, _, _, _) in source_profiles.items():
-                Hx, Hy, Ez = self.solve_ceviche(eps, source, wl=wl, grid_step=grid_step)
+                Hx, Hy, Ez = self.solve_ceviche(eps, source, wl=wl, grid_step=grid_step, solver=solver)
                 fields[(wl, mode)] = {"Hx": Hx, "Hy": Hy, "Ez": Ez}
             return fields
         else:
@@ -607,6 +611,8 @@ class N_Ports(BaseDevice):
                     direction=direction,
                 )
                 # print("flux:", flux)
+                if isinstance(flux, torch.Tensor):
+                    flux = flux.item()
                 input_SCALE[k] = np.abs(flux)
 
             return input_SCALE, fields, source_profiles
@@ -615,6 +621,13 @@ class N_Ports(BaseDevice):
         input_scale = {
             k: (power / v) ** 0.5 for k, v in input_scale.items()
         }  # normalize the source power to target power for all wavelengths and modes
+
+        Ez = list(fields.values())[0]["Ez"]
+        if isinstance(Ez, torch.Tensor):
+            source_profiles = {
+                k: [torch.from_numpy(i).to(Ez.device) for i in v[:-1]] + [v[-1]]
+                for k, v in source_profiles.items()
+            }
         source_profiles = {
             k: [e * input_scale[k] for e in v[:-1]] + [power]
             for k, v in source_profiles.items()
@@ -623,7 +636,7 @@ class N_Ports(BaseDevice):
 
         if plot:
             plot_eps_field(
-                list(fields.values())[0]["Ez"] * list(input_scale.values())[0],
+                Ez * list(input_scale.values())[0],
                 in_port_eps,
                 zoom_eps_factor=1,
                 filepath=os.path.join(
@@ -637,6 +650,8 @@ class N_Ports(BaseDevice):
             )
 
         self.port_sources_dict[input_slice_name] = source_profiles
+        # print(source_profiles)
+        # exit(0)
         return source_profiles  # {(wl, mode): [profile, ht_m, et_m, SCALE], ...}
 
     def obtain_eps(self, permittivity: torch.Tensor):

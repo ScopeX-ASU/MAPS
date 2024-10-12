@@ -12,22 +12,27 @@ LastEditTime: 2024-10-04 00:50:55
 FilePath: /Metasurface-Opt/unitest/test_device_base.py
 """
 from copy import deepcopy
-import torch
 
-from core.models.layers.device_base import N_Ports, Si_eps
-from core.models.layers import MetaMirror, MetaCoupler, Isolator
-from core.models.base_optimization import BaseOptimization, DefaultSimulationConfig
-from core.models import (
-    MetaMirrorOptimization,
-    MetaCouplerOptimization,
-    IsolatorOptimization,
-)
-
-from core.models.layers.utils import plot_eps_field
 import numpy as np
+import scipy.sparse as sp
+import torch
+from ceviche import fdfd_ez as ceviche_fdfd_ez
+from ceviche.constants import *
 from pyutils.general import print_stat
 
+from core.models import (
+    IsolatorOptimization,
+    MetaCouplerOptimization,
+    MetaMirrorOptimization,
+)
+from core.models.base_optimization import BaseOptimization, DefaultSimulationConfig
+from core.models.fdfd.fdfd import fdfd_ez
+from core.models.fdfd.utils import torch_sparse_to_scipy_sparse
+from core.models.layers import Isolator, MetaCoupler, MetaMirror
+from core.models.layers.device_base import N_Ports, Si_eps
+from core.models.layers.utils import plot_eps_field
 from core.utils import set_torch_deterministic
+from torch_sparse import spspmm
 
 
 def test_device_base():
@@ -208,7 +213,8 @@ def test_isolator_opt():
     sim_cfg = DefaultSimulationConfig()
     sim_cfg.update(
         dict(
-            solver="ceviche",
+            # solver="ceviche",
+            solver="ceviche_torch",
             border_width=[0, 0, 2, 2],
             resolution=50,
             plot_root=f"./figs/{name}",
@@ -232,7 +238,9 @@ def test_isolator_opt():
     hr_device = device.copy(resolution=310)
     print(device, flush=True)
     print(hr_device, flush=True)
-    opt = IsolatorOptimization(device=device, hr_device=hr_device, sim_cfg=sim_cfg, obj_cfgs=obj_cfgs)
+    opt = IsolatorOptimization(
+        device=device, hr_device=hr_device, sim_cfg=sim_cfg, obj_cfgs=obj_cfgs
+    )
     print(opt)
 
     optimizer = torch.optim.Adam(opt.parameters(), lr=0.02)
@@ -266,9 +274,106 @@ def test_isolator_opt():
             print(f"{k}: {obj['value']:.3f}", end=", ")
         print()
         (-results["obj"]).backward()
-        # print_stat(list(opt.parameters())[0], f"step {step}: grad: ")
+
+
+        # print_stat(list(opt.parameters())[0].grad, f"solver={sim_cfg['solver']}, step {step}: grad: ")
+        # print(list(opt.parameters())[0].grad)
         optimizer.step()
         scheduler.step()
+
+
+def test_fdtd_ez_torch():
+    dev = "cpu"
+    name = "isolator"
+    set_torch_deterministic(seed=59)
+    sim_cfg = DefaultSimulationConfig()
+    sim_cfg.update(
+        dict(
+            solver="ceviche",
+            border_width=[0, 0, 2, 2],
+            resolution=20,
+            plot_root=f"./figs/{name}",
+        )
+    )
+
+    def fom_func(breakdown):
+        ## maximization fom
+        fom = 0
+        for _, obj in breakdown.items():
+            fom = fom + obj["weight"] * obj["value"]
+
+        ## add extra contrast ratio
+        contrast = breakdown["bwd_trans"]["value"] / breakdown["fwd_trans"]["value"]
+        fom = fom - contrast
+        return fom, {"contrast": {"weight": -1, "value": contrast}}
+
+    obj_cfgs = dict(_fusion_func=fom_func)
+
+    device = Isolator(sim_cfg=sim_cfg, device=dev)
+    hr_device = device.copy(resolution=20)
+    print(device, flush=True)
+    print(hr_device, flush=True)
+    opt = IsolatorOptimization(
+        device=device, hr_device=hr_device, sim_cfg=sim_cfg, obj_cfgs=obj_cfgs
+    )
+    print(opt)
+
+    eps_r = torch.from_numpy(device.epsilon_map).to(dev)
+    source = torch.from_numpy(device.port_sources_dict["in_port_1"][(1.55, 1)][0]).to(
+        dev
+    )
+
+    omega = 2 * np.pi / (1.55e-6)
+    dl = device.grid_step * 1e-6
+    sim = fdfd_ez(omega, dl, eps_r[:2,:2], device=dev, npml=[1,1])
+    hx, hy, ez = sim.solve(source[:2,:2])
+
+    c_sim = ceviche_fdfd_ez(omega, dl, device.epsilon_map[:2, :2], npml=[1,1])
+    c_hx, c_hy, c_ez = c_sim.solve(source.cpu().numpy()[:2,:2])
+    print(ez)
+    print(c_ez)
+    # print((torch_sparse_to_scipy_sparse(sim.Dxf) - c_sim.Dxf.tocoo()))
+    # print((torch_sparse_to_scipy_sparse(sim.Dxb) - c_sim.Dxb.tocoo()))
+    # print((torch_sparse_to_scipy_sparse(sim.Dyf) - c_sim.Dyf.tocoo()))
+    # print((torch_sparse_to_scipy_sparse(sim.Dyb) - c_sim.Dyb.tocoo()))
+
+    A = torch_sparse_to_scipy_sparse(sim._make_A(sim.eps_r.flatten()))
+    c_A_v, c_A_i = c_sim._make_A(c_sim.eps_r.flatten())
+
+    print(torch_sparse_to_scipy_sparse(sim.Dxf))
+    print(c_sim.Dxf.tocoo())
+    print()
+    print((torch_sparse_to_scipy_sparse(sim.Dxb) - c_sim.Dxb.tocoo()))
+    print()
+    print((torch_sparse_to_scipy_sparse(sim.Dyf) - c_sim.Dyf.tocoo()))
+    print()
+    print((torch_sparse_to_scipy_sparse(sim.Dyb) - c_sim.Dyb.tocoo()))
+    print()
+
+    c_A = sp.coo_matrix((c_A_v, c_A_i), shape=A.shape)
+    print("A error:", A - c_A)
+
+    C = (
+        -1
+        / MU_0
+        * (
+            sim.Dxf.coalesce() @ sim.Dxb.coalesce()
+            # torch_sparse_to_scipy_sparse(sim.Dxf).dot(torch_sparse_to_scipy_sparse(sim.Dxb))
+            #    + torch.sparse.mm(sim.Dyf, sim.Dyb)
+        )
+    )
+
+    c_C = (
+        -1
+        / MU_0
+        * (
+            c_sim.Dxf @ c_sim.Dxb
+            # + c_sim.Dyf.dot(c_sim.Dyb)
+        )
+    ).tocoo()
+    print("C:", C)
+    print("c_C:", c_C)
+    print("C error", C - c_C)
 
 
 if __name__ == "__main__":
@@ -277,3 +382,4 @@ if __name__ == "__main__":
     # test_metamirror_opt()
     # test_metacoupler_opt()
     test_isolator_opt()
+    # test_fdtd_ez_torch()

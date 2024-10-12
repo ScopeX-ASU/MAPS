@@ -23,10 +23,25 @@ class SimulatedFoM(nn.Module):
         self.cal_obj_and_grad_fn = cal_obj_and_grad_fn
         self.adjoint_mode = adjoint_mode
 
-    def forward(self, permittivity_list: List[Tensor], resolution: int | None = None) -> Tensor:
-        fom = AdjointGradient.apply(
-            self.cal_obj_and_grad_fn, self.adjoint_mode, resolution, *permittivity_list
-        )
+    def forward(
+        self, permittivity_list: List[Tensor], resolution: int | None = None
+    ) -> Tensor:
+        if self.adjoint_mode == "ceviche":
+            ## we need to use autograd, jacobian to calculate gradients
+            fom = AdjointGradient.apply(
+                self.cal_obj_and_grad_fn,
+                self.adjoint_mode,
+                resolution,
+                *permittivity_list,
+            )
+        elif self.adjoint_mode == "ceviche_torch":
+            ## this function is completely differentiable, so we only need forward for torch
+            fom = self.cal_obj_and_grad_fn(
+                adjoint_mode=self.adjoint_mode,
+                need_item="need_value",
+                resolution=resolution,
+                permittivity_list=permittivity_list,
+            )
         return fom
 
     def extra_repr(self) -> str:

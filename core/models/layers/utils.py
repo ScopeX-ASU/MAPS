@@ -17,6 +17,8 @@ from pyutils.general import ensure_dir
 from scipy.ndimage import zoom
 from torch import Tensor
 from torch.types import Device
+from torch_sparse import spmm
+from pyutils.general import print_stat
 
 __all__ = [
     "material_fn_dict",
@@ -767,8 +769,22 @@ def overlap(
     Returns:
       Result of the overlap integral.
     """
-    ac = tuple([npa.conj(ai) for ai in a])
-    return npa.sum(cross(ac, b, direction=direction)) * dl
+    if any(isinstance(ai, torch.Tensor) for ai in a):
+        conj = torch.conj
+        sum = torch.sum
+    else:
+        conj = npa.conj
+        sum = npa.sum
+    # ac = tuple([conj(ai) for ai in a])
+    ac = []
+    for ai in a:
+        if isinstance(ai, (torch.Tensor, np.ndarray)):
+            ac.append(conj(ai))
+        else:
+            ac.append(npa.conj(ai))
+    ac = tuple(ac)
+
+    return sum(cross(ac, b, direction=direction)) * dl
 
 
 def grid_average(e, monitor, direction: str = "x", autograd=False):
@@ -776,10 +792,13 @@ def grid_average(e, monitor, direction: str = "x", autograd=False):
         mean = npa.mean
     else:
         mean = np.mean
+    if isinstance(e, torch.Tensor):
+        mean = lambda x, axis: torch.mean(x, dim=axis)
 
     if direction == "x":
         if isinstance(monitor, Slice):
             e_monitor = (monitor[0] + np.array([[-1], [0]]), monitor[1])
+
             e_yee_shifted = mean(e[e_monitor], axis=0)
         elif isinstance(monitor, np.ndarray):
             e_monitor = monitor.nonzero()
@@ -814,6 +833,9 @@ def get_eigenmode_coefficients(
     else:
         abs = np.abs
         ravel = np.ravel
+    if isinstance(ez, torch.Tensor):
+        abs = torch.abs
+        ravel = torch.ravel
 
     if direction == "x":
         h = (0.0, ravel(hy[monitor]), 0)
@@ -838,7 +860,7 @@ def get_eigenmode_coefficients(
     overlap1 = overlap(em, h, dl=dl, direction=direction)
     overlap2 = overlap(hm, e, dl=dl, direction=direction)
     normalization = overlap(em, hm, dl=dl, direction=direction)
-    normalization = np.sqrt(2 * normalization)
+    normalization = (2 * normalization) ** 0.5
     s_p = (overlap1 + overlap2) / 2 / normalization
     s_m = (overlap1 - overlap2) / 2 / normalization
 
@@ -856,6 +878,8 @@ def get_flux(hx, hy, ez, monitor, grid_step, direction: str = "x", autograd=Fals
     else:
         ravel = np.ravel
         real = np.real
+    if isinstance(ez, torch.Tensor):
+        ravel = torch.ravel
 
     if direction == "x":
         h = (0.0, ravel(hy[monitor]), 0)
@@ -884,6 +908,11 @@ def plot_eps_field(
     NPML=[0, 0],
     title: str = None,
 ):
+    if isinstance(Ez, torch.Tensor):
+        Ez = Ez.data.cpu().numpy()
+    if isinstance(eps, torch.Tensor):
+        eps = eps.data.cpu().numpy()
+
     if filepath is not None:
         ensure_dir(os.path.dirname(filepath))
     fig, ax = plt.subplots(
@@ -1097,7 +1126,7 @@ class ObjectiveFunc(object):
                     for wl, sim in self.sims.items():
                         ## we calculate the average eigen energy for all output modes
                         for out_mode in out_modes:
-                            _, ht_m, et_m, _ = self.port_profiles[out_port_name][
+                            src, ht_m, et_m, norm_p = self.port_profiles[out_port_name][
                                 (wl, out_mode)
                             ]
                             norm_power = self.port_profiles[in_port_name][
@@ -1110,6 +1139,16 @@ class ObjectiveFunc(object):
                                 field["Hy"],
                                 field["Ez"],
                             )  # fetch fields
+                            if isinstance(ht_m, Tensor) and ht_m.device != ez.device:
+                                ht_m = ht_m.to(ez.device)
+                                et_m = et_m.to(ez.device)
+                                self.port_profiles[out_port_name][(wl, out_mode)] = [
+                                    src.to(ez.device),
+                                    ht_m,
+                                    et_m,
+                                    norm_p,
+                                ]
+
                             s_p, s_m = get_eigenmode_coefficients(
                                 hx,
                                 hy,
@@ -1133,7 +1172,10 @@ class ObjectiveFunc(object):
                                 "s_p": s_p,
                                 "s_m": s_m,
                             }
-                    return npa.mean(npa.array(s_list))
+                    if isinstance(s_list[0], Tensor):
+                        return torch.mean(torch.stack(s_list))
+                    else:
+                        return npa.mean(npa.array(s_list))
             elif type in {"flux", "flux_minus_src"}:
 
                 def objfn(
@@ -1164,14 +1206,21 @@ class ObjectiveFunc(object):
                             direction=direction[0],
                             autograd=True,
                         )
-                        s = npa.abs(s / norm_power)  # we only need absolute flux
+                        if isinstance(s, Tensor):
+                            abs = torch.abs
+                        else:
+                            abs = npa.abs
+                        s = abs(s / norm_power)  # we only need absolute flux
                         if type == "flux_minus_src":
-                            s = npa.abs(
+                            s = abs(
                                 s - 1
                             )  ## if it is larger than 1, then this slice must include source, we minus the power from source
 
                         s_list.append(s)
-                    return npa.mean(npa.array(s_list))  # we only need absolute flux
+                    if isinstance(s_list[0], Tensor):
+                        return torch.mean(torch.stack(s_list))
+                    else:
+                        return npa.mean(npa.array(s_list))  # we only need absolute flux
             else:
                 raise ValueError("Invalid type")
 
@@ -1183,7 +1232,9 @@ class ObjectiveFunc(object):
         ## obtain_objective is the complete forward function starts from permittivity to solved fields, then to fom
         self.dJ = jacobian(self.obtain_objective, mode="reverse")
 
-    def obtain_objective(self, permittivity: np.ndarray) -> Tuple[dict, Tensor]:
+    def obtain_objective(
+        self, permittivity: np.ndarray | Tensor
+    ) -> Tuple[dict, Tensor]:
         self.solutions = {}
         for port_name, port_profile in self.port_profiles.items():
             for (wl, mode), (source, _, _, norm_power) in port_profile.items():
@@ -1222,12 +1273,13 @@ class ObjectiveFunc(object):
     ) -> np.ndarray:
         ## we need denormalized entire permittivity
         grad = np.squeeze(self.dJ(permittivity))
+
         grad = grad.reshape(eps_shape)
         return grad
 
     def __call__(
         self,
-        permittivity: np.ndarray,
+        permittivity: np.ndarray | Tensor,
         eps_shape: Tuple[int] = None,
         mode: str = "forward",
     ):
@@ -1235,3 +1287,89 @@ class ObjectiveFunc(object):
             return self.obtain_objective(permittivity)
         elif mode == "backward":
             return self.obtain_gradient(permittivity, eps_shape)
+
+
+class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
+    def __init__(
+        self,
+        sim,
+        wl_cen: float = 1.55,
+        wl_width: float = 0,
+        n_wl: int = 1,
+        size_average=None,
+        reduce=None,
+        reduction: str = "mean",
+    ):
+        super().__init__(size_average, reduce, reduction)
+        self.sim = sim  #
+        self.wl_list = torch.linspace(
+            wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl
+        )
+        self.omegas = 2 * np.pi * constants.C_0 / (self.wl_list * 1e-6)
+        self.As = (None, None)
+        self.bs = {}
+
+    def make_A(self, eps_r: torch.Tensor, wl_list: List[float]):
+        ## eps_r: [bs, h, w] real tensor
+        ## wl_list: [n_wl] list of wls in um, support spectral bundling
+        eps_vec = eps_r.flatten(1)
+        tot_entries_list = []
+        tot_indices_list = []
+        for eps_v in eps_vec:
+            entries_list = []
+            indices_list = []
+            for wl in wl_list:
+                self.sim.omega = 2 * np.pi * constants.C_0 / (wl.item() * 1e-6)
+                entries_a, indices_a = self.sim._make_A(
+                    eps_v
+                )  # return scipy sparse indices and values
+                entries_list.append(torch.from_numpy(entries_a))
+                indices_list.append(torch.from_numpy(indices_a))
+            entries_list = torch.stack(entries_list, 0)
+            indices_list = torch.stack(indices_list, 0)
+            tot_entries_list.append(entries_list)
+            tot_indices_list.append(indices_list)
+        tot_entries_list = torch.stack(tot_entries_list, 0).to(
+            eps_r.device
+        )  # [bs, n_wl, 5*h*w]
+        tot_indices_list = (
+            torch.stack(tot_indices_list, 0).to(eps_r.device).long()
+        )  # [bs, n_wl, 2, 5*h*w]
+        self.As = (tot_entries_list, tot_indices_list)
+        return self.As
+
+    def forward(self, Ez: Tensor, eps_r: Tensor, source: Tensor):
+        ## Ez: [bs, n_wl, h, w] complex tensor
+        ## eps_r: [bs, h, w] real tensor
+        ## source: [bs, n_wl, h, w] complex tensor, source in sim.solve(source), not b, b = 1j * omega * source
+
+        # step 1: make A
+        self.make_A(eps_r, self.wl_list)
+
+        # step 2: calculate loss
+        entries, indices = self.As
+        lhs = []
+        if self.omegas.device != source.device:
+            self.omegas = self.omegas.to(source.device)
+        b = (
+            (source * (1j * self.omegas[None, :, None, None])).flatten(0, 1).flatten(1)
+        )  # [bs*n_wl, h*w]
+        for i in range(Ez.shape[0]):
+            for j in range(Ez.shape[1]):
+                ez = Ez[i, j].flatten()
+                omega = 2 * np.pi * constants.C_0 / (self.wl_list[j] * 1e-6)
+
+                b = source[i, j].flatten() * (1j * omega)
+                A_by_e = spmm(
+                    indices[i, j],
+                    entries[i, j],
+                    m=ez.shape[0],
+                    n=ez.shape[0],
+                    matrix=ez[:, None],
+                )[:, 0]
+                lhs.append(A_by_e)
+        lhs = torch.stack(lhs, 0)  # [bs*n_wl, h*w]
+
+        loss = torch.nn.functional.mse_loss(lhs, b, reduction=self.reduction)
+
+        return loss
