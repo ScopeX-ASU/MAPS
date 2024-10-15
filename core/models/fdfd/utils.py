@@ -198,12 +198,11 @@ def green2d(
     # x0: [s, 2] source near-field points, s near-field source points, 2 dimension, x and y
     # c0: field component direction X,Y,Z -> 0,1,2
     # f0: [bs, s, nf] a batch of DFT fields on near-field monitors, e.g., typically f0 is Ez fields
-    bs, n_points = x.shape[:2]
-    nf = freqs.shape[0]
+
     # [n, 1, 2] - [1, s, 2] = [n, s, 2]
     rhat = x[..., None, :] - x0[None, ...]  # distance vector # [n, s, 2]
     r = rhat.norm(p=2, dim=-1, keepdim=True)  # [n, s, 1]
-    rhat = rhat / r  # unit vector
+    rhat = rhat / r  # unit vector # [n, s, 2]
     omega = 2 * np.pi * freqs  # [nf] angular frequencies
     k = omega * (eps * mu) ** 0.5  # [nf] wave numbers
     ik = 1j * k  # [nf] imaginary wave numbers
@@ -211,23 +210,75 @@ def green2d(
     kr = k * r[..., None]
     # Z = (mu / eps) ** 0.5
 
-    # [n, s, nf] * [bs, s, nf] = [bs, n, nf]
-    H0 = einsum(hankel(0, kr), f0, "n s f, b s f -> b n f")
-    H1 = einsum(hankel(1, kr), f0, "n s f, b s f -> b n f")
-    ikH1 = 0.25 * ik * H1  # [bs, n, nf]
+    if c0 in {"Ez", "Hz"}:  # vertical source
+        # [n, s, nf] * [bs, s, nf] = [bs, n, nf]
+        H0 = einsum(hankel(0, kr), f0, "n s f, b s f -> b n f")
+        H1 = einsum(hankel(1, kr), f0, "n s f, b s f -> b n s f")
+        # ikH1 = 0.25 * ik * H1  # [bs, n, s, nf]
+        ik_1_by_4 = 0.25 * ik
 
-    if c0 == "Ez":  # Ez source
-        Ex = Ey = Hz = 0
-        # [nf] * [bs, n, nf] = [bs, n, nf]
-        Ez = -0.25 * omega * mu * H0  # [bs, n, nf]
-        # [bs, n, s] * [bs, n, s, nf] = [bs, n, nf]
-        Hx = einsum(-rhat[..., 1], ikH1, "n s, b n s f -> b n f")
-        Hy = einsum(rhat[..., 0], ikH1, "n s, b n s f -> b n f")
-    elif x == "Hz":  # Hz source
-        Ex = einsum(rhat[..., 1], ikH1, "n s, b n s f -> b n f")
-        Ey = einsum(-rhat[..., 0], ikH1, "n s, b n s f -> b n f")
-        Hz = -0.25 * omega * eps * H0  # [bs, n, nf]
-        Ez = Hx = Hy = 0
+        if c0 == "Ez":  # Ez source
+            Ex = Ey = Hz = 0
+            # [nf] * [bs, n, nf] = [bs, n, nf]
+            Ez = -0.25 * omega * mu * H0  # [bs, n, nf]
+            # [bs, n, s] * [bs, n, s, nf] = [bs, n, nf]
+            Hx = torch.einsum("ns,f,bnsf->bnf", -rhat[..., 1], ik_1_by_4, H1)
+            Hy = torch.einsum("ns,f,bnsf->bnf", rhat[..., 0], ik_1_by_4, H1)
+        elif c0 == "Hz":  # Hz source
+            Ex = torch.einsum("ns,f,bnsf->bnf", rhat[..., 1], ik_1_by_4, H1)
+            Ey = torch.einsum("ns,f,bnsf->bnf", -rhat[..., 0], ik_1_by_4, H1)
+            Hz = -0.25 * omega * eps * H0  # [bs, n, nf]
+            Ez = Hx = Hy = 0
+    elif c0 in {"Ex", "Ey", "Hx", "Hy"}:  # in-plane source
+        Z = (mu / eps) ** 0.5  # [nf]
+        # H0 = einsum(hankel(0, kr), f0, "n s f, b s f -> b n s f")
+        H1 = einsum(hankel(1, kr), f0, "n s f, b s f -> b n s f")
+        # H2 = einsum(hankel(2, kr), f0, "n s f, b s f -> b n s f")
+        H0_minus_H2 = einsum(
+            hankel(0, kr) - hankel(2, kr), f0, "n s f, b s f -> b n s f"
+        )
+        if c0 in {"Ex", "Hx"}:
+            p = torch.tensor([1.0, 0.0], device=x.device)
+        else:
+            p = torch.tensor([0.0, 1.0], device=x.device)
+        pdotrhat = einsum(p, rhat, "i, n s i -> n s")[..., None]  # [n, s, 1]
+        rhatcrossp = rhat[..., 0] * p[1] - rhat[..., 1] * p[0]  # [n, s]
+        if c0.startswith("E"):  # Exy source
+            common_term_1 = (pdotrhat / r * 0.25) * Z
+            common_term_2 = rhatcrossp[..., None] * omega * mu * 0.125
+            Ex = einsum(
+                -(rhat[..., 0:1] * common_term_1), H1, "n s f, b n s f -> b n f"
+            ) + einsum(
+                (rhat[..., 1:] * common_term_2), H0_minus_H2, "n s f, b n s f -> b n f"
+            )  # [bs, n, nf]
+            Ey = einsum(
+                -(rhat[..., 1:] * common_term_1), H1, "n s f, b n s f -> b n f"
+            ) - einsum(
+                (rhat[..., 0:1] * common_term_2), H0_minus_H2, "n s f, b n s f -> b n f"
+            )  # [bs, n, nf]
+            Hx = Hy = Ez = 0
+
+            Hz = einsum(
+                -(rhatcrossp[..., None] * 0.25 * ik), H1, "n s f, b n s f -> b n f"
+            )  # [bs, n, nf]
+        elif c0.startswith("H"):  # Hxy source
+            common_term_1 = (pdotrhat / r * 0.25) / Z
+            common_term_2 = rhatcrossp[..., None] * (omega * eps * 0.125)
+            Ex = Ey = Hz = 0
+            Ez = einsum(
+                (rhatcrossp[..., None] * 0.25 * ik), H1, "n s f, b n s f -> b n f"
+            )  # [bs, n, nf]
+            Hx = einsum(
+                -(rhat[..., 0:1] * common_term_1), H1, "n s f, b n s f -> b n f"
+            ) + einsum(
+                (rhat[..., 1:] * common_term_2), H0_minus_H2, "n s f, b n s f -> b n f"
+            )
+            Hy = einsum(
+                -(rhat[..., 1:] * common_term_1), H1, "n s f, b n s f -> b n f"
+            ) - einsum(
+                (rhat[..., 0:1] * common_term_2), H0_minus_H2, "n s f, b n s f -> b n f"
+            )
+
     else:
         raise ValueError("c0 must be 'Ez' or 'Hz'")
 
