@@ -12,9 +12,13 @@ LastEditTime: 2024-10-11 02:18:01
 FilePath: /MAPS/core/models/fdfd/utils.py
 """
 
-import torch
+import numpy as np
 import scipy.sparse as sp
-from torch_sparse import spspmm, spmm
+import torch
+from einops import einsum
+from scipy.special import jn, yn
+from torch import Tensor
+from torch_sparse import spmm, spspmm
 
 # def get_entries_indices(csr_matrix):
 #     # takes sparse matrix and returns the entries and indeces in form compatible with 'make_sparse'
@@ -26,6 +30,18 @@ from torch_sparse import spspmm, spmm
 #     indices = npa.vstack((rows, cols))
 #     return entries, indices
 
+__all__ = [
+    "get_entries_indices",
+    "torch_sparse_to_scipy_sparse",
+    "real_sparse_mm",
+    "sparse_mm",
+    "real_sparse_mv",
+    "sparse_mv",
+    "hankel",
+    "green2d",
+    "get_farfields",
+]
+
 
 def get_entries_indices(coo_matrix):
     # takes sparse matrix and returns the entries and indeces in form compatible with 'make_sparse'
@@ -36,7 +52,9 @@ def get_entries_indices(coo_matrix):
     return entries, indices
 
 
-def torch_sparse_to_scipy_sparse(A): # input A is a tuple (entries_a, indices_a), do not have the coalesce function
+def torch_sparse_to_scipy_sparse(
+    A,
+):  # input A is a tuple (entries_a, indices_a), do not have the coalesce function
     # A = A.coalesce()
     # return sp.coo_matrix(
     #     (A.values().cpu().numpy(), A.indices().cpu().numpy()), shape=tuple(A.shape)
@@ -55,7 +73,9 @@ def torch_sparse_to_scipy_sparse(A): # input A is a tuple (entries_a, indices_a)
         return A.tocoo()  # Ensure the output is in COO format
 
     else:
-        raise TypeError(f"Expected a PyTorch sparse tensor or a SciPy sparse matrix, but got {type(A)}")
+        raise TypeError(
+            f"Expected a PyTorch sparse tensor or a SciPy sparse matrix, but got {type(A)}"
+        )
 
 
 def real_sparse_mm(A, B):
@@ -144,3 +164,124 @@ def sparse_mv(A, x):
     values_ii = spmm(A.indices(), A_imag, A.shape[0], A.shape[1], x[..., None].imag)
     values = values_rr - values_ii + 1j * (values_ri + values_ir)
     return values.squeeze(-1)
+
+
+def hankel(n: int, x: Tensor):
+    ## hankel function J + iY
+    if n == 0:
+        return torch.complex(torch.special.bessel_j0(x), torch.special.bessel_y0(x))
+    elif n == 1:
+        return torch.complex(torch.special.bessel_j1(x), torch.special.bessel_y1(x))
+    elif n >= 2:  # must use scipy.special
+        x_np = x.cpu().numpy()
+        return torch.complex(
+            torch.from_numpy(jn(n, x_np)), torch.from_numpy(yn(n, x_np))
+        ).to(x.device)
+    else:
+        raise ValueError("n must be a non-negative integer")
+
+
+## https://github.com/NanoComp/meep/blob/master/src/near2far.cpp#L208
+def green2d(
+    x: Tensor,
+    freqs: Tensor,
+    eps: float,
+    mu: float,
+    x0: Tensor,  # nearfield monitor locations
+    f0: Tensor,
+    c0: str = "Ez",
+):
+    # x: [n, 2], n far field target points, 2 dimension, x and y
+    # freqs: [nf] frequencies
+    # eps: scalar, permittivity in the homogeneous medium
+    # mu: scalar, permeability in the homogeneous medium
+    # x0: [s, 2] source near-field points, s near-field source points, 2 dimension, x and y
+    # c0: field component direction X,Y,Z -> 0,1,2
+    # f0: [bs, s, nf] a batch of DFT fields on near-field monitors, e.g., typically f0 is Ez fields
+    bs, n_points = x.shape[:2]
+    nf = freqs.shape[0]
+    # [n, 1, 2] - [1, s, 2] = [n, s, 2]
+    rhat = x[..., None, :] - x0[None, ...]  # distance vector # [n, s, 2]
+    r = rhat.norm(p=2, dim=-1, keepdim=True)  # [n, s, 1]
+    rhat = rhat / r  # unit vector
+    omega = 2 * np.pi * freqs  # [nf] angular frequencies
+    k = omega * (eps * mu) ** 0.5  # [nf] wave numbers
+    ik = 1j * k  # [nf] imaginary wave numbers
+    # [nf] * [n, s, 1] = [n, s, nf]
+    kr = k * r[..., None]
+    # Z = (mu / eps) ** 0.5
+
+    # [n, s, nf] * [bs, s, nf] = [bs, n, nf]
+    H0 = einsum(hankel(0, kr), f0, "n s f, b s f -> b n f")
+    H1 = einsum(hankel(1, kr), f0, "n s f, b s f -> b n f")
+    ikH1 = 0.25 * ik * H1  # [bs, n, nf]
+
+    if c0 == "Ez":  # Ez source
+        Ex = Ey = Hz = 0
+        # [nf] * [bs, n, nf] = [bs, n, nf]
+        Ez = -0.25 * omega * mu * H0  # [bs, n, nf]
+        # [bs, n, s] * [bs, n, s, nf] = [bs, n, nf]
+        Hx = einsum(-rhat[..., 1], ikH1, "n s, b n s f -> b n f")
+        Hy = einsum(rhat[..., 0], ikH1, "n s, b n s f -> b n f")
+    elif x == "Hz":  # Hz source
+        Ex = einsum(rhat[..., 1], ikH1, "n s, b n s f -> b n f")
+        Ey = einsum(-rhat[..., 0], ikH1, "n s, b n s f -> b n f")
+        Hz = -0.25 * omega * eps * H0  # [bs, n, nf]
+        Ez = Hx = Hy = 0
+    else:
+        raise ValueError("c0 must be 'Ez' or 'Hz'")
+
+    return Ex, Ey, Ez, Hx, Hy, Hz
+
+
+def get_farfields(
+    nearfield_regions,  # list of nearfield monitor
+    fields: Tensor,  # nearfield fields, entire fields
+    x: Tensor,  # farfield points physical locatinos, in um (x, y)
+    freqs: Tensor,
+    eps: float,
+    mu: float,
+    component: str = "Ez",  # nearfield fields component
+):
+    """
+    nearfield_regions: list of nearfield monitor, {monitor_name: {"slice": slice, "center": center, "size": size}}
+    fields: [bs, s, nf] a batch of nearfield fields, e.g., Ez
+    x: [n, 2], batch size, n far field target points, 2 dimension, x and y
+    freqs: [nf] frequencies
+    eps: scalar, permittivity in the homogeneous medium
+    mu: scalar, permeability in the homogeneous medium
+    component: str, nearfield fields component
+    """
+    far_fields = {"Ex": 0, "Ey": 0, "Ez": 0, "Hx": 0, "Hy": 0, "Hz": 0}
+    for name, nearfield_region in nearfield_regions.items():
+
+        nearfield_slice = nearfield_region["slice"]
+        f0 = fields[nearfield_slice]
+        center = nearfield_region["center"]
+        size = nearfield_region["size"]
+        if size[0] == 0:  # vertical monitor
+            n_src_points = nearfield_slice[1].shape[0]
+
+            xs_y = torch.linspace(
+                center[1] - size[1] / 2, center + size[1] / 2, n_src_points
+            )
+            xs_x = torch.empty_like(xs_y).fill_(center[0])
+        else:
+            n_src_points = nearfield_slice[0].shape[0]  # horizontal monitor
+            xs_x = torch.linspace(
+                center[0] - size[0] / 2, center + size[0] / 2, n_src_points
+            )
+            xs_y = torch.empty_like(xs_x).fill_(center[1])
+
+        xs = torch.stack((xs_x, xs_y), dim=-1)  # [num_src_points, 2]
+
+        Ex, Ey, Ez, Hx, Hy, Hz = green2d(
+            x=x, freqs=freqs, eps=eps, mu=mu, xs=xs, f0=f0, c0=component
+        )
+        far_fields["Ex"] += Ex
+        far_fields["Ey"] += Ey
+        far_fields["Ez"] += Ez
+        far_fields["Hx"] += Hx
+        far_fields["Hy"] += Hy
+        far_fields["Hz"] += Hz
+    return far_fields
