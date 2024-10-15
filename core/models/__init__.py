@@ -9,3 +9,4 @@ from .metamirror import MetaMirrorOptimization
 from .metacoupler import MetaCouplerOptimization
 from .isolator import IsolatorOptimization
 from .layers import *
+from .simplecnn import *

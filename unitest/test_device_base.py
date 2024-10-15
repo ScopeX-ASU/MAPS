@@ -181,9 +181,9 @@ def test_metacoupler_opt():
         optimizer, T_max=70, eta_min=0.0002
     )
 
-    for step in range(70):
+    for step in range(100):
         optimizer.zero_grad()
-        results = opt.forward(sharpness=1 + step)
+        results = opt.forward(sharpness=1 + 2 * step)
         opt.plot(
             eps_map=opt._eps_map,
             obj=results["breakdown"]["fwd_trans"]["value"],
@@ -204,7 +204,8 @@ def test_metacoupler_opt():
         )
         print(f"Step {step}:", results["breakdown"])
         (-results["obj"]).backward()
-        opt.dump_data(f"./data/fdfd/metacoupler/test_metacoupler_opt_step_{step}.h5")
+        if step % 5 == 0:
+            opt.dump_data(f"./data/fdfd/metacoupler/test_metacoupler_opt_step_{step}.h5")
         # print_stat(list(opt.parameters())[0], f"step {step}: grad: ")
         optimizer.step()
         scheduler.step()

@@ -1,0 +1,6 @@
+artifact_location: file:///home/pingchua/projects/MAPS/mlruns/627014879774371463
+creation_time: 1728985194916
+experiment_id: '627014879774371463'
+last_update_time: 1728985194916
+lifecycle_stage: active
+name: test_training_flow
