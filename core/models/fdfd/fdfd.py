@@ -6,7 +6,7 @@ from torch import Tensor, nn
 from torch_sparse import spmm
 
 from .derivatives import compute_derivative_matrices
-from .solver import sparse_solve_torch
+from .solver import sparse_solve_torch, SparseSolveTorch
 
 # notataion is similar to that used in: http://www.jpier.org/PIERB/pierb36/11.11092006.pdf
 from .utils import sparse_mm, sparse_mv
@@ -257,6 +257,7 @@ class fdfd_ez_torch(fdfd):
 
 class fdfd_ez(fdfd_ez_ceviche):
     def __init__(self, omega, dL, eps_r, npml, bloch_phases=None):
+        self.solver = SparseSolveTorch()
         if isinstance(eps_r, np.ndarray):
             eps_r = torch.from_numpy(eps_r)
         super().__init__(omega, dL, eps_r, npml, bloch_phases=bloch_phases)
@@ -320,7 +321,8 @@ class fdfd_ez(fdfd_ez_ceviche):
     def _solve_fn(self, eps_vec, entries_a, indices_a, Jz_vec):
         b_vec = 1j * self.omega * Jz_vec
         eps_diag = -EPSILON_0 * self.omega**2 * eps_vec
-        Ez_vec = sparse_solve_torch(entries_a, indices_a, eps_diag, b_vec)
+        # Ez_vec = sparse_solve_torch(entries_a, indices_a, eps_diag, b_vec)
+        Ez_vec = self.solver(entries_a, indices_a, eps_diag, b_vec)
 
         Hx_vec, Hy_vec = self._Ez_to_Hx_Hy(Ez_vec)
         return Hx_vec, Hy_vec, Ez_vec

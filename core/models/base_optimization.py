@@ -251,12 +251,12 @@ class BaseOptimization(nn.Module):
 
         obj_cfgs = copy.deepcopy(obj_cfgs)
         self.objective.add_objective(obj_cfgs)
-        self.objective.add_adj_objective(obj_cfgs)
 
         ### create static backward computational graph from J to eps, no actual execution.'
         ### only usedful for autograd, not for torch autodiff
         self.gradient_region = "global_region"
         if self.sim_cfg["solver"] == "ceviche":
+            self.objective.add_adj_objective(obj_cfgs)
             self.objective.build_jacobian()
             self.objective.build_adj_jacobian()
 
@@ -357,6 +357,8 @@ class BaseOptimization(nn.Module):
             4. Scattering matrix
             5. gradient 
         '''
+        # print("grad fn of self._eps_map", self._eps_map.grad_fn)
+        # print("grad of self._eps_map", self._eps_map.grad)
         with torch.no_grad():
             with h5py.File(filename, 'w') as f:
                 f.create_dataset('eps_map', data=self._eps_map.detach().cpu().numpy()) # 2d numpy array
@@ -372,35 +374,44 @@ class BaseOptimization(nn.Module):
                 #     norm_run_profiles.append(norm_run_profile)
                 # f.create_dataset('norm_run_profiles', data=norm_run_profiles) #({(wl, mode): [profile, ht_m, et_m, SCALE], ...}, ...)
                 for (port_name, wl, mode), fields in self.objective.solutions.items():
-                    fields = deepcopy(fields)
+                    store_fields = {}
                     for key, field in fields.items():
+                        if isinstance(fields[key], Tensor):
+                            store_fields[key] = fields[key].detach().cpu().numpy()
                         if isinstance(fields[key], ArrayBox):
-                            fields[key] = fields[key]._value
+                            store_fields[key] = fields[key]._value
                         if isinstance(field, np.ndarray):
                             if field.dtype == np.complex128:
-                                fields[key] = nparray_as_real(field)
-                    fields = np.stack((fields["Hx"], fields["Hy"], fields["Ez"]), axis=0)
-                    f.create_dataset(f'field_solutions-{port_name}-{wl}-{mode}', data=fields) # 3d numpy array
-                for (port_name, wl, out_mode), s_params in self.objective.s_params_dump.items():
-                    s_params = deepcopy(s_params)
+                                store_fields[key] = nparray_as_real(field)
+                    store_fields = np.stack((store_fields["Hx"], store_fields["Hy"], store_fields["Ez"]), axis=0)
+                    f.create_dataset(f'field_solutions-{port_name}-{wl}-{mode}', data=store_fields) # 3d numpy array
+                for (port_name, wl, out_mode), s_params in self.objective.s_params.items():
+                    store_s_params = {}
                     for key, s_param in s_params.items():
+                        if isinstance(s_param, Tensor):
+                            store_s_params[key] = s_param.detach().cpu().numpy()
                         if isinstance(s_param, ArrayBox):
-                            s_param = s_param._value
+                            store_s_params = s_param._value
                         if isinstance(s_param, np.ndarray):
                             if s_param.dtype == np.complex128:
-                                s_param = nparray_as_real(s_param)
-                    s_params = np.stack((s_params["s_p"], s_params["s_m"]), axis=0)
-                    f.create_dataset(f's_params-{port_name}-{wl}-{out_mode}', data=s_params) # 3d numpy array
+                                store_s_params = nparray_as_real(s_param)
+                    store_s_params = np.stack((store_s_params["s_p"], store_s_params["s_m"]), axis=0)
+                    f.create_dataset(f's_params-{port_name}-{wl}-{out_mode}', data=store_s_params) # 3d numpy array
                 adj_srcs = self.objective.obtain_adj_srcs(self.obj_cfgs)
+                if isinstance(adj_srcs, Tensor):
+                    adj_srcs = adj_srcs.detach().cpu().numpy()
                 if isinstance(adj_srcs, ArrayBox):
                     adj_srcs = adj_srcs._value
                 if isinstance(adj_srcs, np.ndarray):
                     if adj_srcs.dtype == np.complex128:
                         adj_srcs = nparray_as_real(adj_srcs)
                 f.create_dataset('adj_src', data=adj_srcs) # 2d numpy array
-                if isinstance(self.current_eps_grad, ArrayBox):
-                    self.current_eps_grad = self.current_eps_grad._value
-                f.create_dataset('gradient', data=self.current_eps_grad) # 2d numpy array
+                if hasattr(self, 'current_eps_grad'):
+                    if isinstance(self.current_eps_grad, ArrayBox):
+                        self.current_eps_grad = self.current_eps_grad._value
+                    f.create_dataset('gradient', data=self.current_eps_grad) # 2d numpy array
+                else:
+                    f.create_dataset('gradient', data=self._eps_map.grad.detach().cpu().numpy())
 
     def forward(
         self,
@@ -413,6 +424,7 @@ class BaseOptimization(nn.Module):
         ## need to create objective layer during forward, because all Simulations need to know the latest permittivity_list
 
         self._eps_map = eps_map
+        self._eps_map.retain_grad()
         self._hr_eps_map = hr_eps_map
         obj = self.objective_layer([eps_map])
         self._obj = obj

@@ -162,7 +162,8 @@ def test_metacoupler_opt():
     sim_cfg = DefaultSimulationConfig()
     sim_cfg.update(
         dict(
-            solver="ceviche",
+            # solver="ceviche",
+            solver="ceviche_torch",
             border_width=[0, 0, 6, 6],
             resolution=50,
             plot_root="./figs/metacoupler",
@@ -170,8 +171,9 @@ def test_metacoupler_opt():
     )
 
     device = MetaCoupler(sim_cfg=sim_cfg, device="cuda:0")
+    hr_device = device.copy(resolution=310)
     print(device)
-    opt = MetaCouplerOptimization(device=device, sim_cfg=sim_cfg)
+    opt = MetaCouplerOptimization(device=device, hr_device=hr_device, sim_cfg=sim_cfg,)
     print(opt)
 
     optimizer = torch.optim.Adam(opt.parameters(), lr=0.02)
@@ -326,22 +328,37 @@ def test_fdtd_ez_torch():
 
     omega = 2 * np.pi / (1.55e-6)
     dl = device.grid_step * 1e-6
-    sim = fdfd_ez(omega, dl, eps_r[:2,:2], device=dev, npml=[1,1])
-    hx, hy, ez = sim.solve(source[:2,:2])
+    # sim = fdfd_ez(omega, dl, eps_r[:2,:2], device=dev, npml=[1,1])
+    # sim = fdfd_ez(omega, dl, eps_r[:2,:2], npml=[1,1])
+    # hx, hy, ez = sim.solve(source[:2,:2])
 
-    c_sim = ceviche_fdfd_ez(omega, dl, device.epsilon_map[:2, :2], npml=[1,1])
-    c_hx, c_hy, c_ez = c_sim.solve(source.cpu().numpy()[:2,:2])
+    # c_sim = ceviche_fdfd_ez(omega, dl, device.epsilon_map[:2,:2], npml=[1,1])
+    # c_hx, c_hy, c_ez = c_sim.solve(source.cpu().numpy()[:2,:2])
+
+    sim = fdfd_ez(omega, dl, eps_r, npml=[1,1])
+    hx, hy, ez = sim.solve(source)
+
+    c_sim = ceviche_fdfd_ez(omega, dl, device.epsilon_map, npml=[1,1])
+    c_hx, c_hy, c_ez = c_sim.solve(source.cpu().numpy())
     print(ez)
     print(c_ez)
+    quit()
     # print((torch_sparse_to_scipy_sparse(sim.Dxf) - c_sim.Dxf.tocoo()))
     # print((torch_sparse_to_scipy_sparse(sim.Dxb) - c_sim.Dxb.tocoo()))
     # print((torch_sparse_to_scipy_sparse(sim.Dyf) - c_sim.Dyf.tocoo()))
     # print((torch_sparse_to_scipy_sparse(sim.Dyb) - c_sim.Dyb.tocoo()))
 
-    A = torch_sparse_to_scipy_sparse(sim._make_A(sim.eps_r.flatten()))
-    c_A_v, c_A_i = c_sim._make_A(c_sim.eps_r.flatten())
+    # sparse_tensor_A = torch.sparse_coo_tensor(
+    #     indices=torch.tensor(sim._make_A(sim.eps_r.flatten())[1]).to(dev),
+    #     values=torch.tensor(sim._make_A(sim.eps_r.flatten())[0]).to(dev),
+    #     size=(4,),
+    #     device=dev,
+    # )
+    # A = torch_sparse_to_scipy_sparse(sparse_tensor_A) # this sim._make_A returns a tuple (entries_a, indices_a)
+    # c_A_v, c_A_i = c_sim._make_A(c_sim.eps_r.flatten())
 
     print(torch_sparse_to_scipy_sparse(sim.Dxf))
+    print("----------------")
     print(c_sim.Dxf.tocoo())
     print()
     print((torch_sparse_to_scipy_sparse(sim.Dxb) - c_sim.Dxb.tocoo()))
@@ -351,8 +368,8 @@ def test_fdtd_ez_torch():
     print((torch_sparse_to_scipy_sparse(sim.Dyb) - c_sim.Dyb.tocoo()))
     print()
 
-    c_A = sp.coo_matrix((c_A_v, c_A_i), shape=A.shape)
-    print("A error:", A - c_A)
+    # c_A = sp.coo_matrix((c_A_v, c_A_i), shape=A.shape)
+    # print("A error:", A - c_A)
 
     C = (
         -1

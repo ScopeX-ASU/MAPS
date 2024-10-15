@@ -858,6 +858,9 @@ def get_eigenmode_coefficients(
     e = (0.0, 0.0, e_yee_shifted)
     em = (0.0, 0.0, et_m)
 
+    # print("this is the type of em: ", type(em[2])) # ndarray
+    # print("this is the type of hy: ", type(hy[monitor])) # torch.Tensor
+
     dl = grid_step * 1e-6
     overlap1 = overlap(em, h, dl=dl, direction=direction)
     overlap2 = overlap(hm, e, dl=dl, direction=direction)
@@ -1230,6 +1233,15 @@ class ObjectiveFunc(object):
                                     et_m,
                                     norm_p,
                                 ]
+                            # if isinstance(ht_m, np.ndarray) and isinstance(ez, Tensor):
+                            #     ht_m = torch.from_numpy(ht_m).to(ez.device)
+                            #     et_m = torch.from_numpy(et_m).to(ez.device)
+                            #     self.port_profiles[out_port_name][(wl, out_mode)] = [
+                            #         torch.from_numpy(src).to(ez.device),
+                            #         ht_m,
+                            #         et_m,
+                            #         norm_p,
+                            #     ]
 
                             s_p, s_m = get_eigenmode_coefficients(
                                 hx,
@@ -1377,25 +1389,39 @@ class ObjectiveFunc(object):
 
     def obtain_adj_srcs(self, cfgs):
         # this should be called after obtain_objective, other wise self.solutions is empty
+        dummy_key = next(iter(self.sims.keys()))
+        dummy_sim = self.sims[dummy_key]
+
         cfgs = deepcopy(cfgs)
         del cfgs["_fusion_func"]
         adj_sources = {}
-        for name, obj in self.dJ_dE.items():
+        # for name, obj in self.dJ_dE.items():
+        for name, obj in self.Js.items():
             cfg = cfgs[name]
             in_port_name = cfg["in_port_name"]
             in_mode = cfg["in_mode"]
             out_modes = cfg["out_modes"]
-            dummy_key = next(iter(self.sims.keys()))
-            value = np.zeros_like(
-                self.sims[dummy_key].eps_r, 
-                dtype=np.complex128
-            )
-            for wl, _ in self.sims.items():
-                EField = self.solutions[(in_port_name, wl, in_mode)]["Ez"]
-                for out_mode in out_modes:
-                    grad = obj["fn"][(wl, out_mode)](EField)
-                    grad = grad.reshape(value.shape)
-                    value = value + grad
+            if isinstance(dummy_sim.eps_r, torch.Tensor):
+                value = torch.zeros_like(
+                    dummy_sim.eps_r, 
+                    dtype=torch.complex128
+                ).to(dummy_sim.eps_r.device)
+            elif isinstance(dummy_sim.eps_r, np.ndarray):
+                value = np.zeros_like(
+                    dummy_sim.eps_r, 
+                    dtype=np.complex128
+                )
+            else:
+                raise ValueError(f"Invalid type {type(dummy_sim.eps_r)}")
+            for wl, sim in self.sims.items():
+                if hasattr(dummy_sim, "solver"): # which implies it is ceviche_torch solver
+                    value = value + sim.solver.adj_src.reshape(value.shape)/len(self.sims.keys())
+                else:
+                    EField = self.solutions[(in_port_name, wl, in_mode)]["Ez"]
+                    for out_mode in out_modes:
+                        grad = obj["fn"][(wl, out_mode)](EField)
+                        grad = grad.reshape(value.shape)
+                        value = value + grad
             adj_sources[name] = {
                 "weight": obj["weight"],
                 "value": value,
@@ -1463,7 +1489,6 @@ class ObjectiveFunc(object):
     ):
         if mode == "forward":
             objective = self.obtain_objective(permittivity)
-            self.s_params_dump = deepcopy(self.s_params)
             return objective
         elif mode == "backward":
             return self.obtain_gradient(permittivity, eps_shape)

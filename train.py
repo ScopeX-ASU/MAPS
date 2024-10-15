@@ -89,7 +89,7 @@ def train(
         )  # it should be minus fom, so that the gradient descent on loss could be the gradient ascent on fom
 
 
-    grad_scaler.scale(loss).backward(retain_graph=False)
+    grad_scaler.scale(loss).backward(retain_graph=True)
     # # print the gradient of the parameters
     # for name, param in model.named_parameters():
     #     if param.grad is not None:

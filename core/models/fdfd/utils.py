@@ -36,11 +36,26 @@ def get_entries_indices(coo_matrix):
     return entries, indices
 
 
-def torch_sparse_to_scipy_sparse(A):
-    A = A.coalesce()
-    return sp.coo_matrix(
-        (A.values().cpu().numpy(), A.indices().cpu().numpy()), shape=tuple(A.shape)
-    )
+def torch_sparse_to_scipy_sparse(A): # input A is a tuple (entries_a, indices_a), do not have the coalesce function
+    # A = A.coalesce()
+    # return sp.coo_matrix(
+    #     (A.values().cpu().numpy(), A.indices().cpu().numpy()), shape=tuple(A.shape)
+    # )
+    # If A is a PyTorch sparse tensor, coalesce it
+    if isinstance(A, torch.sparse.Tensor):
+        A = A.coalesce()
+
+        # Convert PyTorch sparse tensor to SciPy COO format
+        return sp.coo_matrix(
+            (A.values().cpu().numpy(), A.indices().cpu().numpy()), shape=tuple(A.shape)
+        )
+
+    # If A is a SciPy sparse matrix, convert it to COO format
+    elif isinstance(A, sp.spmatrix):
+        return A.tocoo()  # Ensure the output is in COO format
+
+    else:
+        raise TypeError(f"Expected a PyTorch sparse tensor or a SciPy sparse matrix, but got {type(A)}")
 
 
 def real_sparse_mm(A, B):

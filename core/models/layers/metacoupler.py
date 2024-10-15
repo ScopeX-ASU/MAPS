@@ -124,6 +124,7 @@ class MetaCoupler(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
+            solver=self.sim_cfg["solver"],
             plot=True,
         )
 
@@ -134,6 +135,7 @@ class MetaCoupler(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
+            solver=self.sim_cfg["solver"],
             plot=True,
         )
         norm_refl_profiles_2 = self.build_norm_sources(
@@ -143,6 +145,7 @@ class MetaCoupler(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
+            solver=self.sim_cfg["solver"],
             plot=True,
         )
 
@@ -153,6 +156,7 @@ class MetaCoupler(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
+            solver=self.sim_cfg["solver"],
             plot=True,
         )
         return norm_source_profiles, norm_refl_profiles_1, norm_refl_profiles_2, norm_monitor_profiles
