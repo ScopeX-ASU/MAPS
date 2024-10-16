@@ -249,6 +249,8 @@ class LeveSetParameterization(BaseParametrization):
 
         phi = phi_model.get_ls(x1=phi[0], y1=phi[1], shape=n_phi)
 
+        ## This is used to constrain the value to be [0, 1] for heaviside input
+        phi = torch.tanh(phi) * 0.5
         phi = phi + self.eta
         eps_phi = self.binary_projection(phi, sharpness, self.eta)
 

@@ -12,8 +12,9 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from torch.types import Device
-from core.utils import padding_to_tiles, rip_padding
+
 from core.NVILT_Share.photonic_model import *
+from core.utils import padding_to_tiles, rip_padding
 
 
 def _mirror_symmetry(x, dims):
@@ -53,15 +54,44 @@ def _convert_resolution(
     source_resolution: int = None,
     target_resolution: int = None,
     intplt_mode="nearest",
+    subpixel_smoothing: bool = False,
+    eps_r: float = None,
+    eps_bg: float = None,
     target_size=None,
 ):
     if target_size is None:
         target_nx, target_ny = [
-            int(round(i * target_resolution / source_resolution)) for i in x.shape
+            int(round(i * target_resolution / source_resolution)) for i in x.shape[-2:]
         ]
         target_size = (target_nx, target_ny)
     if x.shape[-2:] == tuple(target_size):
         return x
+
+    if (
+        target_size[0] < x.shape[-2]
+        and target_size[1] < x.shape[-1]
+        and subpixel_smoothing
+    ):
+        assert (
+            x.shape[-2] % target_size[0] == 0 and x.shape[-1] % target_size[1] == 0
+        ), f"source size should be multiples of target size, got {x.shape[-2:]} and {target_size}"
+        x = eps_bg + (eps_r - eps_bg) * x
+        x = 1 / x
+        # avg_pool_stride = [int(round(s / r)) for s, r in zip(x.shape[-2:], target_size)]
+        # avg_pool_kernel_size = [s + 1 for s in avg_pool_stride]
+        # pad_size = []
+        # x = F.pad(
+        #     x, (pad_size[1], pad_size[1], pad_size[0], pad_size[0]), mode="constant"
+        # )
+        # print(x.shape, avg_pool_kernel_size, avg_pool_stride)
+        x = F.adaptive_avg_pool2d(
+            x[None, None],
+            output_size=target_size,
+        )[0, 0]
+        x = 1 / x
+        x = (x - eps_bg) / (eps_r - eps_bg)
+        return x
+
     if len(x.shape) == 2:
         x = (
             F.interpolate(
@@ -74,6 +104,7 @@ def _convert_resolution(
         )
     elif len(x.shape) == 3:
         x = F.interpolate(x.unsqueeze(0), size=target_size, mode=intplt_mode).squeeze(0)
+
     return x
 
 
@@ -82,6 +113,9 @@ def convert_resolution(
     source_resolution: int = None,
     target_resolution: int = None,
     intplt_mode="nearest",
+    subpixel_smoothing: bool = False,
+    eps_r: float = None,
+    eps_bg: float = None,
     target_size=None,
 ):
     x = _convert_resolution(
@@ -89,6 +123,9 @@ def convert_resolution(
         source_resolution=source_resolution,
         target_resolution=target_resolution,
         intplt_mode=intplt_mode,
+        subpixel_smoothing=subpixel_smoothing,
+        eps_r=eps_r,
+        eps_bg=eps_bg,
         target_size=target_size,
     )
     return list(xs[:-1]) + [x]
@@ -179,6 +216,7 @@ class BaseParametrization(nn.Module):
         self.sim_cfg = sim_cfg
         self.cfgs = cfgs
         self.device = device
+        self.hr_device = hr_device
         self.design_region_mask = device.design_region_masks[region_name]
         self.design_region_cfg = device.design_region_cfgs[region_name]
 
@@ -239,14 +277,32 @@ class BaseParametrization(nn.Module):
                 transform_type
             ]((hr_permittivity, permittivity), **cfg)
 
-        ### we have to match the design region size to be able to be placed in the design region
+        ### we have to match the design region size to be able to be placed in the design region with subpixel smoothing
         target_size = [(m.stop - m.start) for m in self.design_region_mask]
 
+        ## first we upsample to ~1nm resolution with nearest interpolation to maintain the geometry
+
+        src_res = self.hr_device.sim_cfg["resolution"]  # e.g., 310
+        tar_res = int(round(1000 / src_res)) * src_res
+        ## it also needs to be multiples of the sim resolution to enable subpixel smoothing
+        hr_size = [int(round(i * tar_res / src_res)) for i in permittivity.shape[-2:]]
+        hr_size = [int(round(i / j) * j) for i, j in zip(hr_size, target_size)]
+        # print(permittivity.shape)
         permittivity = _convert_resolution(
             permittivity,
             intplt_mode="nearest",
+            target_size=hr_size,
+        )
+        # print(permittivity.shape)
+        # then we convert the resolution to the sim_cfg resolution with subpixeling smoothing, if we use res=50, 100, then we can use pooling
+        permittivity = _convert_resolution(
+            permittivity,
+            subpixel_smoothing=True,
+            eps_r=self.design_region_cfg["eps"],
+            eps_bg=self.design_region_cfg["eps_bg"],
             target_size=target_size,
         )
+        # print(permittivity.shape)
 
         with torch.inference_mode():
             target_size = [(m.stop - m.start) for m in self.hr_design_region_mask]

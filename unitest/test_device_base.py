@@ -127,13 +127,15 @@ def test_metamirror_opt():
             wl_cen=1.55,
             wl_width=0,
             n_wl=1,
-            plot_root="./figs/metamirror",
+            # plot_root="./figs/metamirror",
+            plot_root="./figs/metamirror_tanh_subpixel",
         )
     )
 
     device = MetaMirror(sim_cfg=sim_cfg, device="cuda:0")
     print(device)
-    opt = MetaMirrorOptimization(device=device, sim_cfg=sim_cfg)
+    hr_device = device.copy(resolution=310)
+    opt = MetaMirrorOptimization(device=device, hr_device=hr_device, sim_cfg=sim_cfg)
 
     optimizer = torch.optim.Adam(opt.parameters(), lr=0.02)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -142,15 +144,20 @@ def test_metamirror_opt():
 
     for step in range(70):
         optimizer.zero_grad()
-        results = opt.forward(sharpness=1 + step)
+        results = opt.forward(sharpness=1 + 2 * step)
         opt.plot(
             eps_map=opt._eps_map,
             obj=opt._obj,
             plot_filename="metamirrir_opt_step_{}.png".format(step),
             field_key=("in_port_1", 1.55, 1),
             field_component="Ez",
+            in_port_name="in_port_1",
         )
-        print(f"Step {step}:", results["breakdown"])
+
+        print(f"Step {step}:", end=" ")
+        for k, obj in results["breakdown"].items():
+            print(f"{k}: {obj['value']:.3f}", end=", ")
+        print()
         (-results["obj"]).backward()
         # print_stat(list(opt.parameters())[0], f"step {step}: grad: ")
         optimizer.step()
@@ -166,7 +173,8 @@ def test_metacoupler_opt():
             solver="ceviche_torch",
             border_width=[0, 0, 6, 6],
             resolution=50,
-            plot_root="./figs/metacoupler",
+            plot_root="./figs/metacoupler_subpixel",
+            # plot_root="./figs/metacoupler_periodic",
         )
     )
 
@@ -202,9 +210,12 @@ def test_metacoupler_opt():
             in_port_name="out_port_1",
             exclude_port_names=["refl_port_1"],
         )
-        print(f"Step {step}:", results["breakdown"])
+        print(f"Step {step}:", end=" ")
+        for k, obj in results["breakdown"].items():
+            print(f"{k}: {obj['value']:.3f}", end=", ")
+        print()
         (-results["obj"]).backward()
-        opt.dump_data(f"./data/fdfd/metacoupler/test_metacoupler_opt_step_{step}.h5")
+        # opt.dump_data(f"./data/fdfd/metacoupler/test_metacoupler_opt_step_{step}.h5")
         # print_stat(list(opt.parameters())[0], f"step {step}: grad: ")
         optimizer.step()
         scheduler.step()
