@@ -179,18 +179,22 @@ class FDFD(VisionDataset):
         device_file = self.data[item]
         with h5py.File(os.path.join(self.root, self.device_type, device_file), "r") as f:
             keys = list(f.keys())
-            eps_map = torch.from_numpy(f["eps_map"][()]).float()[None,]
-            adj_src = torch.from_numpy(f["adj_src"][()]).float()[None,]
-            gradient = torch.from_numpy(f["gradient"][()]).float()[None,]
+            eps_map = torch.from_numpy(f["eps_map"][()]).float()
+            gradient = torch.from_numpy(f["gradient"][()]).float()
             field_solutions = {}
             s_params = {}
+            adj_srcs = {}
+            src_profiles = {}
             for key in keys:
                 if key.startswith("field_solutions"):
                     field_solutions[key] = torch.from_numpy(f[key][()]).float()
                 elif key.startswith("s_params"):
                     s_params[key] = torch.from_numpy(f[key][()]).float()
-            
-        return eps_map, adj_src, gradient, field_solutions, s_params
+                elif key.startswith("adj_src"):
+                    adj_srcs[key] = torch.from_numpy(f[key][()]).float()
+                elif key.startswith("src_profiles"):
+                    src_profiles[key] = torch.from_numpy(f[key][()]).float()
+        return eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles
 
     def extra_repr(self) -> str:
         return "Split: {}".format("Train" if self.train is True else "Test")

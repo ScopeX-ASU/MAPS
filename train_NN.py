@@ -31,7 +31,8 @@ from core.utils import DeterministicCtx
 import wandb
 import datetime
 import random
-
+import numpy as np
+import matplotlib.pyplot as plt
 
 def single_batch_check(
     model: nn.Module,
@@ -175,14 +176,17 @@ def train(
 
     data_counter = 0
     total_data = len(train_loader.dataset)
-    for batch_idx, (eps_map, adj_src, gradient, field_solutions, s_params) in enumerate(train_loader):
+    for batch_idx, (eps_map, adj_src, gradient, field_solutions, s_params, src_profiles) in enumerate(train_loader):
         eps_map = eps_map.to(device, non_blocking=True)
-        adj_src = adj_src.to(device, non_blocking=True)
         gradient = gradient.to(device, non_blocking=True)
         for key, field in field_solutions.items():
             field_solutions[key] = field.to(device, non_blocking=True)
         for key, s_param in s_params.items():
             s_params[key] = s_param.to(device, non_blocking=True)
+        for key, adj_src in adj_src.items():
+            adj_src[key] = adj_src[key].to(device, non_blocking=True)
+        for key, src_profile in src_profiles.items():
+            src_profiles[key] = src_profile.to(device, non_blocking=True)
 
         data_counter += eps_map.shape[0]
 
@@ -288,14 +292,17 @@ def validate(
     val_loss = 0
     mse_meter = AverageMeter("mse")
     with torch.no_grad(), DeterministicCtx(42):
-        for batch_idx, (eps_map, adj_src, gradient, field_solutions, s_params) in enumerate(validation_loader):
+        for batch_idx, (eps_map, adj_src, gradient, field_solutions, s_params, src_profiles) in enumerate(validation_loader):
             eps_map = eps_map.to(device, non_blocking=True)
-            adj_src = adj_src.to(device, non_blocking=True)
             gradient = gradient.to(device, non_blocking=True)
             for key, field in field_solutions.items():
                 field_solutions[key] = field.to(device, non_blocking=True)
             for key, s_param in s_params.items():
                 s_params[key] = s_param.to(device, non_blocking=True)
+            for key, adj_src in adj_src.items():
+                adj_src[key] = adj_src[key].to(device, non_blocking=True)
+            for key, src_profile in src_profiles.items():
+                src_profiles[key] = src_profile.to(device, non_blocking=True)
 
             if mixup_fn is not None:
                 eps_map, adj_src, gradient, field_solutions, s_params = mixup_fn(eps_map, adj_src, gradient, field_solutions, s_params)
@@ -347,14 +354,17 @@ def test(
     val_loss = 0
     mse_meter = AverageMeter("mse")
     with torch.no_grad(), DeterministicCtx(42):
-        for batch_idx, (eps_map, adj_src, gradient, field_solutions, s_params) in enumerate(test_loader):
+        for batch_idx, (eps_map, adj_src, gradient, field_solutions, s_params, src_profiles) in enumerate(test_loader):
             eps_map = eps_map.to(device, non_blocking=True)
-            adj_src = adj_src.to(device, non_blocking=True)
             gradient = gradient.to(device, non_blocking=True)
             for key, field in field_solutions.items():
                 field_solutions[key] = field.to(device, non_blocking=True)
             for key, s_param in s_params.items():
                 s_params[key] = s_param.to(device, non_blocking=True)
+            for key, adj_src in adj_src.items():
+                adj_src[key] = adj_src[key].to(device, non_blocking=True)
+            for key, src_profile in src_profiles.items():
+                src_profiles[key] = src_profile.to(device, non_blocking=True)
 
             if mixup_fn is not None:
                 eps_map, adj_src, gradient, field_solutions, s_params = mixup_fn(eps_map, adj_src, gradient, field_solutions, s_params)

@@ -93,4 +93,3 @@ class simpleCNN(nn.Module):
         x = torch.cat([eps_map, adj_src], dim=1)
         predict_grad = self.predictor(x)
         return predict_grad
-

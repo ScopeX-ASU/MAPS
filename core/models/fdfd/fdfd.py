@@ -10,6 +10,17 @@ from .solver import sparse_solve_torch, SparseSolveTorch
 
 # notataion is similar to that used in: http://www.jpier.org/PIERB/pierb36/11.11092006.pdf
 from .utils import sparse_mm, sparse_mv
+from core.models.layers.utils import (
+    # Si_eps,
+    # SiO2_eps,
+    Slice,
+    # apply_regions_gpu,
+    get_eigenmode_coefficients,
+    get_flux,
+    # get_grid,
+    # insert_mode,
+    # plot_eps_field,
+)
 
 __all__ = ["fdfd", "fdfd_ez"]
 
@@ -317,6 +328,56 @@ class fdfd_ez(fdfd_ez_ceviche):
         Hx_vec = self._Ez_to_Hx(Ez_vec)
         Hy_vec = self._Ez_to_Hy(Ez_vec)
         return Hx_vec, Hy_vec
+    
+    def norm_adj_power(self):
+        Nx = self.eps_r.shape[0]
+        Ny = self.eps_r.shape[1]
+        x_slices = [
+            Slice(
+                x=np.array(self.npml[0] + 5),
+                y=np.arange(
+                    0 + self.npml[1] + 5,
+                    Ny - self.npml[1] - 5,
+                ),
+            ), 
+            Slice(
+                x=np.array(Nx - self.npml[0] - 5),
+                y=np.arange(
+                    0 + self.npml[1] + 5,
+                    Ny - self.npml[1] - 5,
+                ),
+            ), 
+        ]
+        y_slices = [
+            Slice(
+                x=np.arange(
+                    0 + self.npml[0] + 5,
+                    Nx - self.npml[0] - 5,
+                ),
+                y=np.array(self.npml[1] + 5),
+            ),
+            Slice(
+                x=np.arange(
+                    0 + self.npml[0] + 5,
+                    Nx - self.npml[0] - 5,
+                ),
+                y=np.array(Ny - self.npml[1] - 5),
+            ),
+        ]
+        with torch.no_grad():
+            J_adj = self.solver.adj_src / 1j / self.omega # b_adj --> J_adj
+            hx_adj, hy_adj, ez_adj = self.solve(J_adj) # J_adj --> Hx_adj, Hy_adj, Ez_adj
+            total_flux = torch.tensor([0.0,], device=ez_adj.device) # Hx_adj, Hy_adj, Ez_adj --> 2 * total_flux
+            for frame_slice in x_slices:
+                total_flux = total_flux + get_flux(hx_adj, hy_adj, ez_adj, frame_slice, self.dL/1e-6, "x")
+            for frame_slice in y_slices:
+                total_flux = total_flux + get_flux(hx_adj, hy_adj, ez_adj, frame_slice, self.dL/1e-6, "y")
+        total_flux = total_flux / 2 # 2 * total_flux --> total_flux
+        ez_adj = ez_adj / total_flux
+        hx_adj = hx_adj / total_flux
+        hy_adj = hy_adj / total_flux
+        return ez_adj, hx_adj, hy_adj, total_flux
+
 
     def _solve_fn(self, eps_vec, entries_a, indices_a, Jz_vec):
         b_vec = 1j * self.omega * Jz_vec

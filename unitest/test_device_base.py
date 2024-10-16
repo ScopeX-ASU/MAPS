@@ -205,7 +205,7 @@ def test_metacoupler_opt():
         print(f"Step {step}:", results["breakdown"])
         (-results["obj"]).backward()
         if step % 5 == 0:
-            opt.dump_data(f"./data/fdfd/metacoupler/test_metacoupler_opt_step_{step}.h5")
+            opt.dump_data(f"./data/fdfd/metacoupler/test1_metacoupler_opt_step_{step}.h5")
         # print_stat(list(opt.parameters())[0], f"step {step}: grad: ")
         optimizer.step()
         scheduler.step()
