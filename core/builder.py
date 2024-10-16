@@ -12,6 +12,7 @@ from torch.types import Device
 from torch.utils.data import Sampler
 
 from core.models import *
+from core.datasets import *
 
 from .utils import (
     DAdaptAdam,
@@ -469,8 +470,22 @@ def make_dataloader(
     out_frames=None,
 ) -> Tuple[DataLoader, DataLoader]:
     name = (name or configs.dataset.name).lower()
-    if name == "fdtd":
-        pass
+    if name == "fdfd":
+        train_dataset, validation_dataset, test_dataset = (
+            (
+                FDFDDataset(
+                    device_type=configs.dataset.device_type,
+                    root=configs.dataset.root,
+                    split=split,
+                    test_ratio=configs.dataset.test_ratio,
+                    train_valid_split_ratio=configs.dataset.train_valid_split_ratio,
+                    processed_dir=configs.dataset.processed_dir,
+                )
+                if split in splits
+                else None
+            )
+            for split in ["train", "valid", "test"]
+        )
     else:
         train_dataset, test_dataset = get_dataset(
             name,
@@ -481,137 +496,38 @@ def make_dataloader(
         )
         validation_dataset = None
 
-    if (
-        train_dataset is not None
-        and configs.dataset.batch_strategy == "keep_spatial_res"
-    ):
-        train_loader = torch.utils.data.DataLoader(
-            dataset=train_dataset,
-            batch_size=configs.run.batch_size,
-            pin_memory=True,
-            num_workers=configs.dataset.num_workers,
-            prefetch_factor=8,
-            persistent_workers=True,
-            collate_fn=collate_fn_keep_spatial_res,
-            sampler=MySampler(train_dataset, shuffle=int(configs.dataset.shuffle)),
-        )
-    elif (
-        train_dataset is not None
-        and configs.dataset.batch_strategy == "keep_spatial_res_pad_to_256"
-    ):
-        train_loader = torch.utils.data.DataLoader(
-            dataset=train_dataset,
-            batch_size=configs.run.batch_size,
-            pin_memory=True,
-            num_workers=configs.dataset.num_workers,
-            prefetch_factor=8,
-            persistent_workers=True,
-            collate_fn=collate_fn_keep_spatial_res_pad_to_256,
-            sampler=MySampler(train_dataset, shuffle=int(configs.dataset.shuffle)),
-        )
-    elif (
-        train_dataset is not None
-        and configs.dataset.batch_strategy == "resize_and_padding_to_square"
-    ):
-        train_loader = torch.utils.data.DataLoader(
-            dataset=train_dataset,
-            batch_size=configs.run.batch_size,
-            shuffle=int(configs.dataset.shuffle),
-            pin_memory=True,
-            num_workers=configs.dataset.num_workers,
-            prefetch_factor=8,
-            persistent_workers=True,
-        )
-    else:
-        train_loader = None
+    train_loader = torch.utils.data.DataLoader(
+        dataset=train_dataset,
+        batch_size=configs.run.batch_size,
+        pin_memory=True,
+        num_workers=configs.dataset.num_workers,
+        prefetch_factor=8,
+        persistent_workers=True,
+        # collate_fn=collate_fn_keep_spatial_res,
+        # sampler=MySampler(train_dataset, shuffle=int(configs.dataset.shuffle)),
+    )
 
-    if (
-        validation_dataset is not None
-        and configs.dataset.batch_strategy == "keep_spatial_res"
-    ):
-        validation_loader = torch.utils.data.DataLoader(
-            dataset=validation_dataset,
-            batch_size=configs.run.batch_size,
-            pin_memory=True,
-            num_workers=configs.dataset.num_workers,
-            prefetch_factor=8,
-            persistent_workers=True,
-            collate_fn=collate_fn_keep_spatial_res,
-            sampler=MySampler(validation_dataset, shuffle=int(configs.dataset.shuffle)),
-        )
-    elif (
-        validation_dataset is not None
-        and configs.dataset.batch_strategy == "keep_spatial_res_pad_to_256"
-    ):
-        validation_loader = torch.utils.data.DataLoader(
-            dataset=validation_dataset,
-            batch_size=configs.run.batch_size,
-            pin_memory=True,
-            num_workers=configs.dataset.num_workers,
-            prefetch_factor=8,
-            persistent_workers=True,
-            collate_fn=collate_fn_keep_spatial_res_pad_to_256,
-            sampler=MySampler(validation_dataset, shuffle=int(configs.dataset.shuffle)),
-        )
-    elif (
-        validation_dataset is not None
-        and configs.dataset.batch_strategy == "resize_and_padding_to_square"
-    ):
-        validation_loader = torch.utils.data.DataLoader(
-            dataset=validation_dataset,
-            batch_size=configs.run.batch_size,
-            shuffle=False,
-            pin_memory=True,
-            num_workers=configs.dataset.num_workers,
-            prefetch_factor=8,
-            persistent_workers=True,
-        )
-    else:
-        validation_loader = None
+    validation_loader = torch.utils.data.DataLoader(
+        dataset=validation_dataset,
+        batch_size=configs.run.batch_size,
+        pin_memory=True,
+        num_workers=configs.dataset.num_workers,
+        prefetch_factor=8,
+        persistent_workers=True,
+        # collate_fn=collate_fn_keep_spatial_res,
+        # sampler=MySampler(validation_dataset, shuffle=int(configs.dataset.shuffle)),
+    )
 
-    if (
-        test_dataset is not None
-        and configs.dataset.batch_strategy == "keep_spatial_res"
-    ):
-        test_loader = torch.utils.data.DataLoader(
-            dataset=test_dataset,
-            batch_size=configs.run.batch_size,
-            pin_memory=True,
-            num_workers=configs.dataset.num_workers,
-            prefetch_factor=8,
-            persistent_workers=True,
-            collate_fn=collate_fn_keep_spatial_res,
-            sampler=MySampler(test_dataset, shuffle=int(configs.dataset.shuffle)),
-        )
-    elif (
-        test_dataset is not None
-        and configs.dataset.batch_strategy == "keep_spatial_res_pad_to_256"
-    ):
-        test_loader = torch.utils.data.DataLoader(
-            dataset=test_dataset,
-            batch_size=configs.run.batch_size,
-            pin_memory=True,
-            num_workers=configs.dataset.num_workers,
-            prefetch_factor=8,
-            persistent_workers=True,
-            collate_fn=collate_fn_keep_spatial_res_pad_to_256,
-            sampler=MySampler(test_dataset, shuffle=int(configs.dataset.shuffle)),
-        )
-    elif (
-        test_dataset is not None
-        and configs.dataset.batch_strategy == "resize_and_padding_to_square"
-    ):
-        test_loader = torch.utils.data.DataLoader(
-            dataset=test_dataset,
-            batch_size=configs.run.batch_size,
-            shuffle=False,
-            pin_memory=True,
-            num_workers=configs.dataset.num_workers,
-            prefetch_factor=8,
-            persistent_workers=True,
-        )
-    else:
-        test_loader = None
+    test_loader = torch.utils.data.DataLoader(
+        dataset=test_dataset,
+        batch_size=configs.run.batch_size,
+        pin_memory=True,
+        num_workers=configs.dataset.num_workers,
+        prefetch_factor=8,
+        persistent_workers=True,
+        # collate_fn=collate_fn_keep_spatial_res,
+        # sampler=MySampler(test_dataset, shuffle=int(configs.dataset.shuffle)),
+    )
 
     return train_loader, validation_loader, test_loader
 
@@ -698,6 +614,8 @@ def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
             device=kwargs["optDevice"],
             sim_cfg=configs.model.sim_cfg,
         ).to(device)
+    elif "simplecnn" in configs.model.name.lower():
+        model = eval(configs.model.name)().to(device)
     else:
         raise NotImplementedError(f"Not supported model name: {configs.model.name}")
     return model

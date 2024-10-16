@@ -150,7 +150,8 @@ class BaseOptimization(nn.Module):
         device.init_monitors()
 
         ### need to run normalization run
-        self.norm_run_profiles = device.norm_run()
+        device.norm_run()
+        self.norm_run_profiles = device.port_sources_dict # {input_slice_name: source_profiles 2d array, ...}
 
         ### pre-build objectives
         self.build_objective(
@@ -362,17 +363,16 @@ class BaseOptimization(nn.Module):
         with torch.no_grad():
             with h5py.File(filename, 'w') as f:
                 f.create_dataset('eps_map', data=self._eps_map.detach().cpu().numpy()) # 2d numpy array
-                # norm_run_profiles = []
-                # for i in range(len(self.norm_run_profiles)):
-                #     norm_run_profile = deepcopy(self.norm_run_profiles[i])
-                #     for (wl, mode), profile in norm_run_profile.items():
-                #         for j in range(len(profile)):
-                #             print("this is the type of the profile[j]", type(profile[j]))
-                #             if isinstance(profile[j], np.ndarray):
-                #                 profile[j] = nparray_as_real(profile[j]) if profile[j].dtype == np.complex128 else profile[j]
-                #                 print("this is the dtype of the profile[j]", profile[j].dtype)
-                #     norm_run_profiles.append(norm_run_profile)
-                # f.create_dataset('norm_run_profiles', data=norm_run_profiles) #({(wl, mode): [profile, ht_m, et_m, SCALE], ...}, ...)
+                for key, source_profile in self.norm_run_profiles.items():
+                    for profile_key, profile in source_profile.items():
+                        if isinstance(profile[0], Tensor):
+                            mode = profile[0].detach().cpu().numpy()
+                        if isinstance(profile[0], ArrayBox):
+                            mode = profile[0]._value
+                        if isinstance(profile[0], np.ndarray):
+                            if profile.dtype == np.complex128:
+                                mode = nparray_as_real(profile[0])
+                    f.create_dataset(f'src_profiles-{key}-{profile_key}', data=mode) #({(wl, mode): [profile, ht_m, et_m, SCALE], ...}, ...)
                 for (port_name, wl, mode), fields in self.objective.solutions.items():
                     store_fields = {}
                     for key, field in fields.items():
@@ -397,15 +397,43 @@ class BaseOptimization(nn.Module):
                                 store_s_params = nparray_as_real(s_param)
                     store_s_params = np.stack((store_s_params["s_p"], store_s_params["s_m"]), axis=0)
                     f.create_dataset(f's_params-{port_name}-{wl}-{out_mode}', data=store_s_params) # 3d numpy array
-                adj_srcs = self.objective.obtain_adj_srcs(self.obj_cfgs)
-                if isinstance(adj_srcs, Tensor):
-                    adj_srcs = adj_srcs.detach().cpu().numpy()
-                if isinstance(adj_srcs, ArrayBox):
-                    adj_srcs = adj_srcs._value
-                if isinstance(adj_srcs, np.ndarray):
-                    if adj_srcs.dtype == np.complex128:
-                        adj_srcs = nparray_as_real(adj_srcs)
-                f.create_dataset('adj_src', data=adj_srcs) # 2d numpy array
+                adj_srcs, fields_adj, field_adj_normalizer = self.objective.obtain_adj_srcs(self.obj_cfgs)
+                for key, adj_src in adj_srcs.items():
+                    if isinstance(adj_src, Tensor):
+                        adj_src = adj_src.detach().cpu().numpy()
+                    if isinstance(adj_src, ArrayBox):
+                        adj_src = adj_src._value
+                    if isinstance(adj_src, np.ndarray):
+                        if adj_src.dtype == np.complex128:
+                            adj_src = nparray_as_real(adj_src)
+                    f.create_dataset(f'adj_src-{key}', data=adj_src)
+                for key, fields in fields_adj.items():
+                    store_fields = {}
+                    for components_key, field in fields.items():
+                        if isinstance(field, Tensor):
+                            store_fields[components_key] = field.detach().cpu().numpy()
+                        if isinstance(field, ArrayBox):
+                            store_fields[components_key] = field._value
+                        if isinstance(field, np.ndarray):
+                            if field.dtype == np.complex128:
+                                store_fields[components_key] = nparray_as_real(field)
+                    store_fields = np.stack((store_fields["Hx"], store_fields["Hy"], store_fields["Ez"]), axis=0)
+                    f.create_dataset(f'fields_adj-{key}', data=store_fields) # 3d numpy array
+                if isinstance(field_adj_normalizer, Tensor):
+                    field_adj_normalizer = field_adj_normalizer.detach().cpu().numpy()
+                if isinstance(field_adj_normalizer, ArrayBox):
+                    field_adj_normalizer = field_adj_normalizer._value
+                if isinstance(field_adj_normalizer, np.ndarray):
+                    if field_adj_normalizer.dtype == np.complex128:
+                        field_adj_normalizer = nparray_as_real(field_adj_normalizer)
+                # if isinstance(adj_srcs, Tensor):
+                #     adj_srcs = adj_srcs.detach().cpu().numpy()
+                # if isinstance(adj_srcs, ArrayBox):
+                #     adj_srcs = adj_srcs._value
+                # if isinstance(adj_srcs, np.ndarray):
+                #     if adj_srcs.dtype == np.complex128:
+                #         adj_srcs = nparray_as_real(adj_srcs)
+                # f.create_dataset('adj_src', data=adj_srcs) # 2d numpy array
                 if hasattr(self, 'current_eps_grad'):
                     if isinstance(self.current_eps_grad, ArrayBox):
                         self.current_eps_grad = self.current_eps_grad._value

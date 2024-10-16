@@ -1395,46 +1395,14 @@ class ObjectiveFunc(object):
         cfgs = deepcopy(cfgs)
         del cfgs["_fusion_func"]
         adj_sources = {}
-        # for name, obj in self.dJ_dE.items():
-        for name, obj in self.Js.items():
-            cfg = cfgs[name]
-            in_port_name = cfg["in_port_name"]
-            in_mode = cfg["in_mode"]
-            out_modes = cfg["out_modes"]
-            if isinstance(dummy_sim.eps_r, torch.Tensor):
-                value = torch.zeros_like(
-                    dummy_sim.eps_r, 
-                    dtype=torch.complex128
-                ).to(dummy_sim.eps_r.device)
-            elif isinstance(dummy_sim.eps_r, np.ndarray):
-                value = np.zeros_like(
-                    dummy_sim.eps_r, 
-                    dtype=np.complex128
-                )
-            else:
-                raise ValueError(f"Invalid type {type(dummy_sim.eps_r)}")
-            for wl, sim in self.sims.items():
-                if hasattr(dummy_sim, "solver"): # which implies it is ceviche_torch solver
-                    value = value + sim.solver.adj_src.reshape(value.shape)/len(self.sims.keys())
-                else:
-                    EField = self.solutions[(in_port_name, wl, in_mode)]["Ez"]
-                    for out_mode in out_modes:
-                        grad = obj["fn"][(wl, out_mode)](EField)
-                        grad = grad.reshape(value.shape)
-                        value = value + grad
-            adj_sources[name] = {
-                "weight": obj["weight"],
-                "value": value,
-            }
-        ## here we accept customized fusion function, e.g., weighted sum by default.
-        fusion_results = self._obj_fusion_func(adj_sources)
-        if isinstance(fusion_results, tuple):
-            total_src, _ = fusion_results
-        else:
-            total_src = fusion_results
-        if self.verbose:
-            print(f"Shape of total source: {total_src.shape}")
-        return total_src
+        field_adj = {}
+        field_adj_normalizer = {}
+        for key, sim in self.sims.items():
+            adj_sources[key] = sim.solver.adj_src # this is the b_adj
+            ez_adj, hx_adj, hy_adj, flux = sim.norm_adj_power()
+            field_adj[key] = {"Ez": ez_adj, "Hx": hx_adj, "Hy": hy_adj}
+            field_adj_normalizer[key] = flux
+        return adj_sources, field_adj, field_adj_normalizer
 
     def obtain_objective(
         self, permittivity: np.ndarray | Tensor
