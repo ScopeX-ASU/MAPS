@@ -1218,6 +1218,7 @@ class ObjectiveFunc(object):
                                 (wl, in_mode)
                             ][3]
                             monitor_slice = self.port_slices[out_port_name]
+                            print("this is the field keys to be used in computation graph: ", (in_port_name, wl, in_mode))
                             field = fields[(in_port_name, wl, in_mode)]
                             hx, hy, ez = (
                                 field["Hx"],
@@ -1387,20 +1388,23 @@ class ObjectiveFunc(object):
                 dJ_dE_fn[(wl, out_mode)] = dJ_dE
             self.dJ_dE[name] = {"weight": obj["weight"], "fn": dJ_dE_fn}
 
-    def obtain_adj_srcs(self, cfgs):
+    def obtain_adj_srcs(self):
         # this should be called after obtain_objective, other wise self.solutions is empty
-        dummy_key = next(iter(self.sims.keys()))
-        dummy_sim = self.sims[dummy_key]
-
-        cfgs = deepcopy(cfgs)
-        del cfgs["_fusion_func"]
         adj_sources = {}
         field_adj = {}
         field_adj_normalizer = {}
         for key, sim in self.sims.items():
+            print("this is the keys of the adj_srcs: ", sim.solver.adj_src.keys())
             adj_sources[key] = sim.solver.adj_src # this is the b_adj
             ez_adj, hx_adj, hy_adj, flux = sim.norm_adj_power()
-            field_adj[key] = {"Ez": ez_adj, "Hx": hx_adj, "Hy": hy_adj}
+            # field_adj[key] = {"Ez": ez_adj, "Hx": hx_adj, "Hy": hy_adj}
+            field_adj[key] = {}
+            for (port_name, mode), _ in ez_adj.items():
+                field_adj[key][(port_name, mode)] = {
+                    "Ez": ez_adj[(port_name, mode)],
+                    "Hx": hx_adj[(port_name, mode)],
+                    "Hy": hy_adj[(port_name, mode)],
+                }
             field_adj_normalizer[key] = flux
         return adj_sources, field_adj, field_adj_normalizer
 
@@ -1408,13 +1412,14 @@ class ObjectiveFunc(object):
         self, permittivity: np.ndarray | Tensor
     ) -> Tuple[dict, Tensor]:
         self.solutions = {}
+        print("this is the key in self.port_profiles: ", self.port_profiles.keys())
         for port_name, port_profile in self.port_profiles.items():
             for (wl, mode), (source, _, _, norm_power) in port_profile.items():
                 ## here the source is already normalized during norm_run to make sure it has target power
                 ## here is the key part that build the common "eps to field" autograd graph
                 ## later on, multiple "field to fom" autograd graph(s) will be built inside of multiple obj_fn's
                 self.sims[wl].eps_r = permittivity
-                Hx, Hy, Ez = self.sims[wl].solve(source)
+                Hx, Hy, Ez = self.sims[wl].solve(source, port_name=port_name, mode=mode)
                 self.solutions[(port_name, wl, mode)] = {
                     "Hx": Hx,
                     "Hy": Hy,

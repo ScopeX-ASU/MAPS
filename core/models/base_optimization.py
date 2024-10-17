@@ -349,7 +349,6 @@ class BaseOptimization(nn.Module):
         )
 
     def dump_data(self, filename):
-        # TODO implement this function
         '''
         data needed to be dumped:
             1. eps_map (denormalized), downsample to different resolution
@@ -363,16 +362,13 @@ class BaseOptimization(nn.Module):
         with torch.no_grad():
             with h5py.File(filename, 'w') as f:
                 f.create_dataset('eps_map', data=self._eps_map.detach().cpu().numpy()) # 2d numpy array
-                for key, source_profile in self.norm_run_profiles.items():
-                    for profile_key, profile in source_profile.items():
+                for port_name, source_profile in self.norm_run_profiles.items():
+                    for (wl, mode), profile in source_profile.items():
                         if isinstance(profile[0], Tensor):
-                            mode = profile[0].detach().cpu().numpy()
+                            src_mode = profile[0].detach().cpu().numpy()
                         if isinstance(profile[0], ArrayBox):
-                            mode = profile[0]._value
-                        if isinstance(profile[0], np.ndarray):
-                            if profile.dtype == np.complex128:
-                                mode = nparray_as_real(profile[0])
-                    f.create_dataset(f'src_profiles-{key}-{profile_key}', data=mode) #({(wl, mode): [profile, ht_m, et_m, SCALE], ...}, ...)
+                            src_mode = profile[0]._value
+                        f.create_dataset(f'source_profile-wl-{wl}-port-{port_name}-mode-{mode}', data=src_mode)
                 for (port_name, wl, mode), fields in self.objective.solutions.items():
                     store_fields = {}
                     for key, field in fields.items():
@@ -380,11 +376,8 @@ class BaseOptimization(nn.Module):
                             store_fields[key] = fields[key].detach().cpu().numpy()
                         if isinstance(fields[key], ArrayBox):
                             store_fields[key] = fields[key]._value
-                        if isinstance(field, np.ndarray):
-                            if field.dtype == np.complex128:
-                                store_fields[key] = nparray_as_real(field)
                     store_fields = np.stack((store_fields["Hx"], store_fields["Hy"], store_fields["Ez"]), axis=0)
-                    f.create_dataset(f'field_solutions-{port_name}-{wl}-{mode}', data=store_fields) # 3d numpy array
+                    f.create_dataset(f'field_solutions-wl-{wl}-port-{port_name}-mode-{mode}', data=store_fields) # 3d numpy array
                 for (port_name, wl, out_mode), s_params in self.objective.s_params.items():
                     store_s_params = {}
                     for key, s_param in s_params.items():
@@ -392,54 +385,46 @@ class BaseOptimization(nn.Module):
                             store_s_params[key] = s_param.detach().cpu().numpy()
                         if isinstance(s_param, ArrayBox):
                             store_s_params = s_param._value
-                        if isinstance(s_param, np.ndarray):
-                            if s_param.dtype == np.complex128:
-                                store_s_params = nparray_as_real(s_param)
                     store_s_params = np.stack((store_s_params["s_p"], store_s_params["s_m"]), axis=0)
                     f.create_dataset(f's_params-{port_name}-{wl}-{out_mode}', data=store_s_params) # 3d numpy array
-                adj_srcs, fields_adj, field_adj_normalizer = self.objective.obtain_adj_srcs(self.obj_cfgs)
-                for key, adj_src in adj_srcs.items():
-                    if isinstance(adj_src, Tensor):
-                        adj_src = adj_src.detach().cpu().numpy()
-                    if isinstance(adj_src, ArrayBox):
-                        adj_src = adj_src._value
-                    if isinstance(adj_src, np.ndarray):
-                        if adj_src.dtype == np.complex128:
-                            adj_src = nparray_as_real(adj_src)
-                    f.create_dataset(f'adj_src-{key}', data=adj_src)
-                for key, fields in fields_adj.items():
-                    store_fields = {}
-                    for components_key, field in fields.items():
-                        if isinstance(field, Tensor):
-                            store_fields[components_key] = field.detach().cpu().numpy()
-                        if isinstance(field, ArrayBox):
-                            store_fields[components_key] = field._value
-                        if isinstance(field, np.ndarray):
-                            if field.dtype == np.complex128:
-                                store_fields[components_key] = nparray_as_real(field)
-                    store_fields = np.stack((store_fields["Hx"], store_fields["Hy"], store_fields["Ez"]), axis=0)
-                    f.create_dataset(f'fields_adj-{key}', data=store_fields) # 3d numpy array
-                if isinstance(field_adj_normalizer, Tensor):
-                    field_adj_normalizer = field_adj_normalizer.detach().cpu().numpy()
-                if isinstance(field_adj_normalizer, ArrayBox):
-                    field_adj_normalizer = field_adj_normalizer._value
-                if isinstance(field_adj_normalizer, np.ndarray):
-                    if field_adj_normalizer.dtype == np.complex128:
-                        field_adj_normalizer = nparray_as_real(field_adj_normalizer)
-                # if isinstance(adj_srcs, Tensor):
-                #     adj_srcs = adj_srcs.detach().cpu().numpy()
-                # if isinstance(adj_srcs, ArrayBox):
-                #     adj_srcs = adj_srcs._value
-                # if isinstance(adj_srcs, np.ndarray):
-                #     if adj_srcs.dtype == np.complex128:
-                #         adj_srcs = nparray_as_real(adj_srcs)
-                # f.create_dataset('adj_src', data=adj_srcs) # 2d numpy array
+                adj_srcs, fields_adj, field_adj_normalizer = self.objective.obtain_adj_srcs()
+                for wl, adj_src in adj_srcs.items():
+                    for (port_name, mode), b_adj in adj_src.items():
+                        b_adj = b_adj.reshape(self.epsilon_map.shape)
+                        if isinstance(b_adj, Tensor):
+                            b_adj = b_adj.detach().cpu().numpy()
+                        if isinstance(b_adj, ArrayBox):
+                            b_adj = b_adj._value
+                        f.create_dataset(f'adj_src-wl-{wl}-port-{port_name}-mode-{mode}', data=b_adj)
+                for wl, fields in fields_adj.items():
+                    for (port_name, mode), field in fields.items():
+                        store_fields = {}
+                        for components_key, component in field.items():
+                            if isinstance(component, Tensor):
+                                store_fields[components_key] = component.detach().cpu().numpy()
+                            if isinstance(component, ArrayBox):
+                                store_fields[components_key] = component._value
+                        store_fields = np.stack((store_fields["Hx"], store_fields["Hy"], store_fields["Ez"]), axis=0)
+                        f.create_dataset(f'fields_adj-wl-{wl}-port-{port_name}-mode-{mode}', data=store_fields) # 3d numpy array
+                for wl, field_normalizer in field_adj_normalizer.items():
+                    for (port_name, mode), normalizer in field_normalizer.items():
+                        if isinstance(normalizer, Tensor):
+                            normalizer = normalizer.detach().cpu().numpy()
+                        if isinstance(normalizer, ArrayBox):
+                            normalizer = normalizer._value
+                        f.create_dataset(f'field_adj_normalizer-wl-{wl}-port-{port_name}-mode-{mode}', data=normalizer) # 2d numpy array
                 if hasattr(self, 'current_eps_grad'):
                     if isinstance(self.current_eps_grad, ArrayBox):
                         self.current_eps_grad = self.current_eps_grad._value
                     f.create_dataset('gradient', data=self.current_eps_grad) # 2d numpy array
                 else:
                     f.create_dataset('gradient', data=self._eps_map.grad.detach().cpu().numpy())
+                for design_region_name, design_region_mask in self.design_region_masks.items(): 
+                    f.create_dataset(f'design_region_mask-{design_region_name}_x_start', data=design_region_mask.x.start)
+                    f.create_dataset(f'design_region_mask-{design_region_name}_x_stop', data=design_region_mask.x.stop)
+                    f.create_dataset(f'design_region_mask-{design_region_name}_y_start', data=design_region_mask.y.start)
+                    f.create_dataset(f'design_region_mask-{design_region_name}_y_stop', data=design_region_mask.y.stop)
+            quit()
 
     def forward(
         self,

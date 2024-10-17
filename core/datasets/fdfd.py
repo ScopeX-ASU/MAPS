@@ -106,7 +106,7 @@ class FDFD(VisionDataset):
         ## do not load actual data here, too slow. Just load the filenames
         all_samples = [
                 os.path.basename(i)
-                for i in glob.glob(os.path.join(self.root, self.device_type, f"test_{self.device_type}_*.h5"))
+                for i in glob.glob(os.path.join(self.root, self.device_type, f"test1_{self.device_type}_*.h5"))
             ]
         return all_samples
 
@@ -185,6 +185,7 @@ class FDFD(VisionDataset):
             s_params = {}
             adj_srcs = {}
             src_profiles = {}
+            fields_adj = {}
             for key in keys:
                 if key.startswith("field_solutions"):
                     field_solutions[key] = torch.from_numpy(f[key][()]).float()
@@ -194,7 +195,9 @@ class FDFD(VisionDataset):
                     adj_srcs[key] = torch.from_numpy(f[key][()]).float()
                 elif key.startswith("src_profiles"):
                     src_profiles[key] = torch.from_numpy(f[key][()]).float()
-        return eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles
+                elif key.startswith("fields_adj"):
+                    fields_adj[key] = torch.from_numpy(f[key][()]).float()
+        return eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj
 
     def extra_repr(self) -> str:
         return "Split: {}".format("Train" if self.train is True else "Test")

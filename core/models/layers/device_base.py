@@ -495,12 +495,22 @@ class N_Ports(BaseDevice):
             raise ValueError(f"Solver {solver} not supported")
 
     def solve_ceviche(self, eps, source, wl: float = 1.55, grid_step=None, solver: str="ceviche"):
+        """
+        _summary_
+        
+        this is only called in the norm run through solve() in _norm_run(), so we can pass port_name and the mode to be 'Norm' directly
+        and there is no need to run the backward to store the adjoint source and adjoint fields, so we enable torch.no_grad() environment
+        """
         omega = 2 * np.pi * C_0 / (wl * 1e-6)
         grid_step = grid_step or self.grid_step
         dl = grid_step * 1e-6
         # simulation = fdfd_ez(omega, dl, eps, [self.NPML[0], self.NPML[1]])
         simulation = self.create_simulation(omega, dl, eps, self.NPML, solver=solver)
-        Hx, Hy, Ez = simulation.solve(source)
+        if hasattr(simulation, "solver"): # which means that it is a torch simulation
+            with torch.no_grad():
+                Hx, Hy, Ez = simulation.solve(source, port_name="Norm", mode="Norm")
+        else:
+            Hx, Hy, Ez = simulation.solve(source)
 
         return Hx, Hy, Ez
 

@@ -91,7 +91,7 @@ def coo_torch2cupy(A):
 
 class SparseSolveTorchFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, entries_a, indices_a, eps_diag: Tensor, b: np.ndarray | Tensor, solver_instance):
+    def forward(ctx, entries_a, indices_a, eps_diag: Tensor, b: np.ndarray | Tensor, solver_instance, port_name, mode):
         ### entries_a: values of the sparse matrix A
         ### indices_a: row/column indices of the sparse matrix A
         ### eps_diag: diagonal of A, e.g., -omega**2 * epr_0 * eps_r
@@ -105,6 +105,8 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         ctx.indices_a = np.flip(indices_a, axis=0)
         ctx.save_for_backward(x, eps_diag)
         ctx.solver_instance = solver_instance
+        ctx.port_name = port_name
+        ctx.mode = mode
         return x
 
     @staticmethod
@@ -113,10 +115,13 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         entries_a = ctx.entries_a
         indices_a = ctx.indices_a
         solver_instance = ctx.solver_instance
+        port_name = ctx.port_name
+        mode = ctx.mode
         A_t = make_sparse(entries_a, indices_a, (eps_diag.shape[0], eps_diag.shape[0]))
         grad = grad.cpu().numpy().astype(np.complex128)
         adj_src = grad.conj()
-        solver_instance.adj_src = torch.from_numpy(adj_src).to(torch.complex128).to(eps_diag.device)
+        if port_name != "Norm" and mode != "Norm":
+            solver_instance.adj_src[(port_name, mode)] = torch.from_numpy(adj_src).to(torch.complex128).to(eps_diag.device)
         ## this adj_src = "-v" in ceviche
         # print_stat(adj_src, "my adjoint source")
         # print(f"my adjoint A_t", A_t)
@@ -134,15 +139,15 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         # else:
 
         grad_b = None
-        return None, None, grad_epsilon, grad_b, None
+        return None, None, grad_epsilon, grad_b, None, None, None
     
 class SparseSolveTorch(torch.nn.Module):
     def __init__(self):
         super(SparseSolveTorch, self).__init__()
-        self.adj_src = None
+        self.adj_src = {} # now the adj_src is a dictionary in which the key is (port_name, mode) with same wl, different wl have different simulation objects
 
-    def forward(self, entries_a, indices_a, eps_diag: Tensor, b: np.ndarray | Tensor):
-        x = SparseSolveTorchFunction.apply(entries_a, indices_a, eps_diag, b, self)
+    def forward(self, entries_a, indices_a, eps_diag: Tensor, b: np.ndarray | Tensor, port_name, mode):
+        x = SparseSolveTorchFunction.apply(entries_a, indices_a, eps_diag, b, self, port_name, mode)
         return x
 
 sparse_solve_torch = SparseSolveTorchFunction.apply

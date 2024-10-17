@@ -267,8 +267,9 @@ class fdfd_ez_torch(fdfd):
 
 
 class fdfd_ez(fdfd_ez_ceviche):
-    def __init__(self, omega, dL, eps_r, npml, bloch_phases=None):
+    def __init__(self, omega, dL, eps_r, npml, power=1e-8, bloch_phases=None):
         self.solver = SparseSolveTorch()
+        self.power = power
         if isinstance(eps_r, np.ndarray):
             eps_r = torch.from_numpy(eps_r)
         super().__init__(omega, dL, eps_r, npml, bloch_phases=bloch_phases)
@@ -364,31 +365,41 @@ class fdfd_ez(fdfd_ez_ceviche):
                 y=np.array(Ny - self.npml[1] - 5),
             ),
         ]
+        ez_adj_dict = {}
+        hx_adj_dict = {}
+        hy_adj_dict = {}
+        normalization_factor = {}
         with torch.no_grad():
-            J_adj = self.solver.adj_src / 1j / self.omega # b_adj --> J_adj
-            hx_adj, hy_adj, ez_adj = self.solve(J_adj) # J_adj --> Hx_adj, Hy_adj, Ez_adj
-            total_flux = torch.tensor([0.0,], device=ez_adj.device) # Hx_adj, Hy_adj, Ez_adj --> 2 * total_flux
-            for frame_slice in x_slices:
-                total_flux = total_flux + get_flux(hx_adj, hy_adj, ez_adj, frame_slice, self.dL/1e-6, "x")
-            for frame_slice in y_slices:
-                total_flux = total_flux + get_flux(hx_adj, hy_adj, ez_adj, frame_slice, self.dL/1e-6, "y")
-        total_flux = total_flux / 2 # 2 * total_flux --> total_flux
-        ez_adj = ez_adj / total_flux
-        hx_adj = hx_adj / total_flux
-        hy_adj = hy_adj / total_flux
-        return ez_adj, hx_adj, hy_adj, total_flux
+            for key in self.solver.adj_src:
+                J_adj = self.solver.adj_src[key] / 1j / self.omega # b_adj --> J_adj
+                hx_adj, hy_adj, ez_adj = self.solve(J_adj, "Norm", "Norm") # J_adj --> Hx_adj, Hy_adj, Ez_adj
+                total_flux = torch.tensor([0.0,], device=J_adj.device) # Hx_adj, Hy_adj, Ez_adj --> 2 * total_flux
+                for frame_slice in x_slices:
+                    total_flux = total_flux + torch.abs(get_flux(hx_adj, hy_adj, ez_adj, frame_slice, self.dL/1e-6, "x")) # absolute to ensure positive flux
+                for frame_slice in y_slices:
+                    total_flux = total_flux + torch.abs(get_flux(hx_adj, hy_adj, ez_adj, frame_slice, self.dL/1e-6, "y")) # in case that opposite direction cancel each other
+                total_flux = total_flux / 2 # 2 * total_flux --> total_flux
+                scale_factor = (self.power / total_flux)**0.5
+                normalization_factor[key] = scale_factor
+                ez_adj_dict[key] = ez_adj * scale_factor
+                hx_adj_dict[key] = hx_adj * scale_factor
+                hy_adj_dict[key] = hy_adj * scale_factor
+                self.solver.adj_src[key] = J_adj * scale_factor * 1j * self.omega # J_adj --> b_adj
+        return ez_adj_dict, hx_adj_dict, hy_adj_dict, normalization_factor
 
 
-    def _solve_fn(self, eps_vec, entries_a, indices_a, Jz_vec):
+    def _solve_fn(self, eps_vec, entries_a, indices_a, Jz_vec, port_name=None, mode=None):
+        assert port_name is not None, "port_name must be provided"
+        assert mode is not None, "mode must be provided"
         b_vec = 1j * self.omega * Jz_vec
         eps_diag = -EPSILON_0 * self.omega**2 * eps_vec
         # Ez_vec = sparse_solve_torch(entries_a, indices_a, eps_diag, b_vec)
-        Ez_vec = self.solver(entries_a, indices_a, eps_diag, b_vec)
+        Ez_vec = self.solver(entries_a, indices_a, eps_diag, b_vec, port_name, mode)
 
         Hx_vec, Hy_vec = self._Ez_to_Hx_Hy(Ez_vec)
         return Hx_vec, Hy_vec, Ez_vec
 
-    def solve(self, source_z):
+    def solve(self, source_z, port_name=None, mode=None):
         """Outward facing function (what gets called by user) that takes a source grid and returns the field components"""
 
         # flatten the permittivity and source grid
@@ -400,7 +411,7 @@ class fdfd_ez(fdfd_ez_ceviche):
 
         # solve field componets usng A and the source
         Fx_vec, Fy_vec, Fz_vec = self._solve_fn(
-            eps_vec, entries_a, indices_a, source_vec
+            eps_vec, entries_a, indices_a, source_vec, port_name, mode
         )
 
         # put all field components into a tuple, convert to grid shape and return them all
