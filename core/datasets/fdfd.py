@@ -84,15 +84,15 @@ class FDFD(VisionDataset):
             print("Data already processed")
             return
 
-        filenames = self._load_dataset()
+        device_id = self._load_dataset()
         (
-            filenames_train,
-            filenames_test,
+            device_id_train,
+            device_id_test,
         ) = self._split_dataset(
-            filenames
+            device_id
         )  # split device files to make sure no overlapping device_id between train and test
         data_train, data_test = self._preprocess_dataset(
-            filenames_train, filenames_test
+            device_id_train, device_id_test
         )
         self._save_dataset(
             data_train,
@@ -106,9 +106,14 @@ class FDFD(VisionDataset):
         ## do not load actual data here, too slow. Just load the filenames
         all_samples = [
                 os.path.basename(i)
-                for i in glob.glob(os.path.join(self.root, self.device_type, f"test2_{self.device_type}_*.h5"))
+                for i in glob.glob(os.path.join(self.root, self.device_type, f"{self.device_type}_*.h5"))
             ]
-        return all_samples
+        total_device_id = []
+        for filename in all_samples:
+            device_id = filename.split("_")[1].split("-")[1]
+            if device_id not in total_device_id:
+                total_device_id.append(device_id)
+        return total_device_id
 
     def _split_dataset(self, filenames) -> Tuple[List, ...]:
         from sklearn.model_selection import train_test_split
@@ -132,6 +137,16 @@ class FDFD(VisionDataset):
         )
 
     def _preprocess_dataset(self, data_train: Tensor, data_test: Tensor) -> Tuple[Tensor, Tensor]:
+        all_samples = [
+                os.path.basename(i)
+                for i in glob.glob(os.path.join(self.root, self.device_type, f"{self.device_type}_*.h5"))
+            ]
+        for filename in all_samples:
+            device_id = filename.split("_")[1].split("-")[1]
+            if device_id in data_train:
+                data_train.append(filename)
+            elif device_id in data_test:
+                data_test.append(filename)
         return data_train, data_test
 
     @staticmethod
