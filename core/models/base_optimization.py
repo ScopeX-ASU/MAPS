@@ -23,6 +23,7 @@ from .layers.parametrization import parametrization_builder
 from .layers.utils import ObjectiveFunc, plot_eps_field
 from .utils import nparray_as_real
 import h5py
+import yaml
 from copy import deepcopy
 
 __all__ = [
@@ -348,7 +349,7 @@ class BaseOptimization(nn.Module):
             zoom_eps_factor=2,
         )
 
-    def dump_data(self, filename):
+    def dump_data(self, filename_h5, filename_yml, step):
         '''
         data needed to be dumped:
             1. eps_map (denormalized), downsample to different resolution
@@ -359,12 +360,15 @@ class BaseOptimization(nn.Module):
         '''
         # print("grad fn of self._eps_map", self._eps_map.grad_fn)
         # print("grad of self._eps_map", self._eps_map.grad)
+        complex_type = [torch.complex64, torch.complex32, torch.complex128]
         with torch.no_grad():
-            with h5py.File(filename, 'w') as f:
+            with h5py.File(filename_h5, 'w') as f:
                 f.create_dataset('eps_map', data=self._eps_map.detach().cpu().numpy()) # 2d numpy array
                 for port_name, source_profile in self.norm_run_profiles.items():
                     for (wl, mode), profile in source_profile.items():
                         if isinstance(profile[0], Tensor):
+                            if profile[0].dtype in complex_type:
+                                profile[0] = profile[0].to(torch.complex64)
                             src_mode = profile[0].detach().cpu().numpy()
                         if isinstance(profile[0], ArrayBox):
                             src_mode = profile[0]._value
@@ -373,6 +377,8 @@ class BaseOptimization(nn.Module):
                     store_fields = {}
                     for key, field in fields.items():
                         if isinstance(fields[key], Tensor):
+                            if fields[key].dtype in complex_type:
+                                fields[key] = fields[key].to(torch.complex64)
                             store_fields[key] = fields[key].detach().cpu().numpy()
                         if isinstance(fields[key], ArrayBox):
                             store_fields[key] = fields[key]._value
@@ -382,6 +388,8 @@ class BaseOptimization(nn.Module):
                     store_s_params = {}
                     for key, s_param in s_params.items():
                         if isinstance(s_param, Tensor):
+                            if s_param.dtype in complex_type:
+                                s_param = s_param.to(torch.complex64)
                             store_s_params[key] = s_param.detach().cpu().numpy()
                         if isinstance(s_param, ArrayBox):
                             store_s_params = s_param._value
@@ -392,6 +400,8 @@ class BaseOptimization(nn.Module):
                     for (port_name, mode), b_adj in adj_src.items():
                         b_adj = b_adj.reshape(self.epsilon_map.shape)
                         if isinstance(b_adj, Tensor):
+                            if b_adj.dtype in complex_type:
+                                b_adj = b_adj.to(torch.complex64)
                             b_adj = b_adj.detach().cpu().numpy()
                         if isinstance(b_adj, ArrayBox):
                             b_adj = b_adj._value
@@ -401,6 +411,8 @@ class BaseOptimization(nn.Module):
                         store_fields = {}
                         for components_key, component in field.items():
                             if isinstance(component, Tensor):
+                                if component.dtype in complex_type:
+                                    component = component.to(torch.complex64)
                                 store_fields[components_key] = component.detach().cpu().numpy()
                             if isinstance(component, ArrayBox):
                                 store_fields[components_key] = component._value
@@ -409,6 +421,8 @@ class BaseOptimization(nn.Module):
                 for wl, field_normalizer in field_adj_normalizer.items():
                     for (port_name, mode), normalizer in field_normalizer.items():
                         if isinstance(normalizer, Tensor):
+                            if normalizer.dtype in complex_type:
+                                normalizer = normalizer.to(torch.complex64)
                             normalizer = normalizer.detach().cpu().numpy()
                         if isinstance(normalizer, ArrayBox):
                             normalizer = normalizer._value
@@ -424,16 +438,49 @@ class BaseOptimization(nn.Module):
                     f.create_dataset(f'design_region_mask-{design_region_name}_x_stop', data=design_region_mask.x.stop)
                     f.create_dataset(f'design_region_mask-{design_region_name}_y_start', data=design_region_mask.y.start)
                     f.create_dataset(f'design_region_mask-{design_region_name}_y_stop', data=design_region_mask.y.stop)
-            quit()
 
+        # Check if the file exists using os.path.exists
+        if os.path.exists(filename_yml):
+            # File exists, read its content
+            with open(filename_yml, 'r') as f:
+                existing_data = yaml.safe_load(f) or {}  # Load existing data or use an empty dict if file is empty
+        else:
+            # File does not exist, start with an empty dictionary
+            existing_data = {}
+            existing_data.update(self._cfgs.dict())
+            existing_data["port_cfgs"] = self.device.port_cfgs
+            existing_data["design_region_cfgs"] = self.device.design_region_cfgs
+            existing_data["obj_cfgs"]["_fusion_func"] = existing_data["obj_cfgs"]["_fusion_func"].__name__
+            for key, value in existing_data["obj_cfgs"].items():
+                if isinstance(value, dict):
+                    value["out_modes"] = list(value["out_modes"])
+
+        # Update the existing data with the new data
+        opt_step = step
+        existing_data[f"sharpness_{opt_step}"] = self.current_sharpness
+        existing_data[f"parameters_{opt_step}"] = {name: param.clone().detach().cpu().numpy().tolist()
+                                                for name, param in self.named_parameters()}
+
+        # Write the data to the file
+        with open(filename_yml, 'w') as f:
+            yaml.dump(existing_data, f)
+
+    def get_design_region_eps_dict(self):
+        design_region_eps_dict = {}
+        for key, design_region in self._design_region_eps_dict.items():
+            design_region_eps_dict[key] = design_region.clone().detach()
+        return design_region_eps_dict
+    
     def forward(
         self,
         sharpness: float = 1,
     ):
         # eps_map, design_region_eps_dict = self.build_device(sharpness)
+        self.current_sharpness = sharpness
         eps_map, design_region_eps_dict, hr_eps_map, hr_design_region_eps_dict = (
             self.build_device(sharpness)
         )
+        self._design_region_eps_dict = design_region_eps_dict
         ## need to create objective layer during forward, because all Simulations need to know the latest permittivity_list
 
         self._eps_map = eps_map

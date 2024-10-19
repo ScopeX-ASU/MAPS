@@ -13,8 +13,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                 sim_cfg=dict(
                     solver="ceviche",
                     binary_projection=dict(
-                        fw_threshold=100,
-                        bw_threshold=100,
+                        fw_threshold=180,
+                        bw_threshold=180,
                         mode="regular",
                     ),
                     border_width=[0, 0, 4, 4],

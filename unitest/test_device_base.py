@@ -215,8 +215,10 @@ def test_metacoupler_opt():
             print(f"{k}: {obj['value']:.3f}", end=", ")
         print()
         (-results["obj"]).backward()
+        # for p in opt.parameters():
+        #     print(p.grad)
         if step % 5 == 0:
-            opt.dump_data(f"./data/fdfd/metacoupler/test1_metacoupler_opt_step_{step}.h5")
+            opt.dump_data(f"./data/fdfd/metacoupler/test2_metacoupler_opt_step_{step}.h5")
         # print_stat(list(opt.parameters())[0], f"step {step}: grad: ")
         optimizer.step()
         scheduler.step()

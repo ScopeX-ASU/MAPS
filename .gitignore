@@ -166,3 +166,4 @@ cython_debug/
 *.json
 *.pt
 /wandb/*
+/data/fdfd/metacoupler/*

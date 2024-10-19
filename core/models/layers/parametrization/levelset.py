@@ -60,6 +60,8 @@ class LevelSetInterp(object):
 
     def get_ls(self, x1, y1, shape):
         xx, yy = torch.meshgrid(x1, y1, indexing="ij")
+        xx = xx.to(self.device)
+        yy = yy.to(self.device)
         xy1 = torch.column_stack((xx.reshape(-1), yy.reshape(-1)))
         # ls = self.gaussian(self.xy0, xy1).T @ self.model
         ls = self.gaussian(xy1, self.xy0) @ self.model
@@ -251,6 +253,7 @@ class LeveSetParameterization(BaseParametrization):
 
         ## This is used to constrain the value to be [0, 1] for heaviside input
         phi = torch.tanh(phi) * 0.5
+        phi = phi.to(self.operation_device)
         phi = phi + self.eta
         eps_phi = self.binary_projection(phi, sharpness, self.eta)
 

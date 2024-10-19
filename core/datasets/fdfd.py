@@ -106,7 +106,7 @@ class FDFD(VisionDataset):
         ## do not load actual data here, too slow. Just load the filenames
         all_samples = [
                 os.path.basename(i)
-                for i in glob.glob(os.path.join(self.root, self.device_type, f"test1_{self.device_type}_*.h5"))
+                for i in glob.glob(os.path.join(self.root, self.device_type, f"test2_{self.device_type}_*.h5"))
             ]
         return all_samples
 
@@ -184,8 +184,10 @@ class FDFD(VisionDataset):
             field_solutions = {}
             s_params = {}
             adj_srcs = {}
-            src_profiles = {}
+            src_profile = {}
             fields_adj = {}
+            field_normalizer = {}
+            design_region_mask = {}
             for key in keys:
                 if key.startswith("field_solutions"):
                     field_solutions[key] = torch.from_numpy(f[key][()]).float()
@@ -193,11 +195,15 @@ class FDFD(VisionDataset):
                     s_params[key] = torch.from_numpy(f[key][()]).float()
                 elif key.startswith("adj_src"):
                     adj_srcs[key] = torch.from_numpy(f[key][()]).float()
-                elif key.startswith("src_profiles"):
-                    src_profiles[key] = torch.from_numpy(f[key][()]).float()
+                elif key.startswith("source_profile"):
+                    src_profile[key] = torch.from_numpy(f[key][()]).float()
                 elif key.startswith("fields_adj"):
                     fields_adj[key] = torch.from_numpy(f[key][()]).float()
-        return eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj
+                elif key.startswith("field_adj_normalizer"):
+                    field_normalizer[key] = torch.from_numpy(f[key][()]).float()
+                elif key.startswith("design_region_mask"):
+                    design_region_mask[key] = int(f[key][()])
+        return eps_map, adj_srcs, gradient, field_solutions, s_params, src_profile, fields_adj, field_normalizer, design_region_mask
 
     def extra_repr(self) -> str:
         return "Split: {}".format("Train" if self.train is True else "Test")

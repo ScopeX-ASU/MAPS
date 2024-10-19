@@ -1,0 +1,149 @@
+"""
+Date: 2024-10-03 02:27:36
+LastEditors: Jiaqi Gu && jiaqigu@asu.edu
+LastEditTime: 2024-10-06 01:41:28
+FilePath: /Metasurface-Opt/unitest/test_device_base.py
+"""
+
+"""
+Date: 2024-10-03 02:27:36
+LastEditors: Jiaqi Gu && jiaqigu@asu.edu
+LastEditTime: 2024-10-04 00:50:55
+FilePath: /Metasurface-Opt/unitest/test_device_base.py
+"""
+import os
+from multiprocessing import Pool
+import numpy as np
+import scipy.sparse as sp
+import torch
+import torch.nn.functional as F
+from ceviche import fdfd_ez as ceviche_fdfd_ez
+from ceviche.constants import *
+from pyutils.general import print_stat
+
+from core.models import (
+    IsolatorOptimization,
+    MetaCouplerOptimization,
+    MetaMirrorOptimization,
+)
+from core.models.base_optimization import BaseOptimization, DefaultSimulationConfig
+from core.models.fdfd.fdfd import fdfd_ez
+from core.models.fdfd.utils import torch_sparse_to_scipy_sparse
+from core.models.layers import Isolator, MetaCoupler, MetaMirror
+from core.models.layers.device_base import N_Ports, Si_eps
+from core.models.layers.utils import plot_eps_field
+from core.utils import set_torch_deterministic
+from torch_sparse import spspmm
+import argparse
+import random
+
+def compare_designs(design_regions_1, design_regions_2):
+    similarity = []
+    for k, v in design_regions_1.items():
+        v1 = v
+        v2 = design_regions_2[k]
+        similarity.append(F.cosine_similarity(v1.flatten(), v2.flatten(), dim=0))
+    print("this is the similarity list", similarity)
+    return torch.mean(torch.stack(similarity)).item()
+
+def metacoupler_opt(device_id, operation_device):
+    sim_cfg = DefaultSimulationConfig()
+    sim_cfg.update(
+        dict(
+            solver="ceviche_torch",
+            border_width=[0, 0, 6, 6],
+            resolution=50,
+            plot_root="./figs/metacoupler_subpixel",
+            # plot_root="./figs/metacoupler_periodic",
+        )
+    )
+    aperture = random.uniform(5, 7)
+    aperture = int(aperture * 50) / 50
+    ridge_height_max = random.uniform(0.8, 1.2)
+    ridge_height_max = int(ridge_height_max * 50) / 50
+    input_port_width = random.uniform(5, aperture)
+    input_port_width = int(input_port_width * 50) / 50
+    output_port_width = random.uniform(2.8, 3.2)
+    output_port_width = int(output_port_width * 50) / 50
+    device = MetaCoupler(
+        sim_cfg=sim_cfg, 
+        aperture=aperture, 
+        ridge_height_max=ridge_height_max, 
+        port_width=(
+            input_port_width,
+            output_port_width
+        ), 
+        device=operation_device
+    )
+    hr_device = device.copy(resolution=310)
+    print(device)
+    opt = MetaCouplerOptimization(device=device, hr_device=hr_device, sim_cfg=sim_cfg, operation_device=operation_device).to(operation_device)
+    print(opt)
+
+    optimizer = torch.optim.Adam(opt.parameters(), lr=0.02)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=70, eta_min=0.0002
+    )
+    last_design_region_dict = None
+    for step in range(100):
+        optimizer.zero_grad()
+        results = opt.forward(sharpness=1 + 2 * step)
+        opt.plot(
+            eps_map=opt._eps_map,
+            obj=results["breakdown"]["fwd_trans"]["value"],
+            plot_filename="metacoupler_opt_step_{}_fwd.png".format(step),
+            field_key=("in_port_1", 1.55, 1),
+            field_component="Ez",
+            in_port_name="in_port_1",
+            exclude_port_names=["refl_port_2"],
+        )
+        opt.plot(
+            eps_map=opt._eps_map,
+            obj=results["breakdown"]["bwd_trans"]["value"],
+            plot_filename="metacoupler_opt_step_{}_bwd.png".format(step),
+            field_key=("out_port_1", 1.55, 1),
+            field_component="Ez",
+            in_port_name="out_port_1",
+            exclude_port_names=["refl_port_1"],
+        )
+        print(f"Step {step}:", end=" ")
+        for k, obj in results["breakdown"].items():
+            print(f"{k}: {obj['value']:.3f}", end=", ")
+        print()
+
+        (-results["obj"]).backward()
+        current_design_region_dict = opt.get_design_region_eps_dict()
+        filename_h5 = f"./data/fdfd/metacoupler/raw/metacoupler_id-{device_id}_opt_step_{step}.h5"
+        filename_yml = f"./data/fdfd/metacoupler/raw/metacoupler_id-{device_id}.yml"
+        if last_design_region_dict is None:
+            opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
+            last_design_region_dict = current_design_region_dict
+        else:
+            cosine_similarity = compare_designs(last_design_region_dict, current_design_region_dict)
+            print(f"cosine similarity: {cosine_similarity}")
+            if cosine_similarity < 0.998 or step == 99:
+                opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
+                last_design_region_dict = current_design_region_dict
+        # for p in opt.parameters():
+        #     print(p.grad)
+        # print_stat(list(opt.parameters())[0], f"step {step}: grad: ")
+        optimizer.step()
+        scheduler.step()
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--random_seed", type=int, default=0)
+    parser.add_argument("--gpu_id", type=int, default=0)
+    random_seed = parser.parse_args().random_seed
+    gpu_id = parser.parse_args().gpu_id
+    torch.cuda.set_device(gpu_id)
+    device = torch.device("cuda:" + str(gpu_id))
+    torch.backends.cudnn.benchmark = True
+    set_torch_deterministic(int(41+random_seed))
+    metacoupler_opt(random_seed, device)
+
+if __name__ == "__main__":
+    main()
+
+
+    # metacoupler_opt(0, operation_device="cuda:0")

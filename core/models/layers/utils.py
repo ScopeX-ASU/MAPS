@@ -1218,7 +1218,6 @@ class ObjectiveFunc(object):
                                 (wl, in_mode)
                             ][3]
                             monitor_slice = self.port_slices[out_port_name]
-                            print("this is the field keys to be used in computation graph: ", (in_port_name, wl, in_mode))
                             field = fields[(in_port_name, wl, in_mode)]
                             hx, hy, ez = (
                                 field["Hx"],
@@ -1394,7 +1393,6 @@ class ObjectiveFunc(object):
         field_adj = {}
         field_adj_normalizer = {}
         for key, sim in self.sims.items():
-            print("this is the keys of the adj_srcs: ", sim.solver.adj_src.keys())
             adj_sources[key] = sim.solver.adj_src # this is the b_adj
             ez_adj, hx_adj, hy_adj, flux = sim.norm_adj_power()
             # field_adj[key] = {"Ez": ez_adj, "Hx": hx_adj, "Hy": hy_adj}
@@ -1412,7 +1410,6 @@ class ObjectiveFunc(object):
         self, permittivity: np.ndarray | Tensor
     ) -> Tuple[dict, Tensor]:
         self.solutions = {}
-        print("this is the key in self.port_profiles: ", self.port_profiles.keys())
         for port_name, port_profile in self.port_profiles.items():
             for (wl, mode), (source, _, _, norm_power) in port_profile.items():
                 ## here the source is already normalized during norm_run to make sure it has target power

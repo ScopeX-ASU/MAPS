@@ -21,6 +21,7 @@ from core.models.layers.utils import (
     # insert_mode,
     # plot_eps_field,
 )
+from core.utils import print_stat
 
 __all__ = ["fdfd", "fdfd_ez"]
 
@@ -372,18 +373,36 @@ class fdfd_ez(fdfd_ez_ceviche):
         with torch.no_grad():
             for key in self.solver.adj_src:
                 J_adj = self.solver.adj_src[key] / 1j / self.omega # b_adj --> J_adj
+                # print("this is the state of the J_adj")
+                # print_stat(torch.abs(J_adj))
                 hx_adj, hy_adj, ez_adj = self.solve(J_adj, "Norm", "Norm") # J_adj --> Hx_adj, Hy_adj, Ez_adj
-                total_flux = torch.tensor([0.0,], device=J_adj.device) # Hx_adj, Hy_adj, Ez_adj --> 2 * total_flux
+                total_flux = torch.tensor([0.0,], device=J_adj.device, dtype=torch.float64) # Hx_adj, Hy_adj, Ez_adj --> 2 * total_flux
                 for frame_slice in x_slices:
+                    # print("this is the increment of the total flux: ", torch.abs(get_flux(hx_adj, hy_adj, ez_adj, frame_slice, self.dL/1e-6, "x")))
                     total_flux = total_flux + torch.abs(get_flux(hx_adj, hy_adj, ez_adj, frame_slice, self.dL/1e-6, "x")) # absolute to ensure positive flux
                 for frame_slice in y_slices:
+                    # print("this is the increment of the total flux: ", torch.abs(get_flux(hx_adj, hy_adj, ez_adj, frame_slice, self.dL/1e-6, "y")))
                     total_flux = total_flux + torch.abs(get_flux(hx_adj, hy_adj, ez_adj, frame_slice, self.dL/1e-6, "y")) # in case that opposite direction cancel each other
                 total_flux = total_flux / 2 # 2 * total_flux --> total_flux
+                # print(f"this is the total flux: {total_flux}")
                 scale_factor = (self.power / total_flux)**0.5
+                # print(f"this is the scale factor: {scale_factor}")
                 normalization_factor[key] = scale_factor
+                # print("ez_adj before scaling")
+                # print_stat(torch.abs(ez_adj))
                 ez_adj_dict[key] = ez_adj * scale_factor
+                # print("ez_adj after scaling")
+                # print_stat(torch.abs(ez_adj_dict[key]))
+                # print("hx_adj before scaling")
+                # print_stat(torch.abs(hx_adj))
                 hx_adj_dict[key] = hx_adj * scale_factor
+                # print("hx_adj after scaling")
+                # print_stat(torch.abs(hx_adj_dict[key]))
+                # print("hy_adj before scaling")
+                # print_stat(torch.abs(hy_adj))
                 hy_adj_dict[key] = hy_adj * scale_factor
+                # print("hy_adj after scaling")
+                # print_stat(torch.abs(hy_adj_dict[key]))
                 self.solver.adj_src[key] = J_adj * scale_factor * 1j * self.omega # J_adj --> b_adj
         return ez_adj_dict, hx_adj_dict, hy_adj_dict, normalization_factor
 

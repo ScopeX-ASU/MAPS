@@ -33,6 +33,7 @@ import datetime
 import random
 import numpy as np
 import matplotlib.pyplot as plt
+from core.utils import print_stat
 
 def single_batch_check(
     model: nn.Module,
@@ -176,7 +177,7 @@ def train(
 
     data_counter = 0
     total_data = len(train_loader.dataset)
-    for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj) in enumerate(train_loader):
+    for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask) in enumerate(train_loader):
         eps_map = eps_map.to(device, non_blocking=True)
         gradient = gradient.to(device, non_blocking=True)
         for key, field in field_solutions.items():
@@ -189,6 +190,10 @@ def train(
             src_profiles[key] = src_profile.to(device, non_blocking=True)
         for key, field_adj in fields_adj.items():
             fields_adj[key] = field_adj.to(device, non_blocking=True)
+        for key, field_norm in field_normalizer.items():
+            field_normalizer[key] = field_norm.to(device, non_blocking=True)
+        # for key, design_region in design_region_mask.items():
+        #     design_region_mask[key] = design_region.to(device, non_blocking=True)
 
         data_counter += eps_map.shape[0]
 
@@ -203,12 +208,17 @@ def train(
         plt.savefig(f"./figs/gradient_{epoch}.png")
         plt.close()
 
+        dummy_key = next(iter(src_profiles.keys()))
+        dummy_src_profile = src_profiles[dummy_key]
+        print("this is the shape of the src profile: ", dummy_src_profile.shape)
+        src_profile = torch.abs(dummy_src_profile[0])
+        plt.imshow(src_profile.abs().detach().cpu().numpy())
+        plt.savefig(f"./figs/src_profile_{epoch}.png")
+        plt.close()
+
         dummy_key = next(iter(adj_srcs.keys()))
         dummy_adjsrc_profile = adj_srcs[dummy_key]
-        dummy_adjsrc_profile = dummy_adjsrc_profile.permute(0, 3, 1, 2)
-        real_adjsrc_profile = dummy_adjsrc_profile[0][0].detach()
-        img_adjsrc_profile = dummy_adjsrc_profile[0][1].detach()
-        adjsrc_profile = torch.complex(real_adjsrc_profile, img_adjsrc_profile)
+        adjsrc_profile = torch.abs(dummy_adjsrc_profile[0])
         plt.imshow(adjsrc_profile.abs().detach().cpu().numpy())
         plt.savefig(f"./figs/adjsrc_profile_{epoch}.png")
         plt.close()
@@ -216,16 +226,16 @@ def train(
         dummy_key = next(iter(field_solutions.keys()))
         dummy_field_solution = field_solutions[dummy_key]
         field_solution = dummy_field_solution[0][0]
-        # real_field_solution = dummy_field_solution[0][0].detach()
-        # img_field_solution = dummy_field_solution[0][1].detach()
-        # field_solution = torch.complex(real_field_solution, img_field_solution)
-        plt.imshow(field_solution.abs().detach().cpu().numpy())
+        plt.imshow(torch.abs(field_solution).detach().cpu().numpy())
         plt.savefig(f"./figs/field_solution_{epoch}.png")
         plt.close()
 
         dummy_key = next(iter(fields_adj.keys()))
         dummy_fields_adj = fields_adj[dummy_key]
-        print("this is the shape of adj_field", dummy_fields_adj.shape)
+        fields_adj = dummy_fields_adj[0][0]
+        plt.imshow(torch.abs(fields_adj).detach().cpu().numpy())
+        plt.savefig(f"./figs/fields_adj_{epoch}.png")
+        plt.close()
         quit()
 
         with amp.autocast(enabled=grad_scaler._enabled):

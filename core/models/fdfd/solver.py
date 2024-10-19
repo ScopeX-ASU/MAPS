@@ -16,6 +16,7 @@ from core.models.fdfd.utils import torch_sparse_to_scipy_sparse
 from ceviche.utils import make_sparse
 import numpy as np
 from pyutils.general import print_stat
+from pyMKL import pardisoSolver
 
 def coo_torch2cupy(A):
     A = A.data.coalesce()
@@ -24,6 +25,14 @@ def coo_torch2cupy(A):
     # return cp.sparse.csr_matrix((Avals_cp, Aidx_cp), shape=A.shape)
     return cp.sparse.coo_matrix((Avals_cp, Aidx_cp))
 
+def _solve_direct(A, b):
+    """ Direct solver """
+    # prefered method using MKL. Much faster (on Mac at least)
+    pSolve = pardisoSolver(A, mtype=13)
+    pSolve.factor()
+    x = pSolve.solve(b)
+    # pSolve.clear()
+    return x, pSolve
 
 # Custom PyTorch sparse solver exploiting a CuPy backend
 # See https://blog.flaport.net/solving-sparse-linear-systems-in-pytorch.html
@@ -98,15 +107,17 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         if isinstance(b, Tensor):
             b = b.cpu().numpy()
         A = make_sparse(entries_a, indices_a, (eps_diag.shape[0], eps_diag.shape[0]))
-        x = solve_linear(A, b)
+        x, pSolve = _solve_direct(A, b)
 
         x = torch.from_numpy(x).to(torch.complex128).to(eps_diag.device)
         ctx.entries_a = entries_a
         ctx.indices_a = np.flip(indices_a, axis=0)
+        # ctx.indices_a = indices_a
         ctx.save_for_backward(x, eps_diag)
         ctx.solver_instance = solver_instance
         ctx.port_name = port_name
         ctx.mode = mode
+        ctx.pSolve = pSolve
         return x
 
     @staticmethod
@@ -117,6 +128,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         solver_instance = ctx.solver_instance
         port_name = ctx.port_name
         mode = ctx.mode
+        pSolve = ctx.pSolve
         A_t = make_sparse(entries_a, indices_a, (eps_diag.shape[0], eps_diag.shape[0]))
         grad = grad.cpu().numpy().astype(np.complex128)
         adj_src = grad.conj()
@@ -125,7 +137,9 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         ## this adj_src = "-v" in ceviche
         # print_stat(adj_src, "my adjoint source")
         # print(f"my adjoint A_t", A_t)
-        adj = solve_linear(A_t, adj_src)
+        # adj = solve_linear(A_t, adj_src)
+        adj = pSolve.solve(adj_src)
+        pSolve.clear()
         adj = torch.from_numpy(adj).to(torch.complex128).to(eps_diag.device)
 
         grad_epsilon = -adj.mul_(x).to(eps_diag.device).real
