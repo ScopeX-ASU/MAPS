@@ -616,6 +616,30 @@ def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
         ).to(device)
     elif "simplecnn" in configs.model.name.lower():
         model = eval(configs.model.name)().to(device)
+    elif "neurolight" in configs.model.name.lower():
+        model = eval(configs.model.name)(
+            in_channels=configs.model.in_channels,
+            out_channels=configs.model.out_channels,
+            dim=configs.model.dim,
+            kernel_list=configs.model.kernel_list,
+            kernel_size_list=configs.model.kernel_size_list,
+            padding_list=configs.model.padding_list,
+            hidden_list=configs.model.hidden_list,
+            mode_list=configs.model.mode_list,
+            act_func=configs.model.act_func,
+            domain_size=configs.model.domain_size,
+            grid_step=configs.model.grid_step,
+            dropout_rate=configs.model.dropout_rate,
+            drop_path_rate=configs.model.drop_path_rate,
+            aux_head=configs.model.aux_head,
+            aux_head_idx=configs.model.aux_head_idx,
+            device=device,
+            conv_stem=configs.model.conv_stem,
+            aug_path=configs.model.aug_path,
+            ffn=configs.model.ffn,
+            ffn_dwconv=configs.model.ffn_dwconv,
+            **kwargs,
+        ).to(device)
     else:
         raise NotImplementedError(f"Not supported model name: {configs.model.name}")
     return model

@@ -53,7 +53,8 @@ def metacoupler_opt(device_id, operation_device):
             solver="ceviche_torch",
             border_width=[0, 0, 6, 6],
             resolution=50,
-            plot_root="./figs/metacoupler_subpixel",
+            plot_root=f"./figs/metacoupler_{device_id}",
+            # plot_root="./figs/metacoupler_subpixel",
             # plot_root="./figs/metacoupler_periodic",
         )
     )
@@ -88,24 +89,6 @@ def metacoupler_opt(device_id, operation_device):
     for step in range(100):
         optimizer.zero_grad()
         results = opt.forward(sharpness=1 + 2 * step)
-        opt.plot(
-            eps_map=opt._eps_map,
-            obj=results["breakdown"]["fwd_trans"]["value"],
-            plot_filename="metacoupler_opt_step_{}_fwd.png".format(step),
-            field_key=("in_port_1", 1.55, 1),
-            field_component="Ez",
-            in_port_name="in_port_1",
-            exclude_port_names=["refl_port_2"],
-        )
-        opt.plot(
-            eps_map=opt._eps_map,
-            obj=results["breakdown"]["bwd_trans"]["value"],
-            plot_filename="metacoupler_opt_step_{}_bwd.png".format(step),
-            field_key=("out_port_1", 1.55, 1),
-            field_component="Ez",
-            in_port_name="out_port_1",
-            exclude_port_names=["refl_port_1"],
-        )
         print(f"Step {step}:", end=" ")
         for k, obj in results["breakdown"].items():
             print(f"{k}: {obj['value']:.3f}", end=", ")
@@ -118,12 +101,48 @@ def metacoupler_opt(device_id, operation_device):
         if last_design_region_dict is None:
             opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
             last_design_region_dict = current_design_region_dict
+            opt.plot(
+                eps_map=opt._eps_map,
+                obj=results["breakdown"]["fwd_trans"]["value"],
+                plot_filename="metacoupler_opt_step_{}_fwd.png".format(step),
+                field_key=("in_port_1", 1.55, 1),
+                field_component="Ez",
+                in_port_name="in_port_1",
+                exclude_port_names=["refl_port_2"],
+            )
+            opt.plot(
+                eps_map=opt._eps_map,
+                obj=results["breakdown"]["bwd_trans"]["value"],
+                plot_filename="metacoupler_opt_step_{}_bwd.png".format(step),
+                field_key=("out_port_1", 1.55, 1),
+                field_component="Ez",
+                in_port_name="out_port_1",
+                exclude_port_names=["refl_port_1"],
+            )
         else:
             cosine_similarity = compare_designs(last_design_region_dict, current_design_region_dict)
             print(f"cosine similarity: {cosine_similarity}")
             if cosine_similarity < 0.998 or step == 99:
                 opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
                 last_design_region_dict = current_design_region_dict
+                opt.plot(
+                    eps_map=opt._eps_map,
+                    obj=results["breakdown"]["fwd_trans"]["value"],
+                    plot_filename="metacoupler_opt_step_{}_fwd.png".format(step),
+                    field_key=("in_port_1", 1.55, 1),
+                    field_component="Ez",
+                    in_port_name="in_port_1",
+                    exclude_port_names=["refl_port_2"],
+                )
+                opt.plot(
+                    eps_map=opt._eps_map,
+                    obj=results["breakdown"]["bwd_trans"]["value"],
+                    plot_filename="metacoupler_opt_step_{}_bwd.png".format(step),
+                    field_key=("out_port_1", 1.55, 1),
+                    field_component="Ez",
+                    in_port_name="out_port_1",
+                    exclude_port_names=["refl_port_1"],
+                )
         # for p in opt.parameters():
         #     print(p.grad)
         # print_stat(list(opt.parameters())[0], f"step {step}: grad: ")

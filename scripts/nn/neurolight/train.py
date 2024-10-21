@@ -14,8 +14,8 @@ from pyutils.general import ensure_dir, logger
 from pyutils.config import configs
 
 dataset = "fdfd"
-model = "cnn"
-exp_name = "train_test"
+model = "neurolight"
+exp_name = "train"
 root = f"log/{dataset}/{model}/{exp_name}"
 script = 'train_NN.py'
 config_file = f'configs/{dataset}/{model}/{exp_name}/train.yml'
@@ -24,7 +24,7 @@ configs.load(config_file, recursive=True)
 
 
 def task_launcher(args):
-    mixup, device_type, alg, id, description, gpu_id, epochs, lr, criterion, criterion_weight, checkpt, bs = args
+    mixup, device_type, alg, dim, n_layer, id, description, gpu_id, epochs, lr, criterion, criterion_weight, checkpt, bs = args
     env = os.environ.copy()
     env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
     
@@ -65,6 +65,12 @@ def task_launcher(args):
             f"--optimizer.lr={lr}",
 
             f"--model.name={alg}",
+            f"--model.in_channels={5}",
+            f"--model.kernel_list={[72]*n_layer}",
+            f"--model.kernel_size_list={[1]*n_layer}",
+            f"--model.padding_list={[1]*n_layer}",
+            f"--model.mode_list={[(50, 60)]*n_layer}",
+            f"--model.dim={dim}",
 
             f"--checkpoint.model_comment={suffix}",
             f"--checkpoint.resume={False}" if checkpt == "none" else f"--checkpoint.resume={True}",
@@ -80,7 +86,7 @@ if __name__ == '__main__':
     mlflow.set_experiment(configs.run.experiment)  # set experiments first
 
     tasks = [
-        [0.0, "metacoupler", "NeurOLight2d", 0, "test_training_flow", 3, 50, 0.02, "mse", 1, "none", 2],
+        [0.0, "metacoupler", "NeurOLight2d", 72, 8, 0, "test_neurOLight", 3, 100, 0.02, "mse", 1, "none", 2],
     ]
 
     with Pool(8) as p:

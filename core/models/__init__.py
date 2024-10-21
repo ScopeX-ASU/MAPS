@@ -10,3 +10,4 @@ from .metacoupler import MetaCouplerOptimization
 from .isolator import IsolatorOptimization
 from .layers import *
 from .simplecnn import *
+from .neurolight_cnn import *

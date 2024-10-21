@@ -13,6 +13,7 @@ import glob
 import yaml
 import h5py
 from torch import Tensor
+from torch.nn import functional as F
 from torchpack.datasets.dataset import Dataset
 from torchvision import transforms
 from torchvision.datasets import VisionDataset
@@ -28,6 +29,13 @@ resize_modes = {
 
 __all__ = ["FDFD", "FDFDDataset"]
 
+
+def resize_to_targt_size(image: Tensor, size: Tuple[int, int]) -> Tensor:
+    if len(image.shape) == 2:
+        image = image.unsqueeze(0).unsqueeze(0)
+    elif len(image.shape) == 3:
+        image = image.unsqueeze(0)
+    return F.interpolate(image, size=size, mode='bilinear', align_corners=False).squeeze()
 
 class FDFD(VisionDataset):
     url = None
@@ -106,7 +114,7 @@ class FDFD(VisionDataset):
         ## do not load actual data here, too slow. Just load the filenames
         all_samples = [
                 os.path.basename(i)
-                for i in glob.glob(os.path.join(self.root, self.device_type, f"{self.device_type}_*.h5"))
+                for i in glob.glob(os.path.join(self.root, self.device_type, "raw", f"{self.device_type}_*.h5"))
             ]
         total_device_id = []
         for filename in all_samples:
@@ -139,15 +147,17 @@ class FDFD(VisionDataset):
     def _preprocess_dataset(self, data_train: Tensor, data_test: Tensor) -> Tuple[Tensor, Tensor]:
         all_samples = [
                 os.path.basename(i)
-                for i in glob.glob(os.path.join(self.root, self.device_type, f"{self.device_type}_*.h5"))
+                for i in glob.glob(os.path.join(self.root, self.device_type, "raw", f"{self.device_type}_*.h5"))
             ]
+        filename_train = []
+        filename_test = []
         for filename in all_samples:
             device_id = filename.split("_")[1].split("-")[1]
             if device_id in data_train:
-                data_train.append(filename)
+                filename_train.append(filename)
             elif device_id in data_test:
-                data_test.append(filename)
-        return data_train, data_test
+                filename_test.append(filename)
+        return filename_train, filename_test
 
     @staticmethod
     def _save_dataset(
@@ -174,6 +184,7 @@ class FDFD(VisionDataset):
             f"{self.train_filename}.yml" if train else f"{self.test_filename}.yml"
         )
         path_to_file = os.path.join(self.root, self.processed_dir, filename)
+        print(f"Loading data from {path_to_file}")
         with open(path_to_file, "r") as f:
             data = yaml.safe_load(f)
         return data
@@ -192,10 +203,10 @@ class FDFD(VisionDataset):
 
     def __getitem__(self, item):
         device_file = self.data[item]
-        with h5py.File(os.path.join(self.root, self.device_type, device_file), "r") as f:
+        with h5py.File(os.path.join(self.root, self.device_type, "raw", device_file), "r") as f:
             keys = list(f.keys())
-            eps_map = torch.from_numpy(f["eps_map"][()]).float()
-            gradient = torch.from_numpy(f["gradient"][()]).float()
+            eps_map = resize_to_targt_size(torch.from_numpy(f["eps_map"][()]).float(), (200, 300))
+            gradient = resize_to_targt_size(torch.from_numpy(f["gradient"][()]).float(), (200, 300))
             field_solutions = {}
             s_params = {}
             adj_srcs = {}
@@ -205,15 +216,27 @@ class FDFD(VisionDataset):
             design_region_mask = {}
             for key in keys:
                 if key.startswith("field_solutions"):
-                    field_solutions[key] = torch.from_numpy(f[key][()]).float()
+                    field = torch.from_numpy(f[key][()])
+                    field = torch.view_as_real(field).permute(0, 3, 1, 2)
+                    field = resize_to_targt_size(field, (200, 300)).permute(0, 2, 3, 1)
+                    field_solutions[key] = torch.view_as_complex(field.contiguous())
                 elif key.startswith("s_params"):
                     s_params[key] = torch.from_numpy(f[key][()]).float()
                 elif key.startswith("adj_src"):
-                    adj_srcs[key] = torch.from_numpy(f[key][()]).float()
+                    adjoint_src = torch.from_numpy(f[key][()])
+                    adjoint_src = torch.view_as_real(adjoint_src).permute(2, 0, 1)
+                    adjoint_src = resize_to_targt_size(adjoint_src, (200, 300)).permute(1, 2, 0)
+                    adj_srcs[key] = torch.view_as_complex(adjoint_src.contiguous())
                 elif key.startswith("source_profile"):
-                    src_profile[key] = torch.from_numpy(f[key][()]).float()
+                    source_profile = torch.from_numpy(f[key][()])
+                    source_profile = torch.view_as_real(source_profile).permute(2, 0, 1)
+                    source_profile = resize_to_targt_size(source_profile, (200, 300)).permute(1, 2, 0)
+                    src_profile[key] = torch.view_as_complex(source_profile.contiguous())
                 elif key.startswith("fields_adj"):
-                    fields_adj[key] = torch.from_numpy(f[key][()]).float()
+                    field = torch.from_numpy(f[key][()])
+                    field = torch.view_as_real(field).permute(0, 3, 1, 2)
+                    field = resize_to_targt_size(field, (200, 300)).permute(0, 2, 3, 1)
+                    fields_adj[key] = torch.view_as_complex(field.contiguous())
                 elif key.startswith("field_adj_normalizer"):
                     field_normalizer[key] = torch.from_numpy(f[key][()]).float()
                 elif key.startswith("design_region_mask"):

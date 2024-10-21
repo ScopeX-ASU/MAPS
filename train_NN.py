@@ -181,6 +181,8 @@ def train(
         eps_map = eps_map.to(device, non_blocking=True)
         gradient = gradient.to(device, non_blocking=True)
         for key, field in field_solutions.items():
+            field = torch.view_as_real(field).permute(0, 1, 4, 2, 3)
+            field = field.flatten(1, 2)
             field_solutions[key] = field.to(device, non_blocking=True)
         for key, s_param in s_params.items():
             s_params[key] = s_param.to(device, non_blocking=True)
@@ -189,6 +191,8 @@ def train(
         for key, src_profile in src_profiles.items():
             src_profiles[key] = src_profile.to(device, non_blocking=True)
         for key, field_adj in fields_adj.items():
+            field_adj = torch.view_as_real(field_adj).permute(0, 1, 4, 2, 3)
+            field_adj = field_adj.flatten(1, 2)
             fields_adj[key] = field_adj.to(device, non_blocking=True)
         for key, field_norm in field_normalizer.items():
             field_normalizer[key] = field_norm.to(device, non_blocking=True)
@@ -200,54 +204,60 @@ def train(
         if mixup_fn is not None:
             eps_map, adj_src, gradient, field_solutions, s_params = mixup_fn(eps_map, adj_src, gradient, field_solutions, s_params)
 
-        # visualize the input data
-        plt.imshow(eps_map[0].detach().cpu().numpy())
-        plt.savefig(f"./figs/eps_map_{epoch}.png")
-        plt.close()
-        plt.imshow(gradient[0].detach().cpu().numpy())
-        plt.savefig(f"./figs/gradient_{epoch}.png")
-        plt.close()
+        # # visualize the input data
+        # plt.imshow(eps_map[0].detach().cpu().numpy())
+        # plt.savefig(f"./figs/eps_map_{epoch}.png")
+        # plt.close()
+        # plt.imshow(gradient[0].detach().cpu().numpy())
+        # plt.savefig(f"./figs/gradient_{epoch}.png")
+        # plt.close()
 
-        dummy_key = next(iter(src_profiles.keys()))
-        dummy_src_profile = src_profiles[dummy_key]
-        print("this is the shape of the src profile: ", dummy_src_profile.shape)
-        src_profile = torch.abs(dummy_src_profile[0])
-        plt.imshow(src_profile.abs().detach().cpu().numpy())
-        plt.savefig(f"./figs/src_profile_{epoch}.png")
-        plt.close()
+        # dummy_key = next(iter(src_profiles.keys()))
+        # dummy_src_profile = src_profiles[dummy_key]
+        # print("this is the shape of the src profile: ", dummy_src_profile.shape)
+        # src_profile = torch.abs(dummy_src_profile[0])
+        # plt.imshow(src_profile.abs().detach().cpu().numpy())
+        # plt.savefig(f"./figs/src_profile_{epoch}.png")
+        # plt.close()
 
-        dummy_key = next(iter(adj_srcs.keys()))
-        dummy_adjsrc_profile = adj_srcs[dummy_key]
-        adjsrc_profile = torch.abs(dummy_adjsrc_profile[0])
-        plt.imshow(adjsrc_profile.abs().detach().cpu().numpy())
-        plt.savefig(f"./figs/adjsrc_profile_{epoch}.png")
-        plt.close()
+        # dummy_key = next(iter(adj_srcs.keys()))
+        # dummy_adjsrc_profile = adj_srcs[dummy_key]
+        # adjsrc_profile = torch.abs(dummy_adjsrc_profile[0])
+        # plt.imshow(adjsrc_profile.abs().detach().cpu().numpy())
+        # plt.savefig(f"./figs/adjsrc_profile_{epoch}.png")
+        # plt.close()
 
-        dummy_key = next(iter(field_solutions.keys()))
-        dummy_field_solution = field_solutions[dummy_key]
-        field_solution = dummy_field_solution[0][0]
-        plt.imshow(torch.abs(field_solution).detach().cpu().numpy())
-        plt.savefig(f"./figs/field_solution_{epoch}.png")
-        plt.close()
+        # dummy_key = next(iter(field_solutions.keys()))
+        # dummy_field_solution = field_solutions[dummy_key]
+        # field_solution = dummy_field_solution[0][0]
+        # plt.imshow(torch.abs(field_solution).detach().cpu().numpy())
+        # plt.savefig(f"./figs/field_solution_{epoch}.png")
+        # plt.close()
 
-        dummy_key = next(iter(fields_adj.keys()))
-        dummy_fields_adj = fields_adj[dummy_key]
-        fields_adj = dummy_fields_adj[0][0]
-        plt.imshow(torch.abs(fields_adj).detach().cpu().numpy())
-        plt.savefig(f"./figs/fields_adj_{epoch}.png")
-        plt.close()
-        quit()
+        # dummy_key = next(iter(fields_adj.keys()))
+        # dummy_fields_adj = fields_adj[dummy_key]
+        # fields_adj = dummy_fields_adj[0][0]
+        # plt.imshow(torch.abs(fields_adj).detach().cpu().numpy())
+        # plt.savefig(f"./figs/fields_adj_{epoch}.png")
+        # plt.close()
+        # quit()
 
         with amp.autocast(enabled=grad_scaler._enabled):
             output = model( # now only suppose that the output is the gradient of the field
                 eps_map, 
-                adj_src, 
+                src_profiles,
+                adj_srcs, 
             )
             if type(output) == tuple:
                 output, aux_output = output
             else:
                 aux_output = None
-            regression_loss = criterion(output, gradient)
+            # print("this is the key of the field solutions: ", field_solutions.keys())
+            # print("this is the key of the fields adj: ", fields_adj.keys())
+            # print("this is the key of the field normalizer: ", field_normalizer.keys()) "field_adj_normalizer-wl-1.55-port-in_port_1-mode-1"
+            # quit()
+            regression_loss = criterion(output, field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"])
+            regression_loss = regression_loss + criterion(aux_output, fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"])
             mse_meter.update(regression_loss.item())
             loss = regression_loss
             for name, config in aux_criterions.items():
@@ -337,10 +347,12 @@ def validate(
     val_loss = 0
     mse_meter = AverageMeter("mse")
     with torch.no_grad(), DeterministicCtx(42):
-        for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj) in enumerate(validation_loader):
+        for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask) in enumerate(validation_loader):
             eps_map = eps_map.to(device, non_blocking=True)
             gradient = gradient.to(device, non_blocking=True)
             for key, field in field_solutions.items():
+                field = torch.view_as_real(field).permute(0, 1, 4, 2, 3)
+                field = field.flatten(1, 2)
                 field_solutions[key] = field.to(device, non_blocking=True)
             for key, s_param in s_params.items():
                 s_params[key] = s_param.to(device, non_blocking=True)
@@ -349,7 +361,13 @@ def validate(
             for key, src_profile in src_profiles.items():
                 src_profiles[key] = src_profile.to(device, non_blocking=True)
             for key, field_adj in fields_adj.items():
+                field_adj = torch.view_as_real(field_adj).permute(0, 1, 4, 2, 3)
+                field_adj = field_adj.flatten(1, 2)
                 fields_adj[key] = field_adj.to(device, non_blocking=True)
+            for key, field_norm in field_normalizer.items():
+                field_normalizer[key] = field_norm.to(device, non_blocking=True)
+            # for key, design_region in design_region_mask.items():
+            #     design_region_mask[key] = design_region.to(device, non_blocking=True)
 
             if mixup_fn is not None:
                 eps_map, adj_src, gradient, field_solutions, s_params = mixup_fn(eps_map, adj_src, gradient, field_solutions, s_params)
@@ -357,13 +375,15 @@ def validate(
             with amp.autocast(enabled=False):
                 output = model( # now only suppose that the output is the gradient of the field
                     eps_map, 
-                    adj_src, 
+                    src_profiles,
+                    adj_srcs, 
                 )
                 if type(output) == tuple:
                     output, aux_output = output
                 else:
                     aux_output = None
-                val_loss = criterion(output, gradient)
+                val_loss = criterion(output, field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"])
+                val_loss = val_loss + criterion(aux_output, fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"])
             mse_meter.update(val_loss.item())
 
     loss_vector.append(mse_meter.avg)
@@ -401,10 +421,12 @@ def test(
     val_loss = 0
     mse_meter = AverageMeter("mse")
     with torch.no_grad(), DeterministicCtx(42):
-        for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj) in enumerate(test_loader):
+        for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask) in enumerate(test_loader):
             eps_map = eps_map.to(device, non_blocking=True)
             gradient = gradient.to(device, non_blocking=True)
             for key, field in field_solutions.items():
+                field = torch.view_as_real(field).permute(0, 1, 4, 2, 3)
+                field = field.flatten(1, 2)
                 field_solutions[key] = field.to(device, non_blocking=True)
             for key, s_param in s_params.items():
                 s_params[key] = s_param.to(device, non_blocking=True)
@@ -413,7 +435,13 @@ def test(
             for key, src_profile in src_profiles.items():
                 src_profiles[key] = src_profile.to(device, non_blocking=True)
             for key, field_adj in fields_adj.items():
+                field_adj = torch.view_as_real(field_adj).permute(0, 1, 4, 2, 3)
+                field_adj = field_adj.flatten(1, 2)
                 fields_adj[key] = field_adj.to(device, non_blocking=True)
+            for key, field_norm in field_normalizer.items():
+                field_normalizer[key] = field_norm.to(device, non_blocking=True)
+            # for key, design_region in design_region_mask.items():
+            #     design_region_mask[key] = design_region.to(device, non_blocking=True)
 
             if mixup_fn is not None:
                 eps_map, adj_src, gradient, field_solutions, s_params = mixup_fn(eps_map, adj_src, gradient, field_solutions, s_params)
@@ -421,13 +449,15 @@ def test(
             with amp.autocast(enabled=False):
                 output = model( # now only suppose that the output is the gradient of the field
                     eps_map, 
-                    adj_src, 
+                    src_profiles,
+                    adj_srcs, 
                 )
                 if type(output) == tuple:
                     output, aux_output = output
                 else:
                     aux_output = None
-                val_loss = criterion(output, gradient)
+                val_loss = criterion(output, field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"])
+                val_loss = val_loss + criterion(aux_output, fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"])
             mse_meter.update(val_loss.item())
 
     loss_vector.append(mse_meter.avg)
