@@ -44,7 +44,7 @@ res_scheduler:
   test_res: 20
 
 run:
-  experiment: "test_training_flow"
+  experiment: "fno2d"
   n_epochs: 20
   use_cuda: 1
   gpu_id: 0
@@ -70,23 +70,25 @@ checkpoint:
   no_linear: 0
 
 model:
-  name: "NeurOLight2d"
-  in_channels: 3
-  out_channels: 6
-  act_func: GELU
-  domain_size: [8, 38.4]
-  grid_step: 0.1
-  dropout_rate: 0.1
-  drop_path_rate: 0.2
-  norm: bn
-  wavelength: 1.55
+  name: FFNO2d
+  out_channels: 2
   aux_head: False
+  in_channels: 3
+  dim: 72
+  kernel_list: [72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 72]
+  kernel_size_list: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+  padding_list: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  hidden_list: [512]
+  mode_list: [(128, 129), (128, 129), (128, 129), (128, 129), (128, 129), (128, 129), (128, 129), (128, 129), (128, 129), (128, 129), (128, 129), (128, 129)]
+  act_func: GELU
+  dropout_rate: 0.0
+  drop_path_rate: 0.0
   aux_head_idx: 1
+  with_cp: False
   conv_stem: True
-  aug_path: True,
-  ffn: True,
-  ffn_dwconv: True,
-  hidden_list: [128]
+  aug_path: True
+  ffn: True
+  ffn_dwconv: True
 
 debug:
   verbose: 1

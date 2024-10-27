@@ -203,6 +203,7 @@ class MetaCouplerOptimization(BaseOptimization):
             design_region_param_cfgs[region_name] = dict(
                 method="levelset",
                 rho_resolution=[0, 50],
+                # transform=[dict(type="mirror_symmetry", dims=[1]), dict(type="blur", mfs=0.1, resolutions=[310, 310])],
                 transform=[dict(type="mirror_symmetry", dims=[1])],
                 init_method="random",
                 binary_projection=dict(

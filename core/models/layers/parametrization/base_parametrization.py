@@ -186,6 +186,22 @@ def etching(xs, sharpness, eta, binary_projection):
     outs += [_etching(x, sharpness, eta, binary_projection) for x in xs[1:]]
     return outs
 
+def _blur(x, mfs, res):
+    # in this case, we only consider the nominal corner for etching
+    mfs_px = int(mfs * res) + 1 # ceiling the mfs to the nearest pixel
+    if mfs_px % 2 == 0:
+        mfs_px += 1 # ensure mfs is odd
+    # build the kernel
+    mfs_kernel = 1 - torch.abs(torch.linspace(-1, 1, steps=mfs_px, device=x.device))
+    # x is a 2D tensor
+    # convolve the kernel with the x along the second dimension
+    x = F.conv1d(x.unsqueeze(1), mfs_kernel.unsqueeze(0).unsqueeze(0), padding=mfs_px//2).squeeze(1)
+    return x
+
+def blur(xs, mfs, resolutions):
+    xs = [_blur(x, mfs, res) for x, res in zip(xs, resolutions)]
+    return xs
+
 
 permittivity_transform_collections = dict(
     mirror_symmetry=mirror_symmetry,
@@ -193,6 +209,7 @@ permittivity_transform_collections = dict(
     convert_resolution=convert_resolution,
     litho=litho,
     etching=etching,
+    blur=blur,
 )
 
 

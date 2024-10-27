@@ -14,7 +14,7 @@ from pyutils.general import ensure_dir, logger
 from pyutils.config import configs
 
 dataset = "fdfd"
-model = "neurolight"
+model = "fno"
 exp_name = "train"
 root = f"log/{dataset}/{model}/{exp_name}"
 script = 'train_NN.py'
@@ -24,7 +24,7 @@ configs.load(config_file, recursive=True)
 
 
 def task_launcher(args):
-    mixup, device_type, alg, dim, n_layer, id, description, gpu_id, epochs, lr, criterion, criterion_weight, maxwell_loss, checkpt, bs = args
+    mixup, device_type, alg, id, description, gpu_id, epochs, lr, criterion, criterion_weight, maxwell_loss, checkpt, bs = args
     env = os.environ.copy()
     env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
     
@@ -69,12 +69,9 @@ def task_launcher(args):
             f"--model.name={alg}",
             f"--model.in_channels={3}",
             f"--model.out_channels={2}",
-            f"--model.kernel_list={[72]*n_layer}",
-            f"--model.kernel_size_list={[1]*n_layer}",
-            f"--model.padding_list={[1]*n_layer}",
-            # f"--model.mode_list={[(50, 60)]*n_layer}",
-            f"--model.mode_list={[(100, 151)]*n_layer}",
-            f"--model.dim={dim}",
+            f"--model.mode1={150}",
+            f"--model.mode2={225}",
+            f"--model.hidden_list={[96]}",
 
             f"--checkpoint.model_comment={suffix}",
             f"--checkpoint.resume={False}" if checkpt == "none" else f"--checkpoint.resume={True}",
@@ -90,16 +87,7 @@ if __name__ == '__main__':
     mlflow.set_experiment(configs.run.experiment)  # set experiments first
 
     tasks = [
-        # [0.0, "metacoupler", "NeurOLight2d", 72, 4, 2, "norm_input_src", 2, 50, 0.002, "nmse", 1, "none", 2],
-        # [0.0, "metacoupler", "NeurOLight2d", 72, 4, 3, "norm_input_src", 3, 50, 0.0005, "nmse", 1, "none", 2],
-        # [0.0, "metacoupler", "NeurOLight2d", 72, 4, 4, "no_adj", 0, 50, 0.002, "nmse", 1, "none", 2],
-        # [0.0, "metacoupler", "NeurOLight2d", 72, 4, 5, "no_adj", 0, 50, 0.002, "nmse", 1, 0.1, "none", 2],
-        # [0.0, "metacoupler", "NeurOLight2d", 72, 4, 6, "no_adj", 1, 50, 0.005, "nmse", 1, 0, "none", 2],
-        # [0.0, "metacoupler", "NeurOLight2d", 72, 4, 7, "no_adj", 2, 50, 0.002, "nmse", 1, 0, "none", 2],
-        # [0.0, "metacoupler", "NeurOLight2d", 72, 4, 8, "only_fwd_Ez", 0, 50, 0.002, "nmse", 1, 0, "none", 2],
-        # [0.0, "metacoupler", "NeurOLight2d", 72, 4, 9, "only_fwd_Ez_more_mode", 1, 50, 0.002, "nmse", 1, 0, "none", 2],
-        # [0.0, "metacoupler", "NeurOLight2d", 72, 8, 10, "only_fwd_Ez_max_mode_deeper", 2, 50, 0.002, "nmse", 1, 0, "none", 2],
-        [0.0, "metacoupler", "NeurOLight2d", 72, 8, 11, "single_betch_check", 0, 50, 0.0001, "nmse", 1, 0, "none", 2],
+        [0.0, "metacoupler", "FNO3d", 5, "downsampling_using_conv_lessproj_cha", 3, 50, 0.002, "nmse", 1, 0, "none", 2],
     ]
 
     with Pool(8) as p:

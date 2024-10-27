@@ -1495,6 +1495,7 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
             indices_list = []
             for wl in wl_list:
                 self.sim.omega = 2 * np.pi * constants.C_0 / (wl.item() * 1e-6)
+                self.sim._setup_derivatives() # need to setup derivatives after updating the omega
                 entries_a, indices_a = self.sim._make_A(
                     eps_v
                 )  # return scipy sparse indices and values

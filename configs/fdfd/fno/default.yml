@@ -1,0 +1,84 @@
+dataset:
+  name: fdfd
+  root: ./data
+  test_ratio: 0.1
+  train_valid_split_ratio: [0.9, 0.1]
+  num_workers: 4
+
+criterion:
+  name: distanceLoss
+  max_distance: 0.15
+
+aux_criterion:
+  curl_loss:
+    weight: 0.0
+  tv_loss:
+    weight: 0.0
+    norm: False
+
+optimizer:
+  name: adam
+  lr: 0.002
+  weight_decay: 0.000
+
+lr_scheduler:
+  name: cosine
+  lr_gamma: 0.99
+  lr_min: 0
+
+run:
+  experiment: "default"
+  n_epochs: 100
+  use_cuda: 1
+  gpu_id: 0
+  deterministic: 1
+  random_state: 42
+  log_interval: 10
+
+quantize:
+  weight_bit: 32
+  input_bit: 32
+
+checkpoint:
+  save_best_model_k: 3
+  checkpoint_dir: "metacoupler/local_search/train_local_search"
+  model_comment: ""
+  resume: 0
+  restore_checkpoint: ""
+  no_linear: 0
+
+model:
+  name: "fno3d"
+  out_channels: 100
+  dim: 32
+  kernel_list: [64, 64, 64, 64, 64, 64]
+  kernel_size_list: [1, 1, 1, 1, 1, 1]
+  hidden_list: [256]
+  padding_list: [0, 0, 0, 0, 0, 0]
+  mode_list: [[80, 80]]
+  act_func: GELU
+  act_thres: 100
+  domain_size: [8, 38.4] # um
+  grid_step: 0.1 # um
+  buffer_width: 0.0 # um
+  dropout_rate: 0.1
+  drop_path_rate: 0.2
+  norm: bn
+  wavelength: 1.55
+  aux_head: False
+  aux_head_idx: 1
+  pos_encoding: none
+  with_cp: False
+
+debug:
+  verbose: 1
+
+plot:
+  train: True
+  valid: True
+  test: True
+  interval: 10
+  root: plot
+  dir_name: default
+
+

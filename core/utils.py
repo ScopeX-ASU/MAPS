@@ -8,14 +8,43 @@ import torch
 import torch.distributed as dist
 import torch.fft
 import torch.optim
-
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
 from .models.layers.utils import LevelSetInterp, get_eps
+from ceviche.constants import *
+from torch import Tensor
+from torch_sparse import spmm
+from typing import Callable, List, Tuple
+from ceviche.utils import get_entries_indices
+from core.models.layers.utils import get_eigenmode_coefficients
 
 if TYPE_CHECKING:
     from torch.optim.optimizer import _params_t
 else:
     _params_t = Any
 
+
+def plot_fields(fields: Tensor, ground_truth: Tensor, cmap: str = "RdBu", filepath: str = './figs/fields.png', **kwargs):
+    # the field is of shape (batch, 6, x, y)
+    fields = fields.reshape(fields.shape[0], -1, 2, fields.shape[-2], fields.shape[-1]).permute(0, 1, 3, 4, 2).contiguous()
+    fields = torch.view_as_complex(fields)
+    ground_truth = ground_truth.reshape(ground_truth.shape[0], -1, 2, ground_truth.shape[-2], ground_truth.shape[-1]).permute(0, 1, 3, 4, 2).contiguous()
+    ground_truth = torch.view_as_complex(ground_truth)
+    fig, ax = plt.subplots(2, ground_truth.shape[1], figsize=(15, 10), squeeze=False)
+    for i in range(ground_truth.shape[1]):
+        ax[0, i].imshow(torch.abs(fields[0, i]).cpu().numpy(), cmap=cmap)
+        ax[0, i].set_title(f"Field {i}")
+        ax[1, i].imshow(torch.abs(ground_truth[0, i]).cpu().numpy(), cmap=cmap)
+        ax[1, i].set_title(f"Ground Truth {i}")
+    plt.savefig(filepath, dpi=300)
+    plt.close()
+
+def resize_to_targt_size(image: Tensor, size: Tuple[int, int]) -> Tensor:
+    if len(image.shape) == 2:
+        image = image.unsqueeze(0).unsqueeze(0)
+    elif len(image.shape) == 3:
+        image = image.unsqueeze(0)
+    return F.interpolate(image, size=size, mode='bilinear', align_corners=False).squeeze()
 
 class DAdaptAdam(torch.optim.Optimizer):
     r"""
@@ -752,3 +781,128 @@ def rip_padding(eps, pady_0, pady_1, padx_0, padx_1):
     Removes the padding from the input tensor.
     """
     return eps[padx_0:-padx_1, pady_0:-pady_1]
+
+class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
+    def __init__(
+        self,
+        wl_cen: float = 1.55,
+        wl_width: float = 0,
+        n_wl: int = 1,
+        size_average=None,
+        reduce=None,
+        reduction: str = "mean",
+    ):
+        super().__init__(size_average, reduce, reduction)
+        self.wl_list = torch.linspace(
+            wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl
+        )
+        self.omegas = 2 * np.pi * C_0 / (self.wl_list * 1e-6)
+        self.As = (None, None)
+        self.bs = {}
+
+    def make_A(self, eps_r: torch.Tensor, wl_list: List[float]):
+        ## eps_r: [bs, h, w] real tensor
+        ## wl_list: [n_wl] list of wls in um, support spectral bundling
+        eps_vec = eps_r.flatten(1)
+        tot_entries_list = []
+        tot_indices_list = []
+        for eps_v in eps_vec:
+            entries_list = []
+            indices_list = []
+            for wl in wl_list:
+                self.sim.omega = 2 * np.pi * C_0 / (wl.item() * 1e-6)
+                self.sim._setup_derivatives() # reset the derivatives since we changed the omega
+                entries_a, indices_a = self.sim._make_A(
+                    eps_v
+                )  # return scipy sparse indices and values
+                entries_list.append(torch.from_numpy(entries_a))
+                indices_list.append(torch.from_numpy(indices_a))
+            entries_list = torch.stack(entries_list, 0)
+            indices_list = torch.stack(indices_list, 0)
+            tot_entries_list.append(entries_list)
+            tot_indices_list.append(indices_list)
+        tot_entries_list = torch.stack(tot_entries_list, 0).to(
+            eps_r.device
+        )  # [bs, n_wl, 5*h*w]
+        tot_indices_list = (
+            torch.stack(tot_indices_list, 0).to(eps_r.device).long()
+        )  # [bs, n_wl, 2, 5*h*w]
+        self.As = (tot_entries_list, tot_indices_list)
+        return self.As
+    
+    def make_sim(self, eps_r: torch.Tensor):
+        from core.models.fdfd.fdfd import fdfd_ez
+        self.sim = fdfd_ez(
+            omega=2 * np.pi * C_0 / (1.55 * 1e-6), # this is just a init wl value, later will update this
+            dl=2e-8,
+            NPML=50,
+            eps_r=eps_r[0],
+        )
+
+    def forward(self, Ez: Tensor, eps_r: Tensor, source: Tensor, target_size):
+        Ez = Ez[:, :2, :, :]
+        Ez = resize_to_targt_size(Ez, target_size).permute(0, 2, 3, 1)
+        Ez = torch.view_as_complex(Ez) # convert Ez to the required complex format
+        eps_r = resize_to_targt_size(eps_r, target_size)
+        source = torch.view_as_real(source).permute(0, 3, 1, 2) # B, 2, H, W
+        source = resize_to_targt_size(source, target_size).permute(0, 2, 3, 1)
+        source = torch.view_as_complex(source) # convert source to the required complex format
+
+        ## Ez: [bs, n_wl, h, w] complex tensor
+        ## eps_r: [bs, h, w] real tensor
+        ## source: [bs, n_wl, h, w] complex tensor, source in sim.solve(source), not b, b = 1j * omega * source
+
+        # step 0: build self.sim
+        self.make_sim(eps_r=eps_r)
+
+        # step 1: make A
+        self.make_A(eps_r, self.wl_list)
+
+        # step 2: calculate loss
+        entries, indices = self.As
+        lhs = []
+        if self.omegas.device != source.device:
+            self.omegas = self.omegas.to(source.device)
+        b = (
+            (source * (1j * self.omegas[None, :, None, None])).flatten(0, 1).flatten(1)
+        )  # [bs*n_wl, h*w]
+        for i in range(Ez.shape[0]):
+            for j in range(Ez.shape[1]):
+                ez = Ez[i, j].flatten()
+                omega = 2 * np.pi * C_0 / (self.wl_list[j] * 1e-6)
+
+                b = source[i, j].flatten() * (1j * omega)
+                A_by_e = spmm(
+                    indices[i, j],
+                    entries[i, j],
+                    m=ez.shape[0],
+                    n=ez.shape[0],
+                    matrix=ez[:, None],
+                )[:, 0]
+                lhs.append(A_by_e)
+        lhs = torch.stack(lhs, 0)  # [bs*n_wl, h*w]
+
+        loss = torch.nn.functional.mse_loss(lhs, b, reduction=self.reduction)
+
+        return loss
+    
+class SParamLoss(torch.nn.modules.loss._Loss):
+
+    def __init__(self, reduce="mean"):
+        super(SParamLoss, self).__init__()
+
+        self.reduce = reduce
+
+    def forward(self, Ez, mode, target_size, target_SParam):
+        # Step 1: Resize all the fields to the target size
+        Ez = Ez[:, :2, :, :]
+        Ez = resize_to_targt_size(Ez, target_size).permute(0, 2, 3, 1)
+        Ez = torch.view_as_complex(Ez) # convert Ez to the required complex format
+
+        mode = torch.view_as_real(mode).permute(0, 3, 1, 2) # B, 2, H, W
+        mode = resize_to_targt_size(mode, target_size).permute(0, 2, 3, 1)
+        mode = torch.view_as_complex(mode) # convert mode to the required complex format
+        # Stpe 2: Calculate the S-parameters
+
+        # Step 3: Calculate the loss
+        pass

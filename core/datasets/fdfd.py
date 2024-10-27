@@ -20,6 +20,12 @@ from torchvision.datasets import VisionDataset
 from torchvision.datasets.utils import download_url
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from torchvision.transforms import InterpolationMode
+from core.utils import resize_to_targt_size, print_stat
+from ceviche.constants import *
+from core.models.layers.utils import (
+    Si_eps,
+    SiO2_eps,
+)
 
 resize_modes = {
     "bilinear": InterpolationMode.BILINEAR,
@@ -28,14 +34,6 @@ resize_modes = {
 }
 
 __all__ = ["FDFD", "FDFDDataset"]
-
-
-def resize_to_targt_size(image: Tensor, size: Tuple[int, int]) -> Tensor:
-    if len(image.shape) == 2:
-        image = image.unsqueeze(0).unsqueeze(0)
-    elif len(image.shape) == 3:
-        image = image.unsqueeze(0)
-    return F.interpolate(image, size=size, mode='bilinear', align_corners=False).squeeze()
 
 class FDFD(VisionDataset):
     url = None
@@ -205,43 +203,68 @@ class FDFD(VisionDataset):
         device_file = self.data[item]
         with h5py.File(os.path.join(self.root, self.device_type, "raw", device_file), "r") as f:
             keys = list(f.keys())
-            eps_map = resize_to_targt_size(torch.from_numpy(f["eps_map"][()]).float(), (200, 300))
-            gradient = resize_to_targt_size(torch.from_numpy(f["gradient"][()]).float(), (200, 300))
+            orgion_size = torch.from_numpy(f["eps_map"][()]).float().size()
+            # eps_map = resize_to_targt_size(torch.from_numpy(f["eps_map"][()]).float(), (200, 300))
+            # gradient = resize_to_targt_size(torch.from_numpy(f["gradient"][()]).float(), (200, 300))
+            eps_map = torch.from_numpy(f["eps_map"][()]).float()
+            gradient = torch.from_numpy(f["gradient"][()]).float()
             field_solutions = {}
             s_params = {}
             adj_srcs = {}
             src_profile = {}
+            incident_field = {}
             fields_adj = {}
             field_normalizer = {}
             design_region_mask = {}
             for key in keys:
                 if key.startswith("field_solutions"):
                     field = torch.from_numpy(f[key][()])
-                    field = torch.view_as_real(field).permute(0, 3, 1, 2)
-                    field = resize_to_targt_size(field, (200, 300)).permute(0, 2, 3, 1)
-                    field_solutions[key] = torch.view_as_complex(field.contiguous())
+                    field_solutions[key] = field
+                    # field = torch.view_as_real(field).permute(0, 3, 1, 2)
+                    # field = resize_to_targt_size(field, (200, 300)).permute(0, 2, 3, 1)
+                    # field_solutions[key] = torch.view_as_complex(field.contiguous())
                 elif key.startswith("s_params"):
                     s_params[key] = torch.from_numpy(f[key][()]).float()
                 elif key.startswith("adj_src"):
                     adjoint_src = torch.from_numpy(f[key][()])
-                    adjoint_src = torch.view_as_real(adjoint_src).permute(2, 0, 1)
-                    adjoint_src = resize_to_targt_size(adjoint_src, (200, 300)).permute(1, 2, 0)
-                    adj_srcs[key] = torch.view_as_complex(adjoint_src.contiguous())
+                    adj_srcs[key] = adjoint_src
+                    # adjoint_src = torch.view_as_real(adjoint_src).permute(2, 0, 1)
+                    # adjoint_src = resize_to_targt_size(adjoint_src, (200, 300)).permute(1, 2, 0)
+                    # adj_srcs[key] = torch.view_as_complex(adjoint_src.contiguous())
                 elif key.startswith("source_profile"):
                     source_profile = torch.from_numpy(f[key][()])
-                    source_profile = torch.view_as_real(source_profile).permute(2, 0, 1)
-                    source_profile = resize_to_targt_size(source_profile, (200, 300)).permute(1, 2, 0)
-                    src_profile[key] = torch.view_as_complex(source_profile.contiguous())
+                    src_profile[key] = source_profile
+                    if key == "source_profile-wl-1.55-port-in_port_1-mode-1":
+                        mode = source_profile[int(0.4 * source_profile.shape[0] / 2)]
+                        mode = mode.unsqueeze(0).repeat(source_profile.shape[0], 1)
+                        source_index = int(0.4 * source_profile.shape[0] / 2)
+                        resolution = 2e-8
+                        epsilon = Si_eps(1.55)
+                        lambda_0 = 1.55e-6
+                        k = (2 * torch.pi / lambda_0) * torch.sqrt(torch.tensor(epsilon))
+                        x_coords = torch.arange(600).float()
+                        distances = torch.abs(x_coords - source_index) * resolution
+                        phase_shifts = (k * distances).unsqueeze(1)
+                        mode = mode * torch.exp(1j * phase_shifts)
+                        # mode = torch.view_as_real(mode).permute(2, 0, 1)
+                        # mode = resize_to_targt_size(mode, (200, 300)).permute(1, 2, 0)
+                        incident_key = key.replace("source_profile", "incident_field")
+                        incident_field[incident_key] = mode
+                        # incident_field[incident_key] = torch.view_as_complex(mode.contiguous())
+                    # source_profile = torch.view_as_real(source_profile).permute(2, 0, 1)
+                    # source_profile = resize_to_targt_size(source_profile, (200, 300)).permute(1, 2, 0)
+                    # src_profile[key] = torch.view_as_complex(source_profile.contiguous())
                 elif key.startswith("fields_adj"):
                     field = torch.from_numpy(f[key][()])
-                    field = torch.view_as_real(field).permute(0, 3, 1, 2)
-                    field = resize_to_targt_size(field, (200, 300)).permute(0, 2, 3, 1)
-                    fields_adj[key] = torch.view_as_complex(field.contiguous())
+                    fields_adj[key] = field
+                    # field = torch.view_as_real(field).permute(0, 3, 1, 2)
+                    # field = resize_to_targt_size(field, (200, 300)).permute(0, 2, 3, 1)
+                    # fields_adj[key] = torch.view_as_complex(field.contiguous())
                 elif key.startswith("field_adj_normalizer"):
                     field_normalizer[key] = torch.from_numpy(f[key][()]).float()
                 elif key.startswith("design_region_mask"):
                     design_region_mask[key] = int(f[key][()])
-        return eps_map, adj_srcs, gradient, field_solutions, s_params, src_profile, fields_adj, field_normalizer, design_region_mask
+        return eps_map, adj_srcs, gradient, field_solutions, s_params, src_profile, fields_adj, field_normalizer, design_region_mask, orgion_size, incident_field
 
     def extra_repr(self) -> str:
         return "Split: {}".format("Train" if self.train is True else "Test")

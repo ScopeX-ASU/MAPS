@@ -10,7 +10,7 @@ LastEditTime: 2021-12-26 00:11:01
 import argparse
 import os
 from typing import Callable, Dict, Iterable
-import torch.cuda.amp as amp
+import torch.amp as amp
 import mlflow
 import torch
 import torch.nn as nn
@@ -33,21 +33,18 @@ import datetime
 import random
 import numpy as np
 import matplotlib.pyplot as plt
-from core.utils import print_stat
+from core.utils import print_stat, plot_fields
 
 def single_batch_check(
     model: nn.Module,
     train_loader: DataLoader,
     optimizer: Optimizer,
-    scheduler: Scheduler,
     criterion: Criterion,
     aux_criterions: Dict,
     epoch: int = 0,
     mixup_fn: Callable = None,
     device: torch.device = torch.device("cuda:0"),
-    plot: bool = False,
     grad_scaler=None,
-    print_info: bool = False,
 ) -> None:
     model.train()
     step = epoch * len(train_loader)
@@ -55,78 +52,87 @@ def single_batch_check(
     mse_meter = AverageMeter("mse")
     aux_meters = {name: AverageMeter(name) for name in aux_criterions}
     aux_output_weight = getattr(configs.criterion, "aux_output_weight", 0)
-    accum_iter = getattr(configs.run, "grad_accum_step", 1)
 
     # poynting_loss = PoyntingLoss(configs.model.grid_step, wavelength=1.55)
     data_counter = 0
     total_data = len(train_loader.dataset)
     rand_idx = len(train_loader.dataset) // train_loader.batch_size - 1
     rand_idx = random.randint(0, rand_idx)
-    for batch_idx, (raw_data, raw_target) in enumerate(train_loader):
-        #     break
-        # for batch_idx, _ in enumerate(train_loader):
-        for key, d in raw_data.items():
-            raw_data[key] = d.to(device, non_blocking=True)
-        for key, t in raw_target.items():
-            raw_target[key] = t.to(device, non_blocking=True)
+    for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask, orgion_size, incident_field) in enumerate(train_loader):
+        eps_map = eps_map.to(device, non_blocking=True)
+        gradient = gradient.to(device, non_blocking=True)
+        for key, field in field_solutions.items():
+            field = torch.view_as_real(field).permute(0, 1, 4, 2, 3)
+            field = field.flatten(1, 2)
+            field_solutions[key] = field.to(device, non_blocking=True)
+        for key, s_param in s_params.items():
+            s_params[key] = s_param.to(device, non_blocking=True)
+        for key, adj_src in adj_srcs.items():
+            adj_srcs[key] = adj_src.to(device, non_blocking=True)
+        for key, src_profile in src_profiles.items():
+            src_profiles[key] = src_profile.to(device, non_blocking=True)
+        for key, field_adj in fields_adj.items():
+            field_adj = torch.view_as_real(field_adj).permute(0, 1, 4, 2, 3)
+            field_adj = field_adj.flatten(1, 2)
+            fields_adj[key] = field_adj.to(device, non_blocking=True)
+        for key, field_norm in field_normalizer.items():
+            field_normalizer[key] = field_norm.to(device, non_blocking=True)
+        for key, field in incident_field.items():
+            incident_field[key] = field.to(device, non_blocking=True)
+        # for key, design_region in design_region_mask.items():
+        #     design_region_mask[key] = design_region.to(device, non_blocking=True)
 
-        data = torch.cat([raw_data["eps"], raw_data["Ez"], raw_data["source"]], dim=1)
-        target = raw_target["Ez"]
+        data_counter += eps_map.shape[0]
 
-        data_counter += data.shape[0]
-        # print(data.shape)
-        target = target.to(device, non_blocking=True)
         if mixup_fn is not None:
-            data, target = mixup_fn(data, target)
+            eps_map, adj_src, gradient, field_solutions, s_params = mixup_fn(eps_map, adj_src, gradient, field_solutions, s_params)
         if batch_idx == rand_idx:
             break
 
     for iter in range(10000):
-        with amp.autocast(enabled=False):
-            ## ----plot input datas to check----
-
-            ## ---------------------------------
-            output, normalization_factor = model(data, target, grid_step=raw_data["grid_step"], src_mask=raw_data["src_mask"], padding_mask=raw_data["padding_mask"])
+        with amp.autocast('cuda', enabled=False):
+            output = model( # now only suppose that the output is the gradient of the field
+                eps_map, 
+                src_profiles,
+                adj_srcs,
+                incident_field, 
+            )
+            plot_fourier_eps(eps_map, "./figs/eps_map.png")
             if type(output) == tuple:
                 output, aux_output = output
             else:
                 aux_output = None
-            regression_loss = criterion(output, target/normalization_factor, raw_data["mseWeight"])
+            # print("this is the key of the field solutions: ", field_solutions.keys())
+            # print("this is the key of the fields adj: ", fields_adj.keys())
+            # print("this is the key of the field normalizer: ", field_normalizer.keys()) "field_adj_normalizer-wl-1.55-port-in_port_1-mode-1"
+            # quit()
+            regression_loss = criterion(output, field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], torch.ones_like(output).to(device))
+            # regression_loss = regression_loss + criterion(aux_output, fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"], torch.ones_like(aux_output).to(device))
             mse_meter.update(regression_loss.item())
             loss = regression_loss
             for name, config in aux_criterions.items():
                 aux_criterion, weight = config
-                if name == "curl_loss":
-                    fields = torch.cat([target[:, 0:1]], output, target[:, 2:3], dim=1)
-                    aux_loss = weight * aux_criterion(fields, data[:, 0:1])
-                elif name == "tv_loss":
-                    aux_loss = weight * aux_criterion(output, target)
-                elif name == "poynting_loss":
-                    aux_loss = weight * aux_criterion(output, target)
-                elif name == "rtv_loss":
-                    aux_loss = weight * aux_criterion(output, target)
-                elif name == "maxwell_residual":
-                    aux_loss = weight * aux_criterion(output, raw_data["grid_step"]) 
+                if name == "maxwell_residual":
+                    # TODO, this is incorrect now
+                    aux_loss = weight * aux_criterion(output, gradient)
                 loss = loss + aux_loss
                 aux_meters[name].update(aux_loss.item())
-            # TODO aux output loss
+                
             if aux_output is not None and aux_output_weight > 0:
+                # TODO, this is incorrect now
                 aux_output_loss = aux_output_weight * F.mse_loss(
-                    aux_output, target.abs()
+                    aux_output, field_solutions
                 )  # field magnitude learning
                 loss = loss + aux_output_loss
             else:
                 aux_output_loss = None
 
-            loss = loss / accum_iter
-
         grad_scaler.scale(loss).backward()
 
-        if ((iter + 1) % accum_iter == 0) or (iter + 1 == len(train_loader)):
-            grad_scaler.unscale_(optimizer)
-            grad_scaler.step(optimizer)
-            grad_scaler.update()
-            optimizer.zero_grad()
+        grad_scaler.unscale_(optimizer)
+        grad_scaler.step(optimizer)
+        grad_scaler.update()
+        optimizer.zero_grad()
 
         step += 1
 
@@ -152,7 +158,55 @@ def single_batch_check(
                     "global_step": step,
                 },
             )
+        if iter % 20 == 0:
+            dir_path = os.path.join(configs.plot.root, configs.plot.dir_name)
+            os.makedirs(dir_path, exist_ok=True)
+            filepath = os.path.join(dir_path, f"epoch_{epoch}_sbc.png")
+            plot_fields(
+                fields=output.clone().detach(),
+                ground_truth=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+                filepath=filepath,
+            )
+            plot_fouier_transform(
+                field=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+                filepath=filepath.replace(".png", "_fft.png"),
+            )
+            quit()
     return None
+
+def plot_fourier_eps(
+    eps_map: torch.Tensor,
+    filepath: str,
+) -> None:
+    eps_map = eps_map[0]
+    eps_map0 = eps_map.cpu().numpy()
+    plt.imshow(eps_map0)
+    plt.savefig(filepath.replace(".png", "_org_eps.png"))
+    eps_map = torch.fft.fft2(eps_map)           # 2D FFT
+    eps_map = torch.fft.fftshift(eps_map)       # Shift zero frequency to center
+    eps_map = torch.abs(eps_map) 
+    eps_map = eps_map.cpu().numpy()
+    plt.imshow(eps_map)
+    plt.savefig(filepath)
+    plt.close()
+
+def plot_fouier_transform(
+    field: torch.Tensor,
+    filepath: str,
+) -> None:
+    field = field.reshape(field.shape[0], -1, 2, field.shape[-2], field.shape[-1]).permute(0, 1, 3, 4, 2).contiguous()
+    field = torch.abs(torch.view_as_complex(field)).squeeze()
+    field = field[0]
+    field0 = field.cpu().numpy()
+    plt.imshow(field0)
+    plt.savefig(filepath.replace(".png", "_org_field.png"))
+    field = torch.fft.fft2(field)           # 2D FFT
+    field = torch.fft.fftshift(field)       # Shift zero frequency to center
+    field = torch.abs(field) 
+    field = field.cpu().numpy()
+    plt.imshow(field)
+    plt.savefig(filepath)
+    plt.close()
 
 def train(
     model: nn.Module,
@@ -177,7 +231,7 @@ def train(
 
     data_counter = 0
     total_data = len(train_loader.dataset)
-    for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask) in enumerate(train_loader):
+    for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask, orgion_size, incident_field) in enumerate(train_loader):
         eps_map = eps_map.to(device, non_blocking=True)
         gradient = gradient.to(device, non_blocking=True)
         for key, field in field_solutions.items():
@@ -196,6 +250,8 @@ def train(
             fields_adj[key] = field_adj.to(device, non_blocking=True)
         for key, field_norm in field_normalizer.items():
             field_normalizer[key] = field_norm.to(device, non_blocking=True)
+        for key, field in incident_field.items():
+            incident_field[key] = field.to(device, non_blocking=True)
         # for key, design_region in design_region_mask.items():
         #     design_region_mask[key] = design_region.to(device, non_blocking=True)
 
@@ -242,11 +298,12 @@ def train(
         # plt.close()
         # quit()
 
-        with amp.autocast(enabled=grad_scaler._enabled):
+        with amp.autocast('cuda', enabled=grad_scaler._enabled):
             output = model( # now only suppose that the output is the gradient of the field
                 eps_map, 
                 src_profiles,
-                adj_srcs, 
+                adj_srcs,
+                incident_field, 
             )
             if type(output) == tuple:
                 output, aux_output = output
@@ -256,8 +313,8 @@ def train(
             # print("this is the key of the fields adj: ", fields_adj.keys())
             # print("this is the key of the field normalizer: ", field_normalizer.keys()) "field_adj_normalizer-wl-1.55-port-in_port_1-mode-1"
             # quit()
-            regression_loss = criterion(output, field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"])
-            regression_loss = regression_loss + criterion(aux_output, fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"])
+            regression_loss = criterion(output, field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], torch.ones_like(output).to(device))
+            # regression_loss = regression_loss + criterion(aux_output, fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"], torch.ones_like(aux_output).to(device))
             mse_meter.update(regression_loss.item())
             loss = regression_loss
             for name, config in aux_criterions.items():
@@ -330,7 +387,11 @@ def train(
         dir_path = os.path.join(configs.plot.root, configs.plot.dir_name)
         os.makedirs(dir_path, exist_ok=True)
         filepath = os.path.join(dir_path, f"epoch_{epoch}_train.png")
-        # TODO, this is to be implemented
+        plot_fields(
+            fields=output.clone().detach(),
+            ground_truth=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+            filepath=filepath,
+        )
 
 def validate(
     model: nn.Module,
@@ -347,7 +408,7 @@ def validate(
     val_loss = 0
     mse_meter = AverageMeter("mse")
     with torch.no_grad(), DeterministicCtx(42):
-        for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask) in enumerate(validation_loader):
+        for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask, orgion_size, incident_field) in enumerate(validation_loader):
             eps_map = eps_map.to(device, non_blocking=True)
             gradient = gradient.to(device, non_blocking=True)
             for key, field in field_solutions.items():
@@ -366,24 +427,27 @@ def validate(
                 fields_adj[key] = field_adj.to(device, non_blocking=True)
             for key, field_norm in field_normalizer.items():
                 field_normalizer[key] = field_norm.to(device, non_blocking=True)
+            for key, field in incident_field.items():
+                incident_field[key] = field.to(device, non_blocking=True)
             # for key, design_region in design_region_mask.items():
             #     design_region_mask[key] = design_region.to(device, non_blocking=True)
 
             if mixup_fn is not None:
                 eps_map, adj_src, gradient, field_solutions, s_params = mixup_fn(eps_map, adj_src, gradient, field_solutions, s_params)
 
-            with amp.autocast(enabled=False):
+            with amp.autocast('cuda', enabled=False):
                 output = model( # now only suppose that the output is the gradient of the field
                     eps_map, 
                     src_profiles,
                     adj_srcs, 
+                    incident_field, 
                 )
                 if type(output) == tuple:
                     output, aux_output = output
                 else:
                     aux_output = None
-                val_loss = criterion(output, field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"])
-                val_loss = val_loss + criterion(aux_output, fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"])
+                val_loss = criterion(output, field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], torch.ones_like(output).to(device))
+                # val_loss = val_loss + criterion(aux_output, fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"], torch.ones_like(aux_output).to(device))
             mse_meter.update(val_loss.item())
 
     loss_vector.append(mse_meter.avg)
@@ -403,7 +467,11 @@ def validate(
         dir_path = os.path.join(configs.plot.root, configs.plot.dir_name)
         os.makedirs(dir_path, exist_ok=True)
         filepath = os.path.join(dir_path, f"epoch_{epoch}_valid.png")
-        # TODO, this is to be implemented
+        plot_fields(
+            fields=output.clone().detach(),
+            ground_truth=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+            filepath=filepath,
+        )
 
 
 def test(
@@ -421,7 +489,7 @@ def test(
     val_loss = 0
     mse_meter = AverageMeter("mse")
     with torch.no_grad(), DeterministicCtx(42):
-        for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask) in enumerate(test_loader):
+        for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask, orgion_size, incident_field) in enumerate(test_loader):
             eps_map = eps_map.to(device, non_blocking=True)
             gradient = gradient.to(device, non_blocking=True)
             for key, field in field_solutions.items():
@@ -440,24 +508,27 @@ def test(
                 fields_adj[key] = field_adj.to(device, non_blocking=True)
             for key, field_norm in field_normalizer.items():
                 field_normalizer[key] = field_norm.to(device, non_blocking=True)
+            for key, field in incident_field.items():
+                incident_field[key] = field.to(device, non_blocking=True)
             # for key, design_region in design_region_mask.items():
             #     design_region_mask[key] = design_region.to(device, non_blocking=True)
 
             if mixup_fn is not None:
                 eps_map, adj_src, gradient, field_solutions, s_params = mixup_fn(eps_map, adj_src, gradient, field_solutions, s_params)
 
-            with amp.autocast(enabled=False):
+            with amp.autocast('cuda', enabled=False):
                 output = model( # now only suppose that the output is the gradient of the field
                     eps_map, 
                     src_profiles,
                     adj_srcs, 
+                    incident_field, 
                 )
                 if type(output) == tuple:
                     output, aux_output = output
                 else:
                     aux_output = None
-                val_loss = criterion(output, field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"])
-                val_loss = val_loss + criterion(aux_output, fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"])
+                val_loss = criterion(output, field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], torch.ones_like(output).to(device))
+                # val_loss = val_loss + criterion(aux_output, fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"], torch.ones_like(aux_output).to(device))
             mse_meter.update(val_loss.item())
 
     loss_vector.append(mse_meter.avg)
@@ -477,7 +548,11 @@ def test(
         dir_path = os.path.join(configs.plot.root, configs.plot.dir_name)
         os.makedirs(dir_path, exist_ok=True)
         filepath = os.path.join(dir_path, f"epoch_{epoch}_test.png")
-        # TODO, this is to be implemented
+        plot_fields(
+            fields=output.clone().detach(),
+            ground_truth=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+            filepath=filepath,
+        )
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -593,21 +668,18 @@ def main() -> None:
                 plot=configs.plot.test,
             )
         for epoch in range(1, int(configs.run.n_epochs) + 1):
-            # single_batch_check(
-            #     model,
-            #     train_loader,
-            #     optimizer,
-            #     scheduler,
-            #     criterion,
-            #     aux_criterions,
-            #     epoch,
-            #     mixup_fn,
-            #     device,
-            #     plot=False,
-            #     grad_scaler=grad_scaler,
-            #     print_info=False,
-            # )
-            # quit()
+            single_batch_check(
+                model,
+                train_loader,
+                optimizer,
+                criterion,
+                aux_criterions,
+                epoch,
+                mixup_fn,
+                device,
+                grad_scaler=grad_scaler,
+            )
+            quit()
             train(
                 model,
                 train_loader,
