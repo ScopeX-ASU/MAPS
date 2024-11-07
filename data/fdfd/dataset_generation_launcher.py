@@ -1,50 +1,42 @@
 import os
-from multiprocessing import Pool
+from multiprocessing import Pool, Queue, Manager
 import subprocess
 
-script = 'data/fdfd/generate_metacoupler.py'
+script = 'data/fdfd/generate_bending.py'
 
-def metacoupler_launcher(args):
-    rand_seed, gpu_id = args
-    env = os.environ.copy()
-    env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+def metacoupler_launcher(queue):
+    # While there are tasks in the queue, each process will fetch and execute one
+    while not queue.empty():
+        try:
+            rand_seed, gpu_id = queue.get_nowait()  # Get task in order from the queue
+            print("this is the random seed: ", rand_seed, flush=True)
+            env = os.environ.copy()
+            env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
 
-    pres = [
-        'python3',
-        script
-    ]
-    exp = [
-        f"--random_seed={rand_seed}",
-        f"--gpu_id={gpu_id}"
-        ]
-    # subprocess.call(pres + exp, stderr=wfid, stdout=wfid)
-    subprocess.call(pres + exp)
+            pres = ['python3', script]
+            exp = [f"--random_seed={rand_seed}", f"--gpu_id={gpu_id}"]
+            subprocess.call(pres + exp)
+        except Exception as e:
+            print(f"Error fetching task from queue: {e}")
 
+# Wrapper function to allow passing `queue` without using a lambda
+def worker_process(queue):
+    metacoupler_launcher(queue)
 
 if __name__ == "__main__":
-    num_gpus = 4  # Number of GPUs
-    # taskid_begin, taskid_end = (0, 20)
-    # taskid_begin, taskid_end = (20, 40)
-    # taskid_begin, taskid_end = (40, 60)
-    # taskid_begin, taskid_end = (60, 80)
-    # taskid_begin, taskid_end = (80, 100)
-    # taskid_begin, taskid_end = (100, 120)
-    # taskid_begin, taskid_end = (120, 140)
-    # taskid_begin, taskid_end = (140, 160)
-    # taskid_begin, taskid_end = (160, 180)
-    # taskid_begin, taskid_end = (180, 200)
-    # taskid_begin, taskid_end = (200, 220)
-    # taskid_begin, taskid_end = (220, 240)
-    taskid_begin, taskid_end = (240, 241)
+    num_gpus = 3  # Number of GPUs
+    # taskid_begin, taskid_end = (250, 260)
+    taskid_begin, taskid_end = (100, 1000)
 
+    # Manager's queue allows inter-process communication for tasks
+    manager = Manager()
+    queue = manager.Queue()
 
-    # Create a list of tasks, each with a random seed and corresponding GPU
-    tasks = [
-        (seed, seed % num_gpus) for seed in range(taskid_begin, taskid_end)
-    ]
-    # tasks = [
-    #     (0, 0 % num_gpus)
-    # ]
+    # Populate queue with tasks, ordered by task ID
+    for seed in range(taskid_begin, taskid_end):
+        queue.put((seed, seed % num_gpus))
 
-    with Pool(24) as p:
-        p.map(metacoupler_launcher, tasks)
+    # Use Pool(20) to allow 20 concurrent processes fetching tasks from the queue
+    with Pool(20) as p:
+        # Each process runs `metacoupler_launcher`, pulling tasks from the queue
+        p.map(worker_process, [queue] * 20)

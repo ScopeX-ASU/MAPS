@@ -11,7 +11,7 @@ import argparse
 import os
 from typing import Callable, Dict, Iterable
 import torch.amp as amp
-import mlflow
+# import mlflow
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -58,7 +58,7 @@ def single_batch_check(
     total_data = len(train_loader.dataset)
     rand_idx = len(train_loader.dataset) // train_loader.batch_size - 1
     rand_idx = random.randint(0, rand_idx)
-    for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask, orgion_size, incident_field) in enumerate(train_loader):
+    for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask, incident_field, ht_m, et_m, monitor_slices, As) in enumerate(train_loader):
         eps_map = eps_map.to(device, non_blocking=True)
         gradient = gradient.to(device, non_blocking=True)
         for key, field in field_solutions.items():
@@ -79,8 +79,36 @@ def single_batch_check(
             field_normalizer[key] = field_norm.to(device, non_blocking=True)
         for key, field in incident_field.items():
             incident_field[key] = field.to(device, non_blocking=True)
+        for key, monitor_slice in monitor_slices.items():
+            monitor_slices[key] = monitor_slice.to(device, non_blocking=True)
         # for key, design_region in design_region_mask.items():
         #     design_region_mask[key] = design_region.to(device, non_blocking=True)
+        for key, ht in ht_m.items():
+            if key.endswith("-origin_size"):
+                continue
+            else:
+                size = ht_m[key + "-origin_size"]
+                ht_list = []
+                for i in range(size.shape[0]):
+                    item_to_add = torch.view_as_real(ht[i]).permute(1, 0).unsqueeze(0)
+                    item_to_add = F.interpolate(item_to_add, size=size[i].item(), mode='linear', align_corners=True)
+                    item_to_add = item_to_add.squeeze(0).permute(1, 0).contiguous()
+                    ht_list.append(torch.view_as_complex(item_to_add).to(device, non_blocking=True))
+                ht_m[key] = ht_list
+        for key, et in et_m.items():
+            if key.endswith("-origin_size"):
+                continue
+            else:
+                size = et_m[key + "-origin_size"]
+                et_list = []
+                for i in range(size.shape[0]):
+                    item_to_add = torch.view_as_real(et[i]).permute(1, 0).unsqueeze(0)
+                    item_to_add = F.interpolate(item_to_add, size=size[i].item(), mode='linear', align_corners=True)
+                    item_to_add = item_to_add.squeeze(0).permute(1, 0).contiguous()
+                    et_list.append(torch.view_as_complex(item_to_add).to(device, non_blocking=True))
+                et_m[key] = et_list
+        for key, A in As.items():
+            As[key] = A.to(device, non_blocking=True)
 
         data_counter += eps_map.shape[0]
 
@@ -97,16 +125,11 @@ def single_batch_check(
                 adj_srcs,
                 incident_field, 
             )
-            plot_fourier_eps(eps_map, "./figs/eps_map.png")
             if type(output) == tuple:
                 output, aux_output = output
             else:
                 aux_output = None
-            # print("this is the key of the field solutions: ", field_solutions.keys())
-            # print("this is the key of the fields adj: ", fields_adj.keys())
-            # print("this is the key of the field normalizer: ", field_normalizer.keys()) "field_adj_normalizer-wl-1.55-port-in_port_1-mode-1"
-            # quit()
-            regression_loss = criterion(output, field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], torch.ones_like(output).to(device))
+            regression_loss = criterion(output[:, -2:, ...], field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], torch.ones_like(output[:, -2:, ...]).to(device))
             # regression_loss = regression_loss + criterion(aux_output, fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"], torch.ones_like(aux_output).to(device))
             mse_meter.update(regression_loss.item())
             loss = regression_loss
@@ -162,31 +185,34 @@ def single_batch_check(
             dir_path = os.path.join(configs.plot.root, configs.plot.dir_name)
             os.makedirs(dir_path, exist_ok=True)
             filepath = os.path.join(dir_path, f"epoch_{epoch}_sbc.png")
-            plot_fields(
-                fields=output.clone().detach(),
-                ground_truth=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
-                filepath=filepath,
-            )
-            plot_fouier_transform(
-                field=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
-                filepath=filepath.replace(".png", "_fft.png"),
-            )
-            quit()
+            # plot_fields(
+            #     fields=output.clone().detach(),
+            #     ground_truth=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+            #     filepath=filepath,
+            # )
+            # plot_fouier_transform(
+            #     field=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+            #     filepath=filepath.replace(".png", "_fft.png"),
+            # )
+            # quit()
     return None
 
 def plot_fourier_eps(
     eps_map: torch.Tensor,
     filepath: str,
 ) -> None:
-    eps_map = eps_map[0]
+    eps_map = 1 / eps_map[0]
     eps_map0 = eps_map.cpu().numpy()
     plt.imshow(eps_map0)
+    plt.colorbar()
     plt.savefig(filepath.replace(".png", "_org_eps.png"))
     eps_map = torch.fft.fft2(eps_map)           # 2D FFT
     eps_map = torch.fft.fftshift(eps_map)       # Shift zero frequency to center
     eps_map = torch.abs(eps_map) 
+    print_stat(eps_map)
     eps_map = eps_map.cpu().numpy()
     plt.imshow(eps_map)
+    plt.colorbar()
     plt.savefig(filepath)
     plt.close()
 
@@ -231,7 +257,7 @@ def train(
 
     data_counter = 0
     total_data = len(train_loader.dataset)
-    for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask, orgion_size, incident_field) in enumerate(train_loader):
+    for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask, incident_field, ht_m, et_m, monitor_slices, As) in enumerate(train_loader):
         eps_map = eps_map.to(device, non_blocking=True)
         gradient = gradient.to(device, non_blocking=True)
         for key, field in field_solutions.items():
@@ -252,51 +278,40 @@ def train(
             field_normalizer[key] = field_norm.to(device, non_blocking=True)
         for key, field in incident_field.items():
             incident_field[key] = field.to(device, non_blocking=True)
+        for key, monitor_slice in monitor_slices.items():
+            monitor_slices[key] = monitor_slice.to(device, non_blocking=True)
         # for key, design_region in design_region_mask.items():
         #     design_region_mask[key] = design_region.to(device, non_blocking=True)
+        for key, ht in ht_m.items():
+            if key.endswith("-origin_size"):
+                continue
+            else:
+                size = ht_m[key + "-origin_size"]
+                ht_list = []
+                for i in range(size.shape[0]):
+                    item_to_add = torch.view_as_real(ht[i]).permute(1, 0).unsqueeze(0)
+                    item_to_add = F.interpolate(item_to_add, size=size[i].item(), mode='linear', align_corners=True)
+                    item_to_add = item_to_add.squeeze(0).permute(1, 0).contiguous()
+                    ht_list.append(torch.view_as_complex(item_to_add).to(device, non_blocking=True))
+                ht_m[key] = ht_list
+        for key, et in et_m.items():
+            if key.endswith("-origin_size"):
+                continue
+            else:
+                size = et_m[key + "-origin_size"]
+                et_list = []
+                for i in range(size.shape[0]):
+                    item_to_add = torch.view_as_real(et[i]).permute(1, 0).unsqueeze(0)
+                    item_to_add = F.interpolate(item_to_add, size=size[i].item(), mode='linear', align_corners=True)
+                    item_to_add = item_to_add.squeeze(0).permute(1, 0).contiguous()
+                    et_list.append(torch.view_as_complex(item_to_add).to(device, non_blocking=True))
+                et_m[key] = et_list
+        for key, A in As.items():
+            As[key] = A.to(device, non_blocking=True)
 
         data_counter += eps_map.shape[0]
-
         if mixup_fn is not None:
             eps_map, adj_src, gradient, field_solutions, s_params = mixup_fn(eps_map, adj_src, gradient, field_solutions, s_params)
-
-        # # visualize the input data
-        # plt.imshow(eps_map[0].detach().cpu().numpy())
-        # plt.savefig(f"./figs/eps_map_{epoch}.png")
-        # plt.close()
-        # plt.imshow(gradient[0].detach().cpu().numpy())
-        # plt.savefig(f"./figs/gradient_{epoch}.png")
-        # plt.close()
-
-        # dummy_key = next(iter(src_profiles.keys()))
-        # dummy_src_profile = src_profiles[dummy_key]
-        # print("this is the shape of the src profile: ", dummy_src_profile.shape)
-        # src_profile = torch.abs(dummy_src_profile[0])
-        # plt.imshow(src_profile.abs().detach().cpu().numpy())
-        # plt.savefig(f"./figs/src_profile_{epoch}.png")
-        # plt.close()
-
-        # dummy_key = next(iter(adj_srcs.keys()))
-        # dummy_adjsrc_profile = adj_srcs[dummy_key]
-        # adjsrc_profile = torch.abs(dummy_adjsrc_profile[0])
-        # plt.imshow(adjsrc_profile.abs().detach().cpu().numpy())
-        # plt.savefig(f"./figs/adjsrc_profile_{epoch}.png")
-        # plt.close()
-
-        # dummy_key = next(iter(field_solutions.keys()))
-        # dummy_field_solution = field_solutions[dummy_key]
-        # field_solution = dummy_field_solution[0][0]
-        # plt.imshow(torch.abs(field_solution).detach().cpu().numpy())
-        # plt.savefig(f"./figs/field_solution_{epoch}.png")
-        # plt.close()
-
-        # dummy_key = next(iter(fields_adj.keys()))
-        # dummy_fields_adj = fields_adj[dummy_key]
-        # fields_adj = dummy_fields_adj[0][0]
-        # plt.imshow(torch.abs(fields_adj).detach().cpu().numpy())
-        # plt.savefig(f"./figs/fields_adj_{epoch}.png")
-        # plt.close()
-        # quit()
 
         with amp.autocast('cuda', enabled=grad_scaler._enabled):
             output = model( # now only suppose that the output is the gradient of the field
@@ -309,19 +324,43 @@ def train(
                 output, aux_output = output
             else:
                 aux_output = None
-            # print("this is the key of the field solutions: ", field_solutions.keys())
-            # print("this is the key of the fields adj: ", fields_adj.keys())
-            # print("this is the key of the field normalizer: ", field_normalizer.keys()) "field_adj_normalizer-wl-1.55-port-in_port_1-mode-1"
-            # quit()
-            regression_loss = criterion(output, field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], torch.ones_like(output).to(device))
+            regression_loss = criterion(output[:, -2:, ...], field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], torch.ones_like(output[:, -2:, ...]).to(device))
             # regression_loss = regression_loss + criterion(aux_output, fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"], torch.ones_like(aux_output).to(device))
             mse_meter.update(regression_loss.item())
             loss = regression_loss
             for name, config in aux_criterions.items():
                 aux_criterion, weight = config
-                if name == "maxwell_residual":
-                    # TODO, this is incorrect now
-                    aux_loss = weight * aux_criterion(output, gradient)
+                if name == "maxwell_residual_loss":
+                    aux_loss = weight * aux_criterion(
+                        Ez=output, 
+                        # Ez=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+                        eps_r=eps_map, 
+                        source=src_profiles["source_profile-wl-1.55-port-in_port_1-mode-1"], 
+                        target_size=eps_map.shape[-2:],
+                        As=As,
+                    )
+                elif name == "grad_loss":
+                    aux_loss = weight * aux_criterion(
+                        forward_fields=output,
+                        # forward_fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+                        backward_fields=field_solutions["field_solutions-wl-1.55-port-out_port_1-mode-1"][:, -2:, ...],
+                        adjoint_fields=aux_output,  
+                        # adjoint_fields=fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+                        backward_adjoint_fields = fields_adj['fields_adj-wl-1.55-port-in_port_1-mode-1'][:, -2:, ...],
+                        target_gradient=gradient,
+                        gradient_multiplier=field_normalizer,
+                        # dr_mask=None,
+                        dr_mask=design_region_mask,
+                    )
+                elif name == "s_param_loss":
+                    aux_loss = weight * aux_criterion(
+                        # fields=output, 
+                        fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"],
+                        ht_m=ht_m['ht_m-wl-1.55-port-out_port_1-mode-1'],
+                        et_m=et_m['et_m-wl-1.55-port-out_port_1-mode-1'],
+                        monitor_slices=monitor_slices, # 'port_slice-out_port_1_x', 'port_slice-out_port_1_y'
+                        target_SParam=s_params['s_params-fwd_trans-1.55-1'],
+                    )
                 loss = loss + aux_loss
                 aux_meters[name].update(aux_loss.item())
                 
@@ -333,9 +372,7 @@ def train(
                 loss = loss + aux_output_loss
             else:
                 aux_output_loss = None
-
         grad_scaler.scale(loss).backward()
-
         grad_scaler.unscale_(optimizer)
         grad_scaler.step(optimizer)
         grad_scaler.update()
@@ -408,7 +445,7 @@ def validate(
     val_loss = 0
     mse_meter = AverageMeter("mse")
     with torch.no_grad(), DeterministicCtx(42):
-        for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask, orgion_size, incident_field) in enumerate(validation_loader):
+        for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask, incident_field, ht_m, et_m, monitor_slices, As) in enumerate(validation_loader):
             eps_map = eps_map.to(device, non_blocking=True)
             gradient = gradient.to(device, non_blocking=True)
             for key, field in field_solutions.items():
@@ -429,8 +466,36 @@ def validate(
                 field_normalizer[key] = field_norm.to(device, non_blocking=True)
             for key, field in incident_field.items():
                 incident_field[key] = field.to(device, non_blocking=True)
+            for key, monitor_slice in monitor_slices.items():
+                monitor_slices[key] = monitor_slice.to(device, non_blocking=True)
             # for key, design_region in design_region_mask.items():
             #     design_region_mask[key] = design_region.to(device, non_blocking=True)
+            for key, ht in ht_m.items():
+                if key.endswith("-origin_size"):
+                    continue
+                else:
+                    size = ht_m[key + "-origin_size"]
+                    ht_list = []
+                    for i in range(size.shape[0]):
+                        item_to_add = torch.view_as_real(ht[i]).permute(1, 0).unsqueeze(0)
+                        item_to_add = F.interpolate(item_to_add, size=size[i].item(), mode='linear', align_corners=True)
+                        item_to_add = item_to_add.squeeze(0).permute(1, 0).contiguous()
+                        ht_list.append(torch.view_as_complex(item_to_add).to(device, non_blocking=True))
+                    ht_m[key] = ht_list
+            for key, et in et_m.items():
+                if key.endswith("-origin_size"):
+                    continue
+                else:
+                    size = et_m[key + "-origin_size"]
+                    et_list = []
+                    for i in range(size.shape[0]):
+                        item_to_add = torch.view_as_real(et[i]).permute(1, 0).unsqueeze(0)
+                        item_to_add = F.interpolate(item_to_add, size=size[i].item(), mode='linear', align_corners=True)
+                        item_to_add = item_to_add.squeeze(0).permute(1, 0).contiguous()
+                        et_list.append(torch.view_as_complex(item_to_add).to(device, non_blocking=True))
+                    et_m[key] = et_list
+            for key, A in As.items():
+                As[key] = A.to(device, non_blocking=True)
 
             if mixup_fn is not None:
                 eps_map, adj_src, gradient, field_solutions, s_params = mixup_fn(eps_map, adj_src, gradient, field_solutions, s_params)
@@ -446,7 +511,7 @@ def validate(
                     output, aux_output = output
                 else:
                     aux_output = None
-                val_loss = criterion(output, field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], torch.ones_like(output).to(device))
+                val_loss = criterion(output[:, -2:, ...], field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], torch.ones_like(output[:, -2:, ...]).to(device))
                 # val_loss = val_loss + criterion(aux_output, fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"], torch.ones_like(aux_output).to(device))
             mse_meter.update(val_loss.item())
 
@@ -489,7 +554,7 @@ def test(
     val_loss = 0
     mse_meter = AverageMeter("mse")
     with torch.no_grad(), DeterministicCtx(42):
-        for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask, orgion_size, incident_field) in enumerate(test_loader):
+        for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask, incident_field, ht_m, et_m, monitor_slices, As) in enumerate(test_loader):
             eps_map = eps_map.to(device, non_blocking=True)
             gradient = gradient.to(device, non_blocking=True)
             for key, field in field_solutions.items():
@@ -510,8 +575,36 @@ def test(
                 field_normalizer[key] = field_norm.to(device, non_blocking=True)
             for key, field in incident_field.items():
                 incident_field[key] = field.to(device, non_blocking=True)
+            for key, monitor_slice in monitor_slices.items():
+                monitor_slices[key] = monitor_slice.to(device, non_blocking=True)
             # for key, design_region in design_region_mask.items():
             #     design_region_mask[key] = design_region.to(device, non_blocking=True)
+            for key, ht in ht_m.items():
+                if key.endswith("-origin_size"):
+                    continue
+                else:
+                    size = ht_m[key + "-origin_size"]
+                    ht_list = []
+                    for i in range(size.shape[0]):
+                        item_to_add = torch.view_as_real(ht[i]).permute(1, 0).unsqueeze(0)
+                        item_to_add = F.interpolate(item_to_add, size=size[i].item(), mode='linear', align_corners=True)
+                        item_to_add = item_to_add.squeeze(0).permute(1, 0).contiguous()
+                        ht_list.append(torch.view_as_complex(item_to_add).to(device, non_blocking=True))
+                    ht_m[key] = ht_list
+            for key, et in et_m.items():
+                if key.endswith("-origin_size"):
+                    continue
+                else:
+                    size = et_m[key + "-origin_size"]
+                    et_list = []
+                    for i in range(size.shape[0]):
+                        item_to_add = torch.view_as_real(et[i]).permute(1, 0).unsqueeze(0)
+                        item_to_add = F.interpolate(item_to_add, size=size[i].item(), mode='linear', align_corners=True)
+                        item_to_add = item_to_add.squeeze(0).permute(1, 0).contiguous()
+                        et_list.append(torch.view_as_complex(item_to_add).to(device, non_blocking=True))
+                    et_m[key] = et_list
+            for key, A in As.items():
+                As[key] = A.to(device, non_blocking=True)
 
             if mixup_fn is not None:
                 eps_map, adj_src, gradient, field_solutions, s_params = mixup_fn(eps_map, adj_src, gradient, field_solutions, s_params)
@@ -527,7 +620,7 @@ def test(
                     output, aux_output = output
                 else:
                     aux_output = None
-                val_loss = criterion(output, field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], torch.ones_like(output).to(device))
+                val_loss = criterion(output[:, -2:, ...], field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], torch.ones_like(output[:, -2:, ...]).to(device))
                 # val_loss = val_loss + criterion(aux_output, fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"], torch.ones_like(aux_output).to(device))
             mse_meter.update(val_loss.item())
 
@@ -668,18 +761,18 @@ def main() -> None:
                 plot=configs.plot.test,
             )
         for epoch in range(1, int(configs.run.n_epochs) + 1):
-            single_batch_check(
-                model,
-                train_loader,
-                optimizer,
-                criterion,
-                aux_criterions,
-                epoch,
-                mixup_fn,
-                device,
-                grad_scaler=grad_scaler,
-            )
-            quit()
+            # single_batch_check(
+            #     model,
+            #     train_loader,
+            #     optimizer,
+            #     criterion,
+            #     aux_criterions,
+            #     epoch,
+            #     mixup_fn,
+            #     device,
+            #     grad_scaler=grad_scaler,
+            # )
+            # quit()
             train(
                 model,
                 train_loader,

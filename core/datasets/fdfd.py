@@ -112,7 +112,7 @@ class FDFD(VisionDataset):
         ## do not load actual data here, too slow. Just load the filenames
         all_samples = [
                 os.path.basename(i)
-                for i in glob.glob(os.path.join(self.root, self.device_type, "raw", f"{self.device_type}_*.h5"))
+                for i in glob.glob(os.path.join(self.root, self.device_type, "mfs_raw", f"{self.device_type}_*.h5"))
             ]
         total_device_id = []
         for filename in all_samples:
@@ -145,15 +145,16 @@ class FDFD(VisionDataset):
     def _preprocess_dataset(self, data_train: Tensor, data_test: Tensor) -> Tuple[Tensor, Tensor]:
         all_samples = [
                 os.path.basename(i)
-                for i in glob.glob(os.path.join(self.root, self.device_type, "raw", f"{self.device_type}_*.h5"))
+                for i in glob.glob(os.path.join(self.root, self.device_type, "mfs_raw", f"{self.device_type}_*.h5"))
             ]
         filename_train = []
         filename_test = []
         for filename in all_samples:
             device_id = filename.split("_")[1].split("-")[1]
-            if device_id in data_train:
+            opt_step = eval(filename.split("_")[-1].split(".")[0])
+            if device_id in data_train: # only take the last step
                 filename_train.append(filename)
-            elif device_id in data_test:
+            elif device_id in data_test: # only take the last step
                 filename_test.append(filename)
         return filename_train, filename_test
 
@@ -201,12 +202,12 @@ class FDFD(VisionDataset):
 
     def __getitem__(self, item):
         device_file = self.data[item]
-        with h5py.File(os.path.join(self.root, self.device_type, "raw", device_file), "r") as f:
+        with h5py.File(os.path.join(self.root, self.device_type, "mfs_raw", device_file), "r") as f:
             keys = list(f.keys())
             orgion_size = torch.from_numpy(f["eps_map"][()]).float().size()
             # eps_map = resize_to_targt_size(torch.from_numpy(f["eps_map"][()]).float(), (200, 300))
             # gradient = resize_to_targt_size(torch.from_numpy(f["gradient"][()]).float(), (200, 300))
-            eps_map = torch.from_numpy(f["eps_map"][()]).float()
+            eps_map = torch.from_numpy(f["eps_map"][()]).float().sqrt() # sqrt the eps_map to get the refractive index
             gradient = torch.from_numpy(f["gradient"][()]).float()
             field_solutions = {}
             s_params = {}
@@ -216,6 +217,10 @@ class FDFD(VisionDataset):
             fields_adj = {}
             field_normalizer = {}
             design_region_mask = {}
+            ht_m = {}
+            et_m = {}
+            monitor_slice = {}
+            As = {}
             for key in keys:
                 if key.startswith("field_solutions"):
                     field = torch.from_numpy(f[key][()])
@@ -242,7 +247,7 @@ class FDFD(VisionDataset):
                         epsilon = Si_eps(1.55)
                         lambda_0 = 1.55e-6
                         k = (2 * torch.pi / lambda_0) * torch.sqrt(torch.tensor(epsilon))
-                        x_coords = torch.arange(600).float()
+                        x_coords = torch.arange(260).float()
                         distances = torch.abs(x_coords - source_index) * resolution
                         phase_shifts = (k * distances).unsqueeze(1)
                         mode = mode * torch.exp(1j * phase_shifts)
@@ -264,7 +269,34 @@ class FDFD(VisionDataset):
                     field_normalizer[key] = torch.from_numpy(f[key][()]).float()
                 elif key.startswith("design_region_mask"):
                     design_region_mask[key] = int(f[key][()])
-        return eps_map, adj_srcs, gradient, field_solutions, s_params, src_profile, fields_adj, field_normalizer, design_region_mask, orgion_size, incident_field
+                elif key.startswith("ht_m"):
+                    ht_m[key] = torch.from_numpy(f[key][()])
+                    ht_m[key+"-origin_size"] = torch.tensor(ht_m[key].shape)
+                    ht_m[key] = torch.view_as_real(ht_m[key]).permute(1, 0).unsqueeze(0)
+                    ht_m[key] = F.interpolate(ht_m[key], size=5000, mode='linear', align_corners=True)
+                    ht_m[key] = ht_m[key].squeeze(0).permute(1, 0).contiguous()
+                    ht_m[key] = torch.view_as_complex(ht_m[key])
+                    # print("this is the dtype of the ht_m: ", ht_m[key].dtype, flush=True)
+                elif key.startswith("et_m"):
+                    et_m[key] = torch.from_numpy(f[key][()])
+                    et_m[key+"-origin_size"] = torch.tensor(et_m[key].shape)
+                    et_m[key] = torch.view_as_real(et_m[key]).permute(1, 0).unsqueeze(0)
+                    et_m[key] = F.interpolate(et_m[key], size=5000, mode='linear', align_corners=True)
+                    et_m[key] = et_m[key].squeeze(0).permute(1, 0).contiguous()
+                    et_m[key] = torch.view_as_complex(et_m[key])
+                    # print("this is the dtype of the et_m: ", et_m[key].dtype, flush=True)
+                elif key.startswith("A-"):
+                    As[key] = torch.from_numpy(f[key][()])
+                elif key.startswith("port_slice"):
+                    data = f[key][()]
+                    # print("this is the key: ", key, type(data), data, flush=True)
+                    if isinstance(data, np.ndarray) and len(data.shape) == 1:
+                        monitor_slice[key] = torch.tensor([data[0], data[-1] + 1])
+                    elif isinstance(data, np.int64):
+                        monitor_slice[key] = torch.tensor([data])
+                    else:
+                        monitor_slice[key] = torch.tensor(data)
+        return eps_map, adj_srcs, gradient, field_solutions, s_params, src_profile, fields_adj, field_normalizer, design_region_mask, incident_field, ht_m, et_m, monitor_slice, As
 
     def extra_repr(self) -> str:
         return "Split: {}".format("Train" if self.train is True else "Test")

@@ -37,7 +37,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_modes=(
                             1,
                         ),  # can evaluate on multiple output modes and get average transmission
-                        type="eigenmode",
+                        # type="eigenmode",
+                        type="flux",
                         direction="x+",
                     ),
                     bwd_trans=dict(
@@ -50,7 +51,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_modes=(
                             1,
                         ),  # can evaluate on multiple output modes and get average transmission
-                        type="eigenmode",
+                        # type="eigenmode",
+                        type="flux",
                         direction="x-",
                     ),
                     fwd_refl_trans=dict(
@@ -203,8 +205,8 @@ class MetaCouplerOptimization(BaseOptimization):
             design_region_param_cfgs[region_name] = dict(
                 method="levelset",
                 rho_resolution=[0, 50],
-                # transform=[dict(type="mirror_symmetry", dims=[1]), dict(type="blur", mfs=0.1, resolutions=[310, 310])],
-                transform=[dict(type="mirror_symmetry", dims=[1])],
+                transform=[dict(type="mirror_symmetry", dims=[1]), dict(type="blur", mfs=0.2, resolutions=[310, 310])],
+                # transform=[dict(type="mirror_symmetry", dims=[1])],
                 init_method="random",
                 binary_projection=dict(
                     fw_threshold=100,

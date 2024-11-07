@@ -43,13 +43,12 @@ def compare_designs(design_regions_1, design_regions_2):
         v1 = v
         v2 = design_regions_2[k]
         similarity.append(F.cosine_similarity(v1.flatten(), v2.flatten(), dim=0))
-    print("this is the similarity list", similarity)
     return torch.mean(torch.stack(similarity)).item()
 
 def metacoupler_opt(device_id, operation_device):
     sim_cfg = DefaultSimulationConfig()
 
-    total_height = 9
+    total_height = 6
     total_width = 6
     aperture = random.uniform(5, 7)
     aperture = int(aperture * 50) / 50
@@ -57,17 +56,19 @@ def metacoupler_opt(device_id, operation_device):
     ridge_height_max = random.uniform(0.8, 1.2)
     ridge_height_max = int(ridge_height_max * 50) / 50
     port_len = total_width - 3 * ridge_height_max
-    input_port_width = random.uniform(5, aperture)
-    input_port_width = int(input_port_width * 50) / 50
-    output_port_width = random.uniform(2.8, 3.2)
-    output_port_width = int(output_port_width * 50) / 50
+    # input_port_width = random.uniform(5, aperture)
+    # input_port_width = int(input_port_width * 50) / 50
+    input_port_width = aperture
+    # output_port_width = random.uniform(2.8, 3.2)
+    # output_port_width = int(output_port_width * 50) / 50
+    output_port_width = 3
 
     sim_cfg.update(
         dict(
             solver="ceviche_torch",
             border_width=[0, 0, border_height, border_height],
             resolution=50,
-            plot_root=f"./figs/metacoupler_{device_id}",
+            plot_root=f"./figs/mfs_metacoupler_{device_id}",
             # plot_root="./figs/metacoupler_subpixel",
             # plot_root="./figs/metacoupler_periodic",
         )
@@ -94,6 +95,7 @@ def metacoupler_opt(device_id, operation_device):
         optimizer, T_max=70, eta_min=0.0002
     )
     last_design_region_dict = None
+    # for step in range(10):
     for step in range(10):
         optimizer.zero_grad()
         results = opt.forward(sharpness=1 + 2 * step)
@@ -104,8 +106,8 @@ def metacoupler_opt(device_id, operation_device):
 
         (-results["obj"]).backward()
         current_design_region_dict = opt.get_design_region_eps_dict()
-        filename_h5 = f"./data/fdfd/metacoupler/raw/metacoupler_id-{device_id}_opt_step_{step}.h5"
-        filename_yml = f"./data/fdfd/metacoupler/raw/metacoupler_id-{device_id}.yml"
+        filename_h5 = f"./data/fdfd/metacoupler/mfs_raw/metacoupler_id-{device_id}_opt_step_{step}.h5"
+        filename_yml = f"./data/fdfd/metacoupler/mfs_raw/metacoupler_id-{device_id}.yml"
         if last_design_region_dict is None:
             opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
             last_design_region_dict = current_design_region_dict
@@ -129,7 +131,6 @@ def metacoupler_opt(device_id, operation_device):
             )
         else:
             cosine_similarity = compare_designs(last_design_region_dict, current_design_region_dict)
-            print(f"cosine similarity: {cosine_similarity}")
             if cosine_similarity < 0.998 or step == 9:
                 opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
                 last_design_region_dict = current_design_region_dict

@@ -40,6 +40,7 @@ def _transpose_symmetry(x, flag: bool = True):
     if flag:
         x_t = torch.transpose(x, 0, 1)
         x = torch.tril(x, -1) + torch.triu(x_t)
+        x = torch.rot90(x, k=3, dims=[-2, -1])
 
     return x
 
@@ -193,6 +194,7 @@ def _blur(x, mfs, res):
         mfs_px += 1 # ensure mfs is odd
     # build the kernel
     mfs_kernel = 1 - torch.abs(torch.linspace(-1, 1, steps=mfs_px, device=x.device))
+    mfs_kernel = mfs_kernel / mfs_kernel.sum() # normalize the kernel
     # x is a 2D tensor
     # convolve the kernel with the x along the second dimension
     x = F.conv1d(x.unsqueeze(1), mfs_kernel.unsqueeze(0).unsqueeze(0), padding=mfs_px//2).squeeze(1)

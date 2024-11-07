@@ -16,6 +16,10 @@ aux_criterion:
     wl_cen: 1.55
     wl_width: 0
     n_wl: 1
+  grad_loss:
+    weight: 0.0
+  s_param_loss:
+    weight: 0.0
 
 test_criterion:
   name: mse
@@ -75,7 +79,7 @@ model:
   dim: 32
   kernel_list: [64, 64, 64, 64, 64, 64]
   kernel_size_list: [1, 1, 1, 1, 1, 1]
-  hidden_list: [256]
+  hidden_list: [96]
   padding_list: [0, 0, 0, 0, 0, 0]
   mode_list: [[80, 80]]
   act_func: GELU

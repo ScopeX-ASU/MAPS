@@ -3,24 +3,24 @@ import os
 from copy import deepcopy
 from functools import lru_cache
 from typing import Callable, List, Tuple
-
-import ceviche
+from core.ceviche import ceviche
 import matplotlib.patches as patches
 import matplotlib.pylab as plt
 import numpy as np
 import torch
 from autograd import numpy as npa
-from ceviche import constants, jacobian
-from ceviche.modes import get_modes
+from core.ceviche.ceviche import constants, jacobian
+from core.ceviche.ceviche.modes import get_modes
 from meep.materials import Si, SiO2
 from pyutils.general import ensure_dir
 from scipy.ndimage import zoom
 from torch import Tensor
 from torch.types import Device
+# from core.pytorch_sparse.torch_sparse import spmm
 from torch_sparse import spmm
 from pyutils.general import print_stat
-from ceviche.primitives import sp_solve, sp_mult, spsp_mult
-from ceviche.derivatives import compute_derivative_matrices
+from core.ceviche.ceviche.primitives import sp_solve, sp_mult, spsp_mult
+from core.ceviche.ceviche.derivatives import compute_derivative_matrices
 
 __all__ = [
     "material_fn_dict",
@@ -799,9 +799,14 @@ def grid_average(e, monitor, direction: str = "x", autograd=False):
 
     if direction == "x":
         if isinstance(monitor, Slice):
-            e_monitor = (monitor[0] + np.array([[-1], [0]]), monitor[1])
+            if isinstance(monitor[0], torch.Tensor):
+                e_monitor = (monitor[0] + torch.tensor([[-1], [0]], device=monitor[0].device), monitor[1])
+                
+                e_yee_shifted = torch.mean(e[e_monitor], dim=0)
+            else:
+                e_monitor = (monitor[0] + np.array([[-1], [0]]), monitor[1])
 
-            e_yee_shifted = mean(e[e_monitor], axis=0)
+                e_yee_shifted = mean(e[e_monitor], axis=0)
         elif isinstance(monitor, np.ndarray):
             e_monitor = monitor.nonzero()
             e_monitor = (e_monitor[0], e_monitor[1] - 1)
@@ -1205,6 +1210,7 @@ class ObjectiveFunc(object):
                     in_mode=in_mode,
                     out_modes=out_modes,
                     direction=direction,
+                    name=name,
                 ):
                     s_list = []
                     ## for each wavelength, we evaluate the objective
@@ -1410,6 +1416,7 @@ class ObjectiveFunc(object):
         self, permittivity: np.ndarray | Tensor
     ) -> Tuple[dict, Tensor]:
         self.solutions = {}
+        self.As = {}
         for port_name, port_profile in self.port_profiles.items():
             for (wl, mode), (source, _, _, norm_power) in port_profile.items():
                 ## here the source is already normalized during norm_run to make sure it has target power
@@ -1422,6 +1429,7 @@ class ObjectiveFunc(object):
                     "Hy": Hy,
                     "Ez": Ez,
                 }
+                self.As[wl] = self.sims[wl].A
 
         self.breakdown = {}
         for name, obj in self.Js.items():

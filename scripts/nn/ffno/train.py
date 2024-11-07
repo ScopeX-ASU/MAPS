@@ -24,7 +24,7 @@ configs.load(config_file, recursive=True)
 
 
 def task_launcher(args):
-    mixup, device_type, alg, n_layers, id, description, gpu_id, epochs, lr, criterion, criterion_weight, maxwell_loss, checkpt, bs = args
+    mixup, device_type, alg, n_layers, modes, id, description, gpu_id, epochs, lr, criterion, criterion_weight, maxwell_loss, checkpt, bs = args
     env = os.environ.copy()
     env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
     
@@ -74,8 +74,7 @@ def task_launcher(args):
             f"--model.kernel_list={[32]*n_layers}",
             f"--model.kernel_size_list={[1]*n_layers}",
             f"--model.padding_list={[0]*n_layers}",
-            # f"--model.mode_list={[(76, 113)]*n_layers}",
-            f"--model.mode_list={[(20, 20), (20, 20), (20, 20), (20, 20), (20, 20), (20, 20), (20, 20), (20, 20)]}",
+            f"--model.mode_list={[modes]*n_layers}",
             f"--model.act_func={'GELU'}",
             f"--model.dropout_rate={0.0}",
             f"--model.drop_path_rate={0.0}",
@@ -102,7 +101,8 @@ if __name__ == '__main__':
     mlflow.set_experiment(configs.run.experiment)  # set experiments first
 
     tasks = [
-        [0.0, "metacoupler", "FFNO2d", 8, 0, "downsampling_using_conv_lessproj_cha", 0, 50, 0.005, "nmse", 1, 0, "none", 2],
+        # [0.0, "metacoupler", "FFNO2d", 8, (76, 113), 1, "full_mode", 2, 50, 0.005, "nmse", 1, 0, "none", 2],
+        [0.0, "metacoupler", "FFNO2d", 8, (30, 45), 2, "less_mode", 3, 50, 0.005, "nmse", 1, 0, "none", 2],
     ]
 
     with Pool(8) as p:

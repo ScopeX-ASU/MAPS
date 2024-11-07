@@ -25,6 +25,8 @@ import torch.nn.functional as F
 from functools import lru_cache
 from pyutils.torch_train import set_torch_deterministic
 from core.utils import resize_to_targt_size
+from core.models.fdfd.fdfd import fdfd_ez
+from ceviche.constants import *
 __all__ = ["FNO3d"]
 
 class SpatialInterpolater(nn.Module):
@@ -204,7 +206,13 @@ class FNO3d(nn.Module):
             raise ValueError(f"pos_encoding only supports linear and exp, but got {pos_encoding}")
 
         self.device = device
-
+        omega = 2 * np.pi * C_0 / (1.55 * 1e-6)
+        self.sim = fdfd_ez(
+            omega=omega,
+            dL=2e-8,
+            eps_r=torch.randn((260, 260)).to(device), # random permittivity
+            npml=(50, 50),
+        )
         self.padding = 9  # pad the domain if input is non-periodic
         self.build_layers()
 
@@ -291,6 +299,22 @@ class FNO3d(nn.Module):
         gridx, gridy = torch.meshgrid(gridx, gridy)
         mesh = torch.stack([gridy, gridx], dim=0).unsqueeze(0)  # [1, 2, h, w] real
         return mesh
+    
+    def from_Ez_to_Hx_Hy(self, eps: Tensor, Ez: Tensor) -> None:
+        # eps b, h, w
+        # Ez b, 2, h, w
+        Ez = Ez.permute(0, 2, 3, 1).contiguous()
+        Ez = torch.view_as_complex(Ez)
+        Hx = []
+        Hy = []
+        for i in range(Ez.size(0)):
+            self.sim.eps_r = eps[i]
+            Hx_vec, Hy_vec = self.sim._Ez_to_Hx_Hy(Ez[i].flatten())
+            Hx.append(torch.view_as_real(Hx_vec.reshape(Ez[i].shape)).permute(2, 0, 1))
+            Hy.append(torch.view_as_real(Hy_vec.reshape(Ez[i].shape)).permute(2, 0, 1))
+        Hx = torch.stack(Hx, 0)
+        Hy = torch.stack(Hy, 0)
+        return Hx, Hy
 
     def forward(
         self,
@@ -347,9 +371,9 @@ class FNO3d(nn.Module):
         # ------------------------------------------
 
         # calculate the hx and hy from the Ez field
-        # forward_Hx_field, forward_Hy_field = self.from_Ez_to_Hx_Hy(eps_copy, forward_Ez_field)
+        forward_Hx_field, forward_Hy_field = self.from_Ez_to_Hx_Hy(eps_copy, forward_Ez_field)
 
-        # forward_field = torch.cat((forward_Hx_field, forward_Hy_field, forward_Ez_field), dim=1)
-        adjoint_field = None
+        forward_field = torch.cat((forward_Hx_field, forward_Hy_field, forward_Ez_field), dim=1)
+        adjoint_field = torch.randn_like(forward_Ez_field).to(forward_Ez_field.device)
 
-        return forward_Ez_field, adjoint_field
+        return forward_field, adjoint_field

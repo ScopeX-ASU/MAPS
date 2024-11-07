@@ -28,6 +28,8 @@ from .utils import (
     fab_penalty_ls_gap,
     AspectRatioLoss,
     MaxwellResidualLoss,
+    GradientLoss,
+    SParamLoss,
 )
 
 __all__ = [
@@ -839,6 +841,10 @@ def make_criterion(name: str = None, cfg=None) -> nn.Module:
             wl_width=cfg.wl_width,
             n_wl=cfg.n_wl,
         )
+    elif name == "grad_loss":
+        criterion = GradientLoss()
+    elif name == "s_param_loss":
+        criterion = SParamLoss()
     else:
         raise NotImplementedError(name)
     return criterion

@@ -598,7 +598,13 @@ class N_Ports(BaseDevice):
             for k in monitor_profiles:
                 Hx, Hy, Ez = fields[k]["Hx"], fields[k]["Hy"], fields[k]["Ez"]
                 # _, ht_m, et_m, _ = monitor_profiles[k]
-
+                # print("this is the type of Hx:", type(Hx), flush=True)
+                # print("this is the type of Hy:", type(Hy), flush=True)
+                # print("this is the type of Ez:", type(Ez), flush=True)
+                # print("this is the type of ht_m:", type(ht_m), flush=True)
+                # print("this is the type of et_m:", type(et_m), flush=True)
+                # ht_m = torch.from_numpy(ht_m).to(Ez.device)
+                # et_m = torch.from_numpy(et_m).to(Ez.device)
                 # eigen_energy = get_eigenmode_coefficients(
                 #     Hx,
                 #     Hy,

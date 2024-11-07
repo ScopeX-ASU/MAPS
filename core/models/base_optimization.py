@@ -8,7 +8,7 @@ FilePath: /Metasurface-Opt/core/models/base_optimization.py
 import copy
 import os
 from typing import List, Tuple
-
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from ceviche.constants import C_0
@@ -25,6 +25,7 @@ from .utils import nparray_as_real
 import h5py
 import yaml
 from copy import deepcopy
+from core.utils import print_stat
 
 __all__ = [
     "DefaultSimulationConfig",
@@ -98,7 +99,7 @@ class DefaultOptimizationConfig(Config):
                             1,
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="eigenmode",
-                        direction="x+",
+                        direction="y+",
                     ),
                     #### objective fusion function can be customized here in obj_cfgs
                     #### the default fusion function is _sum_objectives
@@ -364,15 +365,29 @@ class BaseOptimization(nn.Module):
         with torch.no_grad():
             with h5py.File(filename_h5, 'w') as f:
                 f.create_dataset('eps_map', data=self._eps_map.detach().cpu().numpy()) # 2d numpy array
+                for slice_name, slice in self.device.port_monitor_slices.items():
+                    if isinstance(slice, np.ndarray):
+                        f.create_dataset(f'port_slice-{slice_name}', data=slice)
+                    else:
+                        f.create_dataset(f'port_slice-{slice_name}_x', data=slice.x)
+                        f.create_dataset(f'port_slice-{slice_name}_y', data=slice.y)
                 for port_name, source_profile in self.norm_run_profiles.items():
                     for (wl, mode), profile in source_profile.items():
                         if isinstance(profile[0], Tensor):
                             if profile[0].dtype in complex_type:
                                 profile[0] = profile[0].to(torch.complex64)
+                                profile[1] = profile[1].to(torch.complex64)
+                                profile[2] = profile[2].to(torch.complex64)
                             src_mode = profile[0].detach().cpu().numpy()
+                            ht_m = profile[1].detach().cpu().numpy()
+                            et_m = profile[2].detach().cpu().numpy()
                         if isinstance(profile[0], ArrayBox):
                             src_mode = profile[0]._value
+                            ht_m = profile[1]._value
+                            et_m = profile[2]._value
                         f.create_dataset(f'source_profile-wl-{wl}-port-{port_name}-mode-{mode}', data=src_mode)
+                        f.create_dataset(f'ht_m-wl-{wl}-port-{port_name}-mode-{mode}', data=ht_m)
+                        f.create_dataset(f'et_m-wl-{wl}-port-{port_name}-mode-{mode}', data=et_m)
                 for (port_name, wl, mode), fields in self.objective.solutions.items():
                     store_fields = {}
                     for key, field in fields.items():
@@ -384,6 +399,19 @@ class BaseOptimization(nn.Module):
                             store_fields[key] = fields[key]._value
                     store_fields = np.stack((store_fields["Hx"], store_fields["Hy"], store_fields["Ez"]), axis=0)
                     f.create_dataset(f'field_solutions-wl-{wl}-port-{port_name}-mode-{mode}', data=store_fields) # 3d numpy array
+                for wl, A in self.objective.As.items():
+                    Alist = []
+                    for item in A:
+                        if isinstance(item, Tensor):
+                            Alist.append(item.detach().cpu().numpy())
+                        elif isinstance(item, ArrayBox):
+                            Alist.append(item._value)
+                        elif isinstance(item, np.ndarray):
+                            Alist.append(item)
+                        else:
+                            raise ValueError(f"A is not a tensor, arraybox or numpy array, the type is {type(item)}")
+                    f.create_dataset(f'A-wl-{wl}-entries_a', data=Alist[0])
+                    f.create_dataset(f'A-wl-{wl}-indices_a', data=Alist[1])
                 for (port_name, wl, out_mode), s_params in self.objective.s_params.items():
                     store_s_params = {}
                     for key, s_param in s_params.items():

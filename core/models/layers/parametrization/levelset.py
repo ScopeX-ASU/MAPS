@@ -232,6 +232,41 @@ class LeveSetParameterization(BaseParametrization):
             weight.data.fill_(-0.2)
             weight.data[:, weight.shape[1] // 4 : 3 * weight.shape[1] // 4] = 0.05
             # weight.data += torch.randn_like(weight) * 0.01
+        elif init_method == "ring":
+            # region_cfg
+            #     design_region_cfgs["bending_region"] = dict(
+            #         type="box",
+            #         center=[0, 0],
+            #         size=box_size,
+            #         eps=eps_r_fn(wl_cen),
+            #         eps_bg=eps_bg_fn(wl_cen),
+            #     )
+            # param_cfg
+            #     design_region_param_cfgs[region_name] = dict(
+            #         method="levelset",
+            #         rho_resolution=[25, 25],
+            #         transform=[dict(type="transpose_symmetry", flag=True), dict(type="blur", mfs=0.1, resolutions=[310, 310])],
+            #         # init_method="random", # this can only converge to fwd transmission ~ 25% in TE1 mode
+            #         init_method="ring",
+            #         binary_projection=dict(
+            #             fw_threshold=100,
+            #             bw_threshold=100,
+            #             mode="regular",
+            #         ),
+            #     )
+            weight = weight_dict["ls_knots"]
+            weight.data.fill_(-0.2)
+            print("this is the shape of weight.data", weight.data.shape, flush=True) #(66, 66)
+            weight_shape = weight.data.shape
+            box_size_x = region_cfg["size"][0]
+            box_size_y = region_cfg["size"][1]
+            x_ax = torch.linspace(0, box_size_x, weight.data.shape[0], device=self.operation_device) 
+            y_ax = torch.linspace(0, box_size_y, weight.data.shape[1], device=self.operation_device)
+            x_ax, y_ax = torch.meshgrid(x_ax, y_ax)
+            r = torch.sqrt(x_ax**2 + y_ax**2)
+            half_wg_width = 0.48 / 2 # 0.48 is hard coded here since for now we only need to consider the wg that support TE1 mode
+            quater_ring_mask = torch.logical_and(r < (box_size_x / 2 + half_wg_width), r > (box_size_x / 2 - half_wg_width))
+            weight.data[quater_ring_mask] = 0.05
         else:
             raise ValueError(f"Unsupported initialization method: {init_method}")
 

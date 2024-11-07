@@ -7,6 +7,7 @@ FilePath: /Metasurface-Opt/core/models/__init__.py
 from .metalens import Metalens
 from .metamirror import MetaMirrorOptimization
 from .metacoupler import MetaCouplerOptimization
+from .bending import BendingOptimization
 from .isolator import IsolatorOptimization
 from .layers import *
 from .simplecnn import *

@@ -17,7 +17,7 @@ from ceviche.utils import make_sparse
 import numpy as np
 from pyutils.general import print_stat
 from pyMKL import pardisoSolver
-
+from core.utils import print_stat
 def coo_torch2cupy(A):
     A = A.data.coalesce()
     Avals_cp = cp.asarray(A.values())
@@ -121,7 +121,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         A_t = make_sparse(entries_a, indices_a, (eps_diag.shape[0], eps_diag.shape[0]))
         grad = grad.cpu().numpy().astype(np.complex128)
         adj_src = grad.conj()
-        if port_name != "Norm" and mode != "Norm":
+        if (port_name != "Norm" and mode != "Norm") or (port_name != "adj" and mode != "adj"):
             solver_instance.adj_src[(port_name, mode)] = torch.from_numpy(adj_src).to(torch.complex128).to(eps_diag.device)
         ## this adj_src = "-v" in ceviche
         # print_stat(adj_src, "my adjoint source")

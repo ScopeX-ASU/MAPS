@@ -16,7 +16,8 @@ from torch import Tensor
 from torch_sparse import spmm
 from typing import Callable, List, Tuple
 from ceviche.utils import get_entries_indices
-from core.models.layers.utils import get_eigenmode_coefficients
+from core.models.layers.utils import get_eigenmode_coefficients, Slice
+
 
 if TYPE_CHECKING:
     from torch.optim.optimizer import _params_t
@@ -782,6 +783,127 @@ def rip_padding(eps, pady_0, pady_1, padx_0, padx_1):
     """
     return eps[padx_0:-padx_1, pady_0:-pady_1]
 
+# class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
+#     def __init__(
+#         self,
+#         wl_cen: float = 1.55,
+#         wl_width: float = 0,
+#         n_wl: int = 1,
+#         size_average=None,
+#         reduce=None,
+#         reduction: str = "mean",
+#     ):
+#         super().__init__(size_average, reduce, reduction)
+#         self.wl_list = torch.linspace(
+#             wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl
+#         )
+#         self.omegas = 2 * np.pi * C_0 / (self.wl_list * 1e-6)
+#         self.As = (None, None)
+#         self.bs = {}
+#         self.sim = None
+
+#     def make_A(self, eps_r: torch.Tensor, wl_list: List[float]):
+#         ## eps_r: [bs, h, w] real tensor
+#         ## wl_list: [n_wl] list of wls in um, support spectral bundling
+#         eps_vec = eps_r.flatten(1)
+#         tot_entries_list = []
+#         tot_indices_list = []
+#         for eps_v in eps_vec:
+#             entries_list = []
+#             indices_list = []
+#             for wl in wl_list:
+#                 self.sim.omega = 2 * np.pi * C_0 / (wl.item() * 1e-6)
+#                 self.sim._setup_derivatives() # reset the derivatives since we changed the omega
+#                 entries_a, indices_a = self.sim._make_A(
+#                     eps_v
+#                 )  # return scipy sparse indices and values
+#                 entries_list.append(torch.from_numpy(entries_a) if isinstance(entries_a, np.ndarray) else entries_a)
+#                 indices_list.append(torch.from_numpy(indices_a) if isinstance(indices_a, np.ndarray) else indices_a)
+#             entries_list = torch.stack(entries_list, 0)
+#             indices_list = torch.stack(indices_list, 0)
+#             tot_entries_list.append(entries_list)
+#             tot_indices_list.append(indices_list)
+#         tot_entries_list = torch.stack(tot_entries_list, 0).to(
+#             eps_r.device
+#         )  # [bs, n_wl, 5*h*w]
+#         tot_indices_list = (
+#             torch.stack(tot_indices_list, 0).to(eps_r.device).long()
+#         )  # [bs, n_wl, 2, 5*h*w]
+#         self.As = (tot_entries_list, tot_indices_list)
+#         return self.As
+    
+#     def make_sim(self, eps_r: torch.Tensor):
+#         from core.models.fdfd.fdfd import fdfd_ez, My_fdfd_ez
+#         # self.sim = fdfd_ez(
+#         #     omega=2 * np.pi * C_0 / (1.55 * 1e-6), # this is just a init wl value, later will update this
+#         #     dL=2e-8,
+#         #     eps_r=eps_r[0],
+#         #     npml=(50, 50),
+#         # )
+#         self.sim = My_fdfd_ez(
+#             omega=2 * np.pi * C_0 / (1.55 * 1e-6), # this is just a init wl value, later will update this
+#             dL=2e-8,
+#             eps_r=eps_r[0],
+#             npml=(50, 50),
+#         )
+
+#     def forward(self, Ez: Tensor, eps_r: Tensor, source: Tensor, target_size, As):
+#         Ez = Ez[:, :2, :, :]
+#         Ez = resize_to_targt_size(Ez, target_size).permute(0, 2, 3, 1).contiguous()
+#         Ez = torch.view_as_complex(Ez) # convert Ez to the required complex format
+#         eps_r = resize_to_targt_size(eps_r, target_size)
+#         source = torch.view_as_real(source).permute(0, 3, 1, 2) # B, 2, H, W
+#         source = resize_to_targt_size(source, target_size).permute(0, 2, 3, 1).contiguous()
+#         source = torch.view_as_complex(source) # convert source to the required complex format
+
+#         # there is only one omega in this case
+#         Ez = Ez.unsqueeze(1)
+#         source = source.unsqueeze(1)
+
+#         ## Ez: [bs, n_wl, h, w] complex tensor
+#         ## eps_r: [bs, h, w] real tensor
+#         ## source: [bs, n_wl, h, w] complex tensor, source in sim.solve(source), not b, b = 1j * omega * source
+
+#         # step 0: build self.sim
+#         if self.sim is None:
+#             self.make_sim(eps_r=eps_r**2)
+#         # step 1: make A
+#         print("begin to make A ... ", flush=True)
+#         self.make_A(eps_r**2, self.wl_list)
+#         print("finish making A :)", flush=True)
+
+#         # step 2: calculate loss
+#         entries, indices = self.As
+#         lhs = []
+#         if self.omegas.device != source.device:
+#             self.omegas = self.omegas.to(source.device)
+#         for i in range(Ez.shape[0]): # loop over samples in a batch
+#             for j in range(Ez.shape[1]): # loop over different wavelengths
+#                 ez = Ez[i, j].flatten()
+#                 omega = 2 * np.pi * C_0 / (self.wl_list[j] * 1e-6)
+#                 entries = As[f'A-wl-{self.wl_list[j]}-entries_a'][i]
+#                 indices = As[f'A-wl-{self.wl_list[j]}-indices_a'][i]
+#                 b = source[i, j].flatten() * (1j * omega)
+#                 A_by_e = spmm(
+#                     indices[i, j],
+#                     entries[i, j],
+#                     m=ez.shape[0],
+#                     n=ez.shape[0],
+#                     matrix=ez[:, None],
+#                 )[:, 0]
+#                 lhs.append(A_by_e)
+#         lhs = torch.stack(lhs, 0)  # [bs*n_wl, h*w]
+#         b = (
+#             (source * (1j * self.omegas[None, :, None, None])).flatten(0, 1).flatten(1)
+#         )  # [bs*n_wl, h*w]
+#         difference = lhs - b
+#         difference = torch.view_as_real(difference).double()
+#         b = torch.view_as_real(b).double()
+#         # print("this is the l2 norm of the b ", torch.norm(b, p=2, dim=(-2, -1)), flush=True) # ~e+22
+#         loss = (torch.norm(difference, p=2, dim=(-2, -1)) / (torch.norm(b, p=2, dim=(-2, -1)) + 1e-6)).mean()
+#         return loss
+
+
 class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
     def __init__(
         self,
@@ -797,95 +919,54 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
             wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl
         )
         self.omegas = 2 * np.pi * C_0 / (self.wl_list * 1e-6)
-        self.As = (None, None)
-        self.bs = {}
 
-    def make_A(self, eps_r: torch.Tensor, wl_list: List[float]):
-        ## eps_r: [bs, h, w] real tensor
-        ## wl_list: [n_wl] list of wls in um, support spectral bundling
-        eps_vec = eps_r.flatten(1)
-        tot_entries_list = []
-        tot_indices_list = []
-        for eps_v in eps_vec:
-            entries_list = []
-            indices_list = []
-            for wl in wl_list:
-                self.sim.omega = 2 * np.pi * C_0 / (wl.item() * 1e-6)
-                self.sim._setup_derivatives() # reset the derivatives since we changed the omega
-                entries_a, indices_a = self.sim._make_A(
-                    eps_v
-                )  # return scipy sparse indices and values
-                entries_list.append(torch.from_numpy(entries_a))
-                indices_list.append(torch.from_numpy(indices_a))
-            entries_list = torch.stack(entries_list, 0)
-            indices_list = torch.stack(indices_list, 0)
-            tot_entries_list.append(entries_list)
-            tot_indices_list.append(indices_list)
-        tot_entries_list = torch.stack(tot_entries_list, 0).to(
-            eps_r.device
-        )  # [bs, n_wl, 5*h*w]
-        tot_indices_list = (
-            torch.stack(tot_indices_list, 0).to(eps_r.device).long()
-        )  # [bs, n_wl, 2, 5*h*w]
-        self.As = (tot_entries_list, tot_indices_list)
-        return self.As
-    
-    def make_sim(self, eps_r: torch.Tensor):
-        from core.models.fdfd.fdfd import fdfd_ez
-        self.sim = fdfd_ez(
-            omega=2 * np.pi * C_0 / (1.55 * 1e-6), # this is just a init wl value, later will update this
-            dl=2e-8,
-            NPML=50,
-            eps_r=eps_r[0],
-        )
-
-    def forward(self, Ez: Tensor, eps_r: Tensor, source: Tensor, target_size):
+    def forward(self, Ez: Tensor, eps_r: Tensor, source: Tensor, target_size, As):
         Ez = Ez[:, :2, :, :]
-        Ez = resize_to_targt_size(Ez, target_size).permute(0, 2, 3, 1)
+        Ez = Ez.permute(0, 2, 3, 1).contiguous()
         Ez = torch.view_as_complex(Ez) # convert Ez to the required complex format
-        eps_r = resize_to_targt_size(eps_r, target_size)
         source = torch.view_as_real(source).permute(0, 3, 1, 2) # B, 2, H, W
-        source = resize_to_targt_size(source, target_size).permute(0, 2, 3, 1)
+        source = source.permute(0, 2, 3, 1).contiguous()
         source = torch.view_as_complex(source) # convert source to the required complex format
+
+        # there is only one omega in this case
+        Ez = Ez.unsqueeze(1)
+        source = source.unsqueeze(1)
 
         ## Ez: [bs, n_wl, h, w] complex tensor
         ## eps_r: [bs, h, w] real tensor
         ## source: [bs, n_wl, h, w] complex tensor, source in sim.solve(source), not b, b = 1j * omega * source
 
-        # step 0: build self.sim
-        self.make_sim(eps_r=eps_r)
-
-        # step 1: make A
-        self.make_A(eps_r, self.wl_list)
-
         # step 2: calculate loss
-        entries, indices = self.As
         lhs = []
         if self.omegas.device != source.device:
             self.omegas = self.omegas.to(source.device)
-        b = (
-            (source * (1j * self.omegas[None, :, None, None])).flatten(0, 1).flatten(1)
-        )  # [bs*n_wl, h*w]
-        for i in range(Ez.shape[0]):
-            for j in range(Ez.shape[1]):
+        for i in range(Ez.shape[0]): # loop over samples in a batch
+            for j in range(Ez.shape[1]): # loop over different wavelengths
                 ez = Ez[i, j].flatten()
                 omega = 2 * np.pi * C_0 / (self.wl_list[j] * 1e-6)
-
+                wl = round(self.wl_list[j].item()*100)/100
+                entries = As[f'A-wl-{wl}-entries_a'][i]
+                indices = As[f'A-wl-{wl}-indices_a'][i]
                 b = source[i, j].flatten() * (1j * omega)
                 A_by_e = spmm(
-                    indices[i, j],
-                    entries[i, j],
+                    indices,
+                    entries,
                     m=ez.shape[0],
                     n=ez.shape[0],
                     matrix=ez[:, None],
                 )[:, 0]
                 lhs.append(A_by_e)
         lhs = torch.stack(lhs, 0)  # [bs*n_wl, h*w]
-
-        loss = torch.nn.functional.mse_loss(lhs, b, reduction=self.reduction)
-
+        b = (
+            (source * (1j * self.omegas[None, :, None, None])).flatten(0, 1).flatten(1)
+        )  # [bs*n_wl, h*w]
+        difference = lhs - b
+        difference = torch.view_as_real(difference).double()
+        b = torch.view_as_real(b).double()
+        # print("this is the l2 norm of the b ", torch.norm(b, p=2, dim=(-2, -1)), flush=True) # ~e+22
+        loss = (torch.norm(difference, p=2, dim=(-2, -1)) / (torch.norm(b, p=2, dim=(-2, -1)) + 1e-6)).mean()
         return loss
-    
+
 class SParamLoss(torch.nn.modules.loss._Loss):
 
     def __init__(self, reduce="mean"):
@@ -893,16 +974,155 @@ class SParamLoss(torch.nn.modules.loss._Loss):
 
         self.reduce = reduce
 
-    def forward(self, Ez, mode, target_size, target_SParam):
+    def forward(
+        self, 
+        fields, # bs, 3, H, W, complex
+        ht_m,
+        et_m,
+        monitor_slices,
+        target_SParam
+    ):
         # Step 1: Resize all the fields to the target size
-        Ez = Ez[:, :2, :, :]
-        Ez = resize_to_targt_size(Ez, target_size).permute(0, 2, 3, 1)
+        Ez = fields[:, -2:, :, :].permute(0, 2, 3, 1).contiguous()
         Ez = torch.view_as_complex(Ez) # convert Ez to the required complex format
 
-        mode = torch.view_as_real(mode).permute(0, 3, 1, 2) # B, 2, H, W
-        mode = resize_to_targt_size(mode, target_size).permute(0, 2, 3, 1)
-        mode = torch.view_as_complex(mode) # convert mode to the required complex format
-        # Stpe 2: Calculate the S-parameters
+        Hx = fields[:, :2, :, :].permute(0, 2, 3, 1).contiguous()
+        Hx = torch.view_as_complex(Hx)
 
+        Hy = fields[:, 2:4, :, :].permute(0, 2, 3, 1).contiguous()
+        Hy = torch.view_as_complex(Hy)
+
+        monitor_slices_x = monitor_slices["port_slice-out_port_1_x"]
+        monitor_slices_y = monitor_slices["port_slice-out_port_1_y"]
+
+        # print("this is the monitor_slices_x", monitor_slices_x, flush=True)
+        # print("this is the monitor_slices_y", monitor_slices_y, flush=True)
+        ## Hx, Hy, Ez: [bs, h, w] complex tensor
+        # Stpe 2: Calculate the S-parameters
+        batch_size = Ez.shape[0]
+        s_params = []
+        for i in range(batch_size):
+            monitor_slice = Slice(
+                y=monitor_slices_y[i],
+                x=torch.arange(
+                    monitor_slices_x[i][0],
+                    monitor_slices_x[i][1],
+                ),
+            )
+            # ht_m and et_m are lists
+            s_p, s_m = get_eigenmode_coefficients(
+                hx=Hx[i],
+                hy=Hy[i],
+                ez=Ez[i],
+                ht_m=ht_m[i],
+                et_m=et_m[i],
+                monitor=monitor_slice,
+                grid_step=1/50,
+                direction="x",
+                autograd=True,
+                energy=True,
+            )
+            s_params.append(torch.tensor([s_p, s_m], device=Ez.device))
+        s_params = torch.stack(s_params, 0)
+        s_params_diff = s_params - target_SParam
+        print("this is the target_SParam", target_SParam, flush=True)
+        print("this is the s_params", s_params, flush=True)
         # Step 3: Calculate the loss
-        pass
+        # print("this is the l2 norm of the target_SParam ", torch.norm(target_SParam, p=2, dim=-1), flush=True) ~e-9
+        loss = (torch.norm(s_params_diff, p=2, dim=-1) / (torch.norm(target_SParam, p=2, dim=-1) + 1e-12)).mean()
+        return loss
+    
+class GradientLoss(torch.nn.modules.loss._Loss):
+
+    def __init__(self, reduce="mean"):
+        super(GradientLoss, self).__init__()
+
+        self.reduce = reduce
+
+    def forward(
+        self, 
+        forward_fields,
+        backward_fields,
+        adjoint_fields,  
+        backward_adjoint_fields,
+        target_gradient,
+        gradient_multiplier,
+        dr_mask = None,
+    ):
+        # forward_fields_ez = forward_fields[:, -2:, :, :] # the forward fields has three components, we only need the Ez component
+        # forward_fields_ez = torch.view_as_complex(forward_fields_ez.permute(0, 2, 3, 1).contiguous())
+        # backward_fields_ez = backward_fields[:, -2:, :, :]
+        # backward_fields_ez = torch.view_as_complex(backward_fields_ez.permute(0, 2, 3, 1).contiguous())
+        # adjoint_fields = torch.view_as_complex(adjoint_fields.permute(0, 2, 3, 1).contiguous()) # adjoint fields only Ez 
+        # backward_adjoint_fields = torch.view_as_complex(backward_adjoint_fields.permute(0, 2, 3, 1).contiguous()) # adjoint fields only Ez
+        # gradient = -(adjoint_fields*forward_fields_ez).real
+        # backward_gradient = -(backward_adjoint_fields*backward_fields_ez).real
+        # batch_size = gradient.shape[0]
+        # for i in range(batch_size):
+        #     gradient[i] = gradient[i] / gradient_multiplier["field_adj_normalizer-wl-1.55-port-in_port_1-mode-1"][i]
+        #     backward_gradient[i] = backward_gradient[i] / gradient_multiplier["field_adj_normalizer-wl-1.55-port-out_port_1-mode-1"][i]
+        # # Step 0: build one_mask from dr_mask
+        # ## This is not correct
+        # # need to build a design region mask whose size shold be b, H, W
+        # if dr_mask is not None:
+        #     dr_masks = []
+        #     for i in range(batch_size):
+        #         mask = torch.zeros_like(gradient[i]).to(gradient.device)
+        #         for key, value in dr_mask.items():
+        #             if key.endswith("x_start"):
+        #                 x_start = value[i]
+        #             elif key.endswith("x_stop"):
+        #                 x_stop = value[i]
+        #             elif key.endswith("y_start"):
+        #                 y_start = value[i]
+        #             elif key.endswith("y_stop"):
+        #                 y_stop = value[i]
+        #             else:
+        #                 raise ValueError(f"Invalid key: {key}")
+        #         mask[x_start:x_stop, y_start:y_stop] = 1
+        #         dr_masks.append(mask)
+        #     dr_masks = torch.stack(dr_masks, 0)
+        # else:
+        #     dr_masks = torch.ones_like(gradient)
+        
+        # x = - EPSILON_0 * (2 * torch.pi * C_0 / (1.55 * 1e-6))**2 * (gradient + backward_gradient)
+        # y = target_gradient
+        # error_energy = torch.norm((x - y) * dr_masks, p=2, dim=(-1, -2))
+        # field_energy = torch.norm(y * dr_masks, p=2, dim=(-1, -2)) + 1e-6
+        # return (error_energy / field_energy).mean()
+        forward_fields_ez = forward_fields[:, -2:, :, :] # the forward fields has three components, we only need the Ez component
+        forward_fields_ez = torch.view_as_complex(forward_fields_ez.permute(0, 2, 3, 1).contiguous())
+        adjoint_fields = torch.view_as_complex(adjoint_fields.permute(0, 2, 3, 1).contiguous()) # adjoint fields only Ez 
+        gradient = -(adjoint_fields*forward_fields_ez).real
+        batch_size = gradient.shape[0]
+        for i in range(batch_size):
+            gradient[i] = gradient[i] / gradient_multiplier["field_adj_normalizer-wl-1.55-port-in_port_1-mode-1"][i]
+        # Step 0: build one_mask from dr_mask
+        ## This is not correct
+        # need to build a design region mask whose size shold be b, H, W
+        if dr_mask is not None:
+            dr_masks = []
+            for i in range(batch_size):
+                mask = torch.zeros_like(gradient[i]).to(gradient.device)
+                for key, value in dr_mask.items():
+                    if key.endswith("x_start"):
+                        x_start = value[i]
+                    elif key.endswith("x_stop"):
+                        x_stop = value[i]
+                    elif key.endswith("y_start"):
+                        y_start = value[i]
+                    elif key.endswith("y_stop"):
+                        y_stop = value[i]
+                    else:
+                        raise ValueError(f"Invalid key: {key}")
+                mask[x_start:x_stop, y_start:y_stop] = 1
+                dr_masks.append(mask)
+            dr_masks = torch.stack(dr_masks, 0)
+        else:
+            dr_masks = torch.ones_like(gradient)
+        
+        x = - EPSILON_0 * (2 * torch.pi * C_0 / (1.55 * 1e-6))**2 * (gradient)
+        y = target_gradient
+        error_energy = torch.norm((x - y) * dr_masks, p=2, dim=(-1, -2))
+        field_energy = torch.norm(y * dr_masks, p=2, dim=(-1, -2)) + 1e-6
+        return (error_energy / field_energy).mean()
