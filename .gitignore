@@ -162,9 +162,9 @@ cython_debug/
 #.idea/
 
 *.h5
-/data/fdfd/metacoupler/*.yml
 *.json
 *.pt
 /wandb/*
 /data/fdfd/metacoupler/*
+/data/fdfd/bending/*
 /plot/*
