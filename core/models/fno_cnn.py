@@ -18,8 +18,10 @@ from torch import nn
 from torch.functional import Tensor
 from torch.types import Device
 from neuralop.models import FNO
+
 # from .layers.local_fno import FNO
 from .constant import *
+
 # from .layers.fno_conv2d import FNOConv2d
 import torch.nn.functional as F
 from functools import lru_cache
@@ -27,14 +29,16 @@ from pyutils.torch_train import set_torch_deterministic
 from core.utils import resize_to_targt_size
 from core.models.fdfd.fdfd import fdfd_ez
 from ceviche.constants import *
+
 __all__ = ["FNO3d"]
+
 
 class SpatialInterpolater(nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
     def forward(self, x: Tensor) -> Tensor:
-        x = F.interpolate(x, scale_factor=(2, 2), mode='bilinear', align_corners=False)
+        x = F.interpolate(x, scale_factor=(2, 2), mode="bilinear", align_corners=False)
         return x
 
 
@@ -80,6 +84,7 @@ class ConvBlock(nn.Module):
             x = self.act_func(x)
         return x
 
+
 class LayerNorm(nn.Module):
     r"""LayerNorm implementation used in ConvNeXt
     LayerNorm that supports two data formats: channels_last (default) or channels_first.
@@ -91,7 +96,7 @@ class LayerNorm(nn.Module):
     def __init__(
         self,
         normalized_shape,
-        dim = 2,
+        dim=2,
         eps=1e-6,
         data_format="channels_last",
         reshape_last_to_first=False,
@@ -117,7 +122,10 @@ class LayerNorm(nn.Module):
             s = (x - u).pow(2).mean(1, keepdim=True)
             x = (x - u) / torch.sqrt(s + self.eps)
             if self.dim == 3:
-                x = self.weight[:, None, None, None] * x + self.bias[:, None, None, None] # add one extra dimension to match conv2d but not 2d
+                x = (
+                    self.weight[:, None, None, None] * x
+                    + self.bias[:, None, None, None]
+                )  # add one extra dimension to match conv2d but not 2d
             elif self.dim == 2:
                 x = self.weight[:, None, None] * x + self.bias[:, None, None]
             return x
@@ -182,7 +190,7 @@ class FNO3d(nn.Module):
         self.hidden_list = hidden_list
         self.mode_list = mode_list
         self.act_func = act_func
-      
+
         self.dropout_rate = dropout_rate
         self.drop_path_rate = drop_path_rate
 
@@ -203,14 +211,16 @@ class FNO3d(nn.Module):
         elif pos_encoding in {"exp_full", "exp_full_r"}:
             self.in_channels += 7
         else:
-            raise ValueError(f"pos_encoding only supports linear and exp, but got {pos_encoding}")
+            raise ValueError(
+                f"pos_encoding only supports linear and exp, but got {pos_encoding}"
+            )
 
         self.device = device
         omega = 2 * np.pi * C_0 / (1.55 * 1e-6)
         self.sim = fdfd_ez(
             omega=omega,
             dL=2e-8,
-            eps_r=torch.randn((260, 260)).to(device), # random permittivity
+            eps_r=torch.randn((260, 260)).to(device),  # random permittivity
             npml=(50, 50),
         )
         self.padding = 9  # pad the domain if input is non-periodic
@@ -220,16 +230,16 @@ class FNO3d(nn.Module):
         self.stem = nn.Sequential(
             ConvBlock(
                 self.in_channels,
-                self.hidden_list[0],
-                kernel_size=5,
-                padding=2,
-                stride=2,
+                self.hidden_list[0] // 4,
+                kernel_size=3,
+                padding=1,
+                stride=1,
                 act_func=self.act_func,
                 device=self.device,
             ),
             ConvBlock(
-                self.hidden_list[0],
-                self.hidden_list[0],
+                self.hidden_list[0] // 4,
+                self.hidden_list[0] // 2,
                 kernel_size=5,
                 padding=2,
                 stride=2,
@@ -237,26 +247,83 @@ class FNO3d(nn.Module):
                 device=self.device,
             ),
         )
-        print("this is the mode to pass to the FNO", self.mode1, self.mode2, flush=True)
-        self.head = FNO(
-            n_modes=(self.mode1, self.mode2),
-            # in_channels=self.in_channels,
-            in_channels=self.hidden_list[0],
-            out_channels=self.out_channels,
-            lifting_channels=self.hidden_list[-1],
-            projection_channels=96,
-            hidden_channels=self.hidden_list[-1],
-            n_layers=4,
-            norm=None,
-            factorization=None,
+        self.stages = nn.ModuleList()
+        hidden_dim = self.hidden_list[-1] // 2
+        self.stages.append(
+            FNO(
+                n_modes=(self.mode1*2, self.mode2*2),
+                in_channels=hidden_dim,
+                out_channels=hidden_dim,
+                lifting_channels=hidden_dim,
+                projection_channels=hidden_dim,
+                hidden_channels=hidden_dim,
+                n_layers=2,
+                norm=None,
+                factorization=None,
+            )
         )
+        hidden_dim = self.hidden_list[-1]
+        self.stages.append(
+            nn.Sequential(
+                ConvBlock(
+                hidden_dim // 2,
+                hidden_dim,
+                kernel_size=2,
+                padding=1,
+                stride=2,
+                act_func=None,
+                device=self.device,
+            ),
+            FNO(
+                n_modes=(self.mode1, self.mode2),
+                in_channels=hidden_dim,
+                out_channels=hidden_dim,
+                lifting_channels=hidden_dim,
+                projection_channels=hidden_dim,
+                hidden_channels=hidden_dim,
+                n_layers=2,
+                norm=None,
+                factorization=None,
+            ),
+
+            )
+        )
+
+        self.head = ConvBlock(
+            hidden_dim // 2+hidden_dim,
+            self.out_channels,
+            kernel_size=1,
+            padding=0,
+            ln=False,
+            act_func=None,
+            device=self.device,
+        )
+
+        # print("this is the mode to pass to the FNO", self.mode1, self.mode2, flush=True)
+        # self.head = FNO(
+        #     n_modes=(self.mode1, self.mode2),
+        #     # in_channels=self.in_channels,
+        #     in_channels=self.hidden_list[0],
+        #     out_channels=self.out_channels,
+        #     lifting_channels=self.hidden_list[-1],
+        #     projection_channels=96,
+        #     hidden_channels=self.hidden_list[-1],
+        #     n_layers=4,
+        #     norm=None,
+        #     factorization=None,
+        # )
 
         if self.aux_head:
             hidden_list = [self.kernel_list[self.aux_head_idx]] + self.hidden_list
             head = [
                 nn.Sequential(
                     ConvBlock(
-                        inc, outc, kernel_size=1, padding=0, act_func=self.act_func, device=self.device
+                        inc,
+                        outc,
+                        kernel_size=1,
+                        padding=0,
+                        act_func=self.act_func,
+                        device=self.device,
                     ),
                     nn.Dropout2d(self.dropout_rate),
                 )
@@ -299,7 +366,7 @@ class FNO3d(nn.Module):
         gridx, gridy = torch.meshgrid(gridx, gridy)
         mesh = torch.stack([gridy, gridx], dim=0).unsqueeze(0)  # [1, 2, h, w] real
         return mesh
-    
+
     def from_Ez_to_Hx_Hy(self, eps: Tensor, Ez: Tensor) -> None:
         # eps b, h, w
         # Ez b, 2, h, w
@@ -321,18 +388,24 @@ class FNO3d(nn.Module):
         eps,
         src,
         adj_src,
-        incident_field, 
+        incident_field,
     ):
         # src and adj_src are all complex numbers tensor
         src = src["source_profile-wl-1.55-port-in_port_1-mode-1"]
         adj_src = adj_src["adj_src-wl-1.55-port-in_port_1-mode-1"]
         incident_field = incident_field["incident_field-wl-1.55-port-in_port_1-mode-1"]
-        src = torch.view_as_real(src).permute(0, 3, 1, 2) # B, 2, H, W
+        src = torch.view_as_real(src).permute(0, 3, 1, 2)  # B, 2, H, W
         src = src / (torch.abs(src).amax(dim=(1, 2, 3), keepdim=True) + 1e-6)
-        adj_src = torch.view_as_real(adj_src).permute(0, 3, 1, 2) # B, 2, H, W
-        adj_src = adj_src / (torch.abs(adj_src).amax(dim=(1, 2, 3), keepdim=True) + 1e-6)
-        incident_field = torch.view_as_real(incident_field).permute(0, 3, 1, 2) # B, 2, H, W
-        incident_field = incident_field / (torch.abs(incident_field).amax(dim=(1, 2, 3), keepdim=True) + 1e-6)
+        adj_src = torch.view_as_real(adj_src).permute(0, 3, 1, 2)  # B, 2, H, W
+        adj_src = adj_src / (
+            torch.abs(adj_src).amax(dim=(1, 2, 3), keepdim=True) + 1e-6
+        )
+        incident_field = torch.view_as_real(incident_field).permute(
+            0, 3, 1, 2
+        )  # B, 2, H, W
+        incident_field = incident_field / (
+            torch.abs(incident_field).amax(dim=(1, 2, 3), keepdim=True) + 1e-6
+        )
 
         # plt.figure()
         # plt.imshow(incident_field[0][0].detach().cpu().numpy())
@@ -346,8 +419,11 @@ class FNO3d(nn.Module):
         # quit()
 
         eps_copy = eps.clone()
-        eps = 1 / eps # take the inverse of the permittivity to easy the training difficulty
-        eps = eps.unsqueeze(1) # B, 1, H, W
+        # eps = (
+        #     1 / eps
+        # )  # take the inverse of the permittivity to easy the training difficulty
+        eps = eps / 12.11
+        eps = eps.unsqueeze(1)  # B, 1, H, W
 
         # -----------this is before ----------------
         # eps = torch.cat((eps, eps), dim=0)
@@ -362,8 +438,22 @@ class FNO3d(nn.Module):
         # -----------this is after ----------------
         x = torch.cat((eps, incident_field), dim=1)
         x = self.stem(x)
+        x1 = self.stages[0](x)
+        x2 = self.stages[1](x1)
+        x1 = resize_to_targt_size(
+            x1, (src.shape[-2], src.shape[-1])
+        )
+        x2 = resize_to_targt_size(
+            x2, (src.shape[-2], src.shape[-1])
+        )
+        x = torch.cat((x1, x2), dim=1)
         forward_Ez_field = self.head(x)
-        forward_Ez_field = resize_to_targt_size(forward_Ez_field, (src.shape[-2], src.shape[-1]))
+
+
+        # forward_Ez_field = self.head(x)
+        # forward_Ez_field = resize_to_targt_size(
+        #     forward_Ez_field, (src.shape[-2], src.shape[-1])
+        # )
         if len(forward_Ez_field.shape) == 3:
             forward_Ez_field = forward_Ez_field.unsqueeze(0)
         # feature = self.features(x)
@@ -371,9 +461,13 @@ class FNO3d(nn.Module):
         # ------------------------------------------
 
         # calculate the hx and hy from the Ez field
-        forward_Hx_field, forward_Hy_field = self.from_Ez_to_Hx_Hy(eps_copy, forward_Ez_field)
+        forward_Hx_field, forward_Hy_field = self.from_Ez_to_Hx_Hy(
+            eps_copy, forward_Ez_field
+        )
 
-        forward_field = torch.cat((forward_Hx_field, forward_Hy_field, forward_Ez_field), dim=1)
+        forward_field = torch.cat(
+            (forward_Hx_field, forward_Hy_field, forward_Ez_field), dim=1
+        )
         adjoint_field = torch.randn_like(forward_Ez_field).to(forward_Ez_field.device)
 
         return forward_field, adjoint_field

@@ -3,7 +3,7 @@ Description:
 Author: Jiaqi Gu (jqgu@utexas.edu)
 Date: 2022-02-22 02:32:47
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-04-13 15:54:53
+LastEditTime: 2024-11-07 17:14:07
 '''
 import os
 import subprocess
@@ -97,8 +97,8 @@ if __name__ == '__main__':
         # [0.0, "metacoupler", "FNO3d", 30, 45, 8, "less_mode", 1, 50, 0.002, "nmse", 1, 0, "none", 2],
         # [0.0, "metacoupler", "FNO3d", 30, 45, 9, "less_mode_ripped_dataset", 2, 50, 0.002, "nmse", 1, 0, "none", 2],
         # [0.0, "metacoupler", "FNO3d", 30, 45, 10, "less_mode_maxwell_loss", 0, 50, 0.002, "nmse", 1, 0.0, 0.0, 0.5, "none", 2],
-        [0.0, "bending", "FNO3d", 30, 45, 0, "plain", 0, 50, 0.002, "nmse", 1, 0.0, 0.0, 0.0, "none", 2],
-        [0.0, "bending", "FNO3d", 30, 45, 1, "plain_maxwell", 1, 50, 0.002, "nmse", 1, 0.1, 0.0, 0.0, "none", 2],
+        [0.0, "bending", "FNO3d", 33, 66, 0, "plain", 0, 50, 0.002, "nmse", 1, 0.0, 0.0, 0.0, "none", 2],
+        # [0.0, "bending", "FNO3d", 30, 45, 1, "plain_maxwell", 1, 50, 0.002, "nmse", 1, 0.1, 0.0, 0.0, "none", 2],
         # [0.0, "bending", "FNO3d", 30, 45, 2, "plain_gradient", 2, 50, 0.002, "nmse", 1, 0.0, 0.1, 0.0, "none", 2],
         # [0.0, "bending", "FNO3d", 30, 45, 3, "plain_s_param", 3, 50, 0.002, "nmse", 1, 0.0, 0.0, 0.1, "none", 2],
     ]
