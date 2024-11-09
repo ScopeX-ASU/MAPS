@@ -761,18 +761,18 @@ def main() -> None:
                 plot=configs.plot.test,
             )
         for epoch in range(1, int(configs.run.n_epochs) + 1):
-            single_batch_check(
-                model,
-                train_loader,
-                optimizer,
-                criterion,
-                aux_criterions,
-                epoch,
-                mixup_fn,
-                device,
-                grad_scaler=grad_scaler,
-            )
-            quit()
+            # single_batch_check(
+            #     model,
+            #     train_loader,
+            #     optimizer,
+            #     criterion,
+            #     aux_criterions,
+            #     epoch,
+            #     mixup_fn,
+            #     device,
+            #     grad_scaler=grad_scaler,
+            # )
+            # quit()
             train(
                 model,
                 train_loader,

@@ -23,7 +23,19 @@ def real(val, outline=None, ax=None, cbar=False, cmap='RdBu', outline_alpha=0.5)
     
     return ax
 
-def abs(val, outline=None, ax=None, cbar=False, cmap='magma', outline_alpha=0.5, outline_val=None):
+def add_colorbar(mappable):
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+    import matplotlib.pyplot as plt
+    last_axes = plt.gca()
+    ax = mappable.axes
+    fig = ax.figure
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="5%", pad=0.17)
+    cbar = fig.colorbar(mappable, cax=cax)
+    plt.sca(last_axes)
+    return cbar
+
+def abs(val, outline=None, ax=None, cbar=False, cmap='magma', outline_alpha=0.5, outline_val=None, alpha=1):
     """Plots the absolute value of 'val', optionally overlaying an outline of 'outline'
     """
     
@@ -31,7 +43,7 @@ def abs(val, outline=None, ax=None, cbar=False, cmap='magma', outline_alpha=0.5,
         fig, ax = plt.subplots(1, 1, constrained_layout=True)      
     
     vmax = np.abs(val).max()
-    h = ax.imshow(np.abs(val.T), cmap=cmap, origin='lower', vmin=0, vmax=vmax)
+    h = ax.imshow(np.abs(val.T), cmap=cmap, origin='lower', vmin=0, vmax=vmax, alpha=alpha)
     
     if outline_val is None and outline is not None: outline_val = 0.5*(outline.min()+outline.max())
     if outline is not None:
@@ -39,7 +51,11 @@ def abs(val, outline=None, ax=None, cbar=False, cmap='magma', outline_alpha=0.5,
     
     ax.set_ylabel('y')
     ax.set_xlabel('x')
+    # divider = make_axes_locatable(ax)
+    # cax = divider.append_axes("right", size="5%", pad=0.15)
+    # if cbar:
+    #     plt.colorbar(h, cax=cax)
     if cbar:
-        plt.colorbar(h, ax=ax)
+        add_colorbar(h)
     
     return ax

@@ -13,3 +13,4 @@ from .metamirror import *
 from .metacoupler import *
 from .isolator import *
 from .bending import *
+from .etchmmi import *

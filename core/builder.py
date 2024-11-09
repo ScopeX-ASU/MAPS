@@ -30,6 +30,7 @@ from .utils import (
     MaxwellResidualLoss,
     GradientLoss,
     SParamLoss,
+    ComplexL1Loss,
 )
 
 __all__ = [
@@ -662,6 +663,8 @@ def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
             with_cp=configs.model.with_cp,
             mode1=configs.model.mode1,
             mode2=configs.model.mode2,
+            fourier_feature=configs.model.fourier_feature,
+            mapping_size=configs.model.mapping_size,
         ).to(device)
     elif "ffno2d" in configs.model.name.lower():
         model = eval(configs.model.name)(
@@ -811,6 +814,8 @@ def make_criterion(name: str = None, cfg=None) -> nn.Module:
         criterion = nn.MSELoss()
     elif name == "nmse":
         criterion = NormalizedMSELoss()
+    elif name == "cmae":
+        criterion = ComplexL1Loss(norm=cfg.norm)
     elif name == "curl_loss":
         criterion = fab_penalty_ls_curve(alpha=cfg.weight, min_feature_size=0.02)
     elif name == "gap_loss":

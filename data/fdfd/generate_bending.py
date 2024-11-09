@@ -47,7 +47,7 @@ def bending_opt(device_id, operation_device):
             solver="ceviche_torch",
             border_width=[0, port_len, port_len, 0],
             resolution=50,
-            plot_root=f"./figs/mfs_bending_{device_id}",
+            plot_root=f"./figs/larger_mfs_bending_{device_id}",
             PML=[0.5, 0.5],
         )
     )
@@ -83,8 +83,8 @@ def bending_opt(device_id, operation_device):
 
         (-results["obj"]).backward()
         current_design_region_dict = opt.get_design_region_eps_dict()
-        filename_h5 = f"./data/fdfd/bending/mfs_raw/bending_id-{device_id}_opt_step_{step}.h5"
-        filename_yml = f"./data/fdfd/bending/mfs_raw/bending_id-{device_id}.yml"
+        filename_h5 = f"./data/fdfd/bending/mfs_raw_larger/bending_id-{device_id}_opt_step_{step}.h5"
+        filename_yml = f"./data/fdfd/bending/mfs_raw_larger/bending_id-{device_id}.yml"
         if last_design_region_dict is None:
             opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
             last_design_region_dict = current_design_region_dict

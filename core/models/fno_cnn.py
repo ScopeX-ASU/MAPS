@@ -18,6 +18,7 @@ from torch import nn
 from torch.functional import Tensor
 from torch.types import Device
 from neuralop.models import FNO
+import matplotlib.pyplot as plt
 
 # from .layers.local_fno import FNO
 from .constant import *
@@ -162,6 +163,8 @@ class FNO3d(nn.Module):
         with_cp: bool = False,
         mode1: int = 20,
         mode2: int = 20,
+        fourier_feature: str = "none",
+        mapping_size: int = 2,
     ):
         super().__init__()
 
@@ -214,6 +217,16 @@ class FNO3d(nn.Module):
             raise ValueError(
                 f"pos_encoding only supports linear and exp, but got {pos_encoding}"
             )
+        self.fouier_feature = fourier_feature
+        self.mapping_size = mapping_size
+        if self.fouier_feature == "basic":
+            self.B = torch.eye(2).to(device)
+        elif self.fouier_feature.startswith("gauss"):
+            scale = eval(self.fouier_feature.split("_")[-1])
+            self.B = torch.randn((mapping_size, 1)).to(device) * scale
+            self.in_channels = self.in_channels - 1 + 2 * mapping_size
+        else:
+            raise ValueError("fourier_feature only supports basic and gauss")
 
         self.device = device
         omega = 2 * np.pi * C_0 / (1.55 * 1e-6)
@@ -345,6 +358,45 @@ class FNO3d(nn.Module):
         else:
             self.aux_head = None
 
+        # Simulation grid size
+        grid_size = (260, 260)  # Adjust to your simulation grid size
+        pml_thickness = 25
+
+        self.pml_mask = torch.ones(grid_size).to(self.device)
+
+        # Define the damping factor for exponential decay
+        damping_factor = torch.tensor([0.05,], device=self.device)  # adjust this to control decay rate
+
+        # Apply exponential decay in the PML regions
+        for i in range(grid_size[0]):
+            for j in range(grid_size[1]):
+                # Calculate distance from each edge
+                dist_to_left = max(0, pml_thickness - i)
+                dist_to_right = max(0, pml_thickness - (grid_size[0] - i - 1))
+                dist_to_top = max(0, pml_thickness - j)
+                dist_to_bottom = max(0, pml_thickness - (grid_size[1] - j - 1))
+
+                # Calculate the damping factor based on the distance to the nearest edge
+                dist = max(dist_to_left, dist_to_right, dist_to_top, dist_to_bottom)
+                if dist > 0:
+                    self.pml_mask[i, j] = torch.exp(-damping_factor * dist)
+        # plt.figure()
+        # plt.imshow(self.pml_mask.cpu().numpy())
+        # plt.savefig("./figs/pml_mask.png")
+        # plt.close()
+        # quit()
+        
+            
+    def fouier_feature_mapping(self, x: Tensor) -> Tensor:
+        if self.fouier_feature == "none":
+            return x
+        else:
+            x = x.permute(0, 2, 3, 1) # B, H, W, 1
+            x_proj = (2. * torch.pi * x) @ self.B.T  # Matrix multiplication and scaling # B, H, W, mapping_size
+            x_proj = torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1) # B, H, W, 2 * mapping_size
+            x_proj = x_proj.permute(0, 3, 1, 2) # B, 2 * mapping_size, H, W
+            return x_proj
+
     def set_trainable_permittivity(self, mode: bool = True) -> None:
         self.trainable_permittivity = mode
 
@@ -436,6 +488,8 @@ class FNO3d(nn.Module):
         # ------------------------------------------
 
         # -----------this is after ----------------
+        if self.fouier_feature != "none":
+            eps = self.fouier_feature_mapping(eps)
         x = torch.cat((eps, incident_field), dim=1)
         x = self.stem(x)
         x1 = self.stages[0](x)
@@ -443,9 +497,13 @@ class FNO3d(nn.Module):
         x1 = resize_to_targt_size(
             x1, (src.shape[-2], src.shape[-1])
         )
+        if len(x1.shape) == 3:
+            x1 = x1.unsqueeze(0)
         x2 = resize_to_targt_size(
             x2, (src.shape[-2], src.shape[-1])
         )
+        if len(x2.shape) == 3:
+            x2 = x2.unsqueeze(0)
         x = torch.cat((x1, x2), dim=1)
         forward_Ez_field = self.head(x)
 
@@ -469,5 +527,8 @@ class FNO3d(nn.Module):
             (forward_Hx_field, forward_Hy_field, forward_Ez_field), dim=1
         )
         adjoint_field = torch.randn_like(forward_Ez_field).to(forward_Ez_field.device)
+
+        forward_field = self.pml_mask.unsqueeze(0).unsqueeze(0) * forward_field
+        adjoint_field = self.pml_mask.unsqueeze(0).unsqueeze(0) * adjoint_field
 
         return forward_field, adjoint_field

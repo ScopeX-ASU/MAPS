@@ -303,10 +303,24 @@ class fdfd_ez_torch(fdfd):
 
 
 class fdfd_ez(fdfd_ez_ceviche):
-    def __init__(self, omega, dL, eps_r, npml, power=1e-8, bloch_phases=None):
-        self.solver = SparseSolveTorch()
+    def __init__(
+            self, 
+            omega,
+            dL, 
+            eps_r, 
+            npml, 
+            power=1e-8, 
+            bloch_phases=None,
+            neural_solver=None,
+            numerical_solver="solve_direct",
+        ):
         self.power = power
         self.A = None
+        self.neural_solver = neural_solver
+        self.numerical_solver = numerical_solver
+        if self.numerical_solver == "solve_direct":
+            assert self.neural_solver is None, "neural_solver is useless if numerical_solver is solve_direct"
+        self.solver = SparseSolveTorch()
         if isinstance(eps_r, np.ndarray):
             eps_r = torch.from_numpy(eps_r)
         super().__init__(omega, dL, eps_r, npml, bloch_phases=bloch_phases)

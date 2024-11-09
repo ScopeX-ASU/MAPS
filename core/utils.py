@@ -502,6 +502,26 @@ def rip_padding(eps, pady_0, pady_1, padx_0, padx_1):
     return eps[padx_0:-padx_1, pady_0:-pady_1]
 
 
+class ComplexL1Loss(torch.nn.MSELoss):
+    def __init__(self, norm=False) -> None:
+        super().__init__()
+        self.norm = norm
+
+    def forward(self, x: Tensor, target: Tensor) -> Tensor:
+        """Complex L1 loss between the predicted electric field and target field
+
+        Args:
+            x (Tensor): Predicted complex-valued frequency-domain full electric field
+            target (Tensor): Ground truth complex-valued electric field intensity
+
+        Returns:
+            Tensor: loss
+        """
+        if self.norm:
+            diff = torch.view_as_real(x - target)
+            return diff.norm(p=1, dim=[1, 2, 3, 4]).div(torch.view_as_real(target).norm(p=1, dim=[1, 2, 3, 4])).mean()
+        return F.l1_loss(torch.view_as_real(x), torch.view_as_real(target))
+
 class NormalizedMSELoss(torch.nn.modules.loss._Loss):
     def __init__(self, reduce="mean"):
         super(NormalizedMSELoss, self).__init__()
