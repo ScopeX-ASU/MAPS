@@ -17,6 +17,13 @@ aux_criterion:
     weight: 0.0
     norm: False
 
+log_criterion:
+  curl_loss:
+    weight: 0.0
+  tv_loss:
+    weight: 0.0
+    norm: False
+
 optimizer:
   name: adam
   lr: 0.002

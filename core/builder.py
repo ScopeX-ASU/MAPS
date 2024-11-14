@@ -845,7 +845,7 @@ def make_criterion(name: str = None, cfg=None) -> nn.Module:
         criterion = AspectRatioLoss(
             aspect_ratio=cfg.aspect_ratio,
         )
-    elif name == "err_corr":
+    elif "err_corr" in name or (name == "hx_loss") or (name == "hy_loss"):
         criterion = NL2NormLoss()
     elif name == "maxwell_residual_loss":
         criterion = MaxwellResidualLoss(

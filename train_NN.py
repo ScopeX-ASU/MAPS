@@ -253,7 +253,6 @@ def train(
 
     mse_meter = AverageMeter("mse")
     aux_meters = {name: AverageMeter(name) for name in aux_criterions}
-    aux_output_weight = getattr(configs.criterion, "aux_output_weight", 0)
 
     data_counter = 0
     total_data = len(train_loader.dataset)
@@ -328,21 +327,11 @@ def train(
             else:
                 aux_output = None
                 output_correction = None
-            if configs.criterion.field_component == "Ez":
-                regression_loss = criterion(
-                    output[:, -2:, ...], 
-                    field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], 
-                    torch.ones_like(output[:, -2:, ...]).to(device)
-                )
-            elif configs.criterion.field_component == "all":
-                regression_loss = criterion(
-                    output, 
-                    field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"], 
-                    torch.ones_like(output).to(device)
-                )
-            else:
-                raise ValueError("Invalid field component")
-            # regression_loss = regression_loss + criterion(aux_output, fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"], torch.ones_like(aux_output).to(device))
+            regression_loss = criterion(
+                output[:, -2:, ...], 
+                field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], 
+                torch.ones_like(output[:, -2:, ...]).to(device)
+            )
             mse_meter.update(regression_loss.item())
             loss = regression_loss
             for name, config in aux_criterions.items():
@@ -378,24 +367,42 @@ def train(
                         monitor_slices=monitor_slices, # 'port_slice-out_port_1_x', 'port_slice-out_port_1_y'
                         target_SParam=s_params['s_params-fwd_trans-1.55-1'],
                     )
-                elif name == "err_corr":
+                elif name == "err_corr_Ez":
                     assert model.err_correction
                     aux_loss = weight * aux_criterion(
                         output_correction[:, -2:, ...], 
                         field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], 
                         torch.ones_like(output[:, -2:, ...]).to(device)
                     )
+                elif name == "err_corr_Hx":
+                    assert model.err_correction
+                    aux_loss = weight * aux_criterion(
+                        output_correction[:, :2, ...],
+                        field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, :2, ...],
+                        torch.ones_like(output[:, :2, ...]).to(device)
+                    )
+                elif name == "err_corr_Hy":
+                    assert model.err_correction
+                    aux_loss = weight * aux_criterion(
+                        output_correction[:, 2:4, ...],
+                        field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, 2:4, ...],
+                        torch.ones_like(output[:, 2:4, ...]).to(device)
+                    )
+                elif name == "Hx_loss":
+                    aux_loss = weight * aux_criterion(
+                        output[:, :2, ...], 
+                        field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, :2, ...], 
+                        torch.ones_like(output[:, :2, ...]).to(device)
+                    )
+                elif name == "Hy_loss":
+                    aux_loss = weight * aux_criterion(
+                        output[:, 2:4, ...], 
+                        field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, 2:4, ...], 
+                        torch.ones_like(output[:, 2:4, ...]).to(device)
+                    )
                 loss = loss + aux_loss
                 aux_meters[name].update(aux_loss.item())
                 
-            if aux_output is not None and aux_output_weight > 0:
-                # TODO, this is incorrect now
-                aux_output_loss = aux_output_weight * F.mse_loss(
-                    aux_output, field_solutions
-                )  # field magnitude learning
-                loss = loss + aux_output_loss
-            else:
-                aux_output_loss = None
         grad_scaler.scale(loss).backward()
         grad_scaler.unscale_(optimizer)
         grad_scaler.step(optimizer)
@@ -415,11 +422,8 @@ def train(
             )
             for name, aux_meter in aux_meters.items():
                 log += f" {name}: {aux_meter.val:.4e}"
-            if aux_output_loss is not None:
-                log += f" aux_output_loss: {aux_output_loss.item()}"
             lg.info(log)
 
-            # mlflow.log_metrics({"train_loss": loss.item()}, step=step)
             wandb.log(
                 {
                     "train_running_loss": loss.item(),
@@ -430,10 +434,7 @@ def train(
     scheduler.step()
     avg_regression_loss = mse_meter.avg
     lg.info(f"Train Regression Loss: {avg_regression_loss:.4e}")
-    # mlflow.log_metrics(
-    #     {"train_regression": avg_regression_loss, "lr": get_learning_rate(optimizer)},
-    #     step=epoch,
-    # )
+
     wandb.log(
         {
             "train_loss": avg_regression_loss,
@@ -466,6 +467,7 @@ def validate(
     validation_loader: DataLoader,
     epoch: int,
     criterion: Criterion,
+    log_criterions: Dict,
     loss_vector: Iterable,
     accuracy_vector: Iterable,
     device: torch.device,
@@ -475,6 +477,7 @@ def validate(
     model.eval()
     val_loss = 0
     mse_meter = AverageMeter("mse")
+    log_meters = {name: AverageMeter(name) for name in log_criterions}
     with torch.no_grad(), DeterministicCtx(42):
         for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask, incident_field, ht_m, et_m, monitor_slices, As) in enumerate(validation_loader):
             eps_map = eps_map.to(device, non_blocking=True)
@@ -546,30 +549,102 @@ def validate(
                 else:
                     aux_output = None
                     output_correction = None
-                if configs.criterion.field_component == "Ez":
-                    val_loss = criterion(
-                        output[:, -2:, ...] if output_correction is None else output_correction[:, -2:, ...],
-                        field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], 
-                        torch.ones_like(output[:, -2:, ...]).to(device)
-                    )
-                elif configs.criterion.field_component == "all":
-                    val_loss = criterion(
-                        output if output_correction is None else output_correction,
-                        field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"], 
-                        torch.ones_like(output).to(device)
-                    )
-                else:
-                    raise ValueError("Invalid field component")
-                # val_loss = val_loss + criterion(aux_output, fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"], torch.ones_like(aux_output).to(device))
-            mse_meter.update(val_loss.item())
+                # TODO not sure how to distinguish the test criterion if test is all field while train is the Ez
+                val_loss = criterion(
+                    output[:, -2:, ...] if output_correction is None else output_correction[:, -2:, ...],
+                    field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], 
+                    torch.ones_like(output[:, -2:, ...]).to(device)
+                )
+                mse_meter.update(val_loss.item())
 
-    loss_vector.append(mse_meter.avg)
+                for name, config in log_criterions.items():
+                    log_criterion, _ = config
+                    if name == "maxwell_residual_loss":
+                        log_loss = log_criterion(
+                            Ez=output, 
+                            # Ez=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+                            eps_r=eps_map, 
+                            source=src_profiles["source_profile-wl-1.55-port-in_port_1-mode-1"], 
+                            target_size=eps_map.shape[-2:],
+                            As=As,
+                        )
+                    elif name == "grad_loss":
+                        log_loss = log_criterion(
+                            forward_fields=output,
+                            # forward_fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+                            backward_fields=field_solutions["field_solutions-wl-1.55-port-out_port_1-mode-1"][:, -2:, ...],
+                            adjoint_fields=aux_output,  
+                            # adjoint_fields=fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+                            backward_adjoint_fields = fields_adj['fields_adj-wl-1.55-port-in_port_1-mode-1'][:, -2:, ...],
+                            target_gradient=gradient,
+                            gradient_multiplier=field_normalizer,
+                            # dr_mask=None,
+                            dr_mask=design_region_mask,
+                        )
+                    elif name == "s_param_loss":
+                        log_loss = log_criterion(
+                            # fields=output, 
+                            fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"],
+                            ht_m=ht_m['ht_m-wl-1.55-port-out_port_1-mode-1'],
+                            et_m=et_m['et_m-wl-1.55-port-out_port_1-mode-1'],
+                            monitor_slices=monitor_slices, # 'port_slice-out_port_1_x', 'port_slice-out_port_1_y'
+                            target_SParam=s_params['s_params-fwd_trans-1.55-1'],
+                        )
+                    elif name == "err_corr_Ez":
+                        assert model.err_correction
+                        log_loss = log_criterion(
+                            output_correction[:, -2:, ...], 
+                            field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], 
+                            torch.ones_like(output[:, -2:, ...]).to(device)
+                        )
+                    elif name == "err_corr_Hx":
+                        assert model.err_correction
+                        log_loss = log_criterion(
+                            output_correction[:, :2, ...],
+                            field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, :2, ...],
+                            torch.ones_like(output[:, :2, ...]).to(device)
+                        )
+                    elif name == "err_corr_Hy":
+                        assert model.err_correction
+                        log_loss = log_criterion(
+                            output_correction[:, 2:4, ...],
+                            field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, 2:4, ...],
+                            torch.ones_like(output[:, 2:4, ...]).to(device)
+                        )
+                    elif name == "Hx_loss":
+                        log_loss = log_criterion(
+                            output[:, :2, ...], 
+                            field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, :2, ...], 
+                            torch.ones_like(output[:, :2, ...]).to(device)
+                        )
+                    elif name == "Hy_loss":
+                        log_loss = log_criterion(
+                            output[:, 2:4, ...], 
+                            field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, 2:4, ...], 
+                            torch.ones_like(output[:, 2:4, ...]).to(device)
+                        )
+                    loss = loss + log_loss
+                    log_meters[name].update(log_loss.item())
+    if "err_corr_Ez" in log_criterions.keys():
+        loss_to_append = log_meters["err_corr_Ez"].avg
+        if "err_corr_Hx" in log_criterions.keys():
+            assert "err_corr_Hy" in log_criterions.keys(), "H field loss must appear together"
+            loss_to_append += log_meters["err_corr_Hx"].avg + log_meters["err_corr_Hy"].avg
+    elif "Hy_loss" in log_criterions.keys():
+        assert "Hx_loss" in log_criterions.keys(), "H field loss must appear together"
+        loss_to_append = log_meters["Hx_loss"].avg + log_meters["Hy_loss"].avg + mse_meter.avg
+    else:
+        loss_to_append = mse_meter.avg
+    loss_vector.append(loss_to_append)
 
-    lg.info("\nValidation set: Average loss: {:.4e}\n".format(mse_meter.avg))
-    # mlflow.log_metrics({"val_loss": mse_meter.avg}, step=epoch)
+    log_info = "\nValidation set: Average loss: {:.4e}".format(mse_meter.avg)
+    for name, log_meter in log_meters.items():
+        log_info += f" {name}: {log_meter.val:.4e}"
+
+    lg.info(log_info)
     wandb.log(
         {
-            "val_loss": mse_meter.avg,
+            "val_loss": loss_to_append,
             "epoch": epoch,
         },
     )
@@ -599,7 +674,7 @@ def test(
     test_loader: DataLoader,
     epoch: int,
     criterion: Criterion,
-    aux_criterions: Dict,
+    log_criterions: Dict,
     loss_vector: Iterable,
     accuracy_vector: Iterable,
     device: torch.device,
@@ -609,7 +684,7 @@ def test(
     model.eval()
     val_loss = 0
     mse_meter = AverageMeter("mse")
-    aux_meters = {name: AverageMeter(name) for name in aux_criterions}
+    log_meters = {name: AverageMeter(name) for name in log_criterions}
     with torch.no_grad(), DeterministicCtx(42):
         for batch_idx, (eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask, incident_field, ht_m, et_m, monitor_slices, As) in enumerate(test_loader):
             eps_map = eps_map.to(device, non_blocking=True)
@@ -681,94 +756,99 @@ def test(
                 else:
                     aux_output = None
                     output_correction = None
-
-                if configs.criterion.field_component == "Ez":
-                    val_loss = criterion(
-                        output[:, -2:, ...] if output_correction is None else output_correction[:, -2:, ...],
-                        field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], 
-                        torch.ones_like(output[:, -2:, ...]).to(device)
-                    )
-                    Ez_loss = val_loss
-                elif configs.criterion.field_component == "all":
-                    val_loss = criterion(
-                        output if output_correction is None else output_correction,
-                        field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"], 
-                        torch.ones_like(output).to(device)
-                    )
-                    Ez_loss = criterion(
-                        output[:, -2:, ...] if output_correction is None else output_correction[:, -2:, ...],
-                        field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], 
-                        torch.ones_like(output[:, -2:, ...]).to(device)
-                    )
-                else:
-                    raise ValueError("Invalid field component")
-                Hx_loss = criterion(
-                    output[:, :2, ...] if output_correction is None else output_correction[:, :2, ...],
-                    field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, :2, ...], 
-                    torch.ones_like(output[:, :2, ...]).to(device)
+                # TODO not sure how to distinguish the test criterion if test is all field while train is the Ez
+                val_loss = criterion(
+                    output[:, -2:, ...] if output_correction is None else output_correction[:, -2:, ...],
+                    field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], 
+                    torch.ones_like(output[:, -2:, ...]).to(device)
                 )
-                Hy_loss = criterion(
-                    output[:, 2:4, ...] if output_correction is None else output_correction[:, 2:4, ...],
-                    field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, 2:4, ...], 
-                    torch.ones_like(output[:, 2:4, ...]).to(device)
-                )
-                # val_loss = val_loss + criterion(aux_output, fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"], torch.ones_like(aux_output).to(device))
-            mse_meter.update(val_loss.item())
+                mse_meter.update(val_loss.item())
 
-            for name, config in aux_criterions.items():
-                aux_criterion, weight = config
-                if name == "maxwell_residual_loss":
-                    aux_loss = weight * aux_criterion(
-                        Ez=output, 
-                        # Ez=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
-                        eps_r=eps_map, 
-                        source=src_profiles["source_profile-wl-1.55-port-in_port_1-mode-1"], 
-                        target_size=eps_map.shape[-2:],
-                        As=As,
-                    )
-                elif name == "grad_loss":
-                    aux_loss = weight * aux_criterion(
-                        forward_fields=output,
-                        # forward_fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
-                        backward_fields=field_solutions["field_solutions-wl-1.55-port-out_port_1-mode-1"][:, -2:, ...],
-                        adjoint_fields=aux_output,  
-                        # adjoint_fields=fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
-                        backward_adjoint_fields = fields_adj['fields_adj-wl-1.55-port-in_port_1-mode-1'][:, -2:, ...],
-                        target_gradient=gradient,
-                        gradient_multiplier=field_normalizer,
-                        # dr_mask=None,
-                        dr_mask=design_region_mask,
-                    )
-                elif name == "s_param_loss":
-                    aux_loss = weight * aux_criterion(
-                        fields=output, 
-                        # fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"],
-                        ht_m=ht_m['ht_m-wl-1.55-port-out_port_1-mode-1'],
-                        et_m=et_m['et_m-wl-1.55-port-out_port_1-mode-1'],
-                        monitor_slices=monitor_slices, # 'port_slice-out_port_1_x', 'port_slice-out_port_1_y'
-                        target_SParam=s_params['s_params-fwd_trans-1.55-1'],
-                    )
-                elif name == "err_corr":
-                    assert model.err_correction
-                    aux_loss = weight * aux_criterion(
-                        output_correction[:, -2:, ...], 
-                        field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], 
-                        torch.ones_like(output[:, -2:, ...]).to(device)
-                    )
-                aux_meters[name].update(aux_loss.item())
+                for name, config in log_criterions.items():
+                    log_criterion, _ = config
+                    if name == "maxwell_residual_loss":
+                        log_loss = log_criterion(
+                            Ez=output, 
+                            # Ez=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+                            eps_r=eps_map, 
+                            source=src_profiles["source_profile-wl-1.55-port-in_port_1-mode-1"], 
+                            target_size=eps_map.shape[-2:],
+                            As=As,
+                        )
+                    elif name == "grad_loss":
+                        log_loss = log_criterion(
+                            forward_fields=output,
+                            # forward_fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+                            backward_fields=field_solutions["field_solutions-wl-1.55-port-out_port_1-mode-1"][:, -2:, ...],
+                            adjoint_fields=aux_output,  
+                            # adjoint_fields=fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+                            backward_adjoint_fields = fields_adj['fields_adj-wl-1.55-port-in_port_1-mode-1'][:, -2:, ...],
+                            target_gradient=gradient,
+                            gradient_multiplier=field_normalizer,
+                            # dr_mask=None,
+                            dr_mask=design_region_mask,
+                        )
+                    elif name == "s_param_loss":
+                        log_loss = log_criterion(
+                            # fields=output, 
+                            fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"],
+                            ht_m=ht_m['ht_m-wl-1.55-port-out_port_1-mode-1'],
+                            et_m=et_m['et_m-wl-1.55-port-out_port_1-mode-1'],
+                            monitor_slices=monitor_slices, # 'port_slice-out_port_1_x', 'port_slice-out_port_1_y'
+                            target_SParam=s_params['s_params-fwd_trans-1.55-1'],
+                        )
+                    elif name == "err_corr_Ez":
+                        assert model.err_correction
+                        log_loss = log_criterion(
+                            output_correction[:, -2:, ...], 
+                            field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], 
+                            torch.ones_like(output[:, -2:, ...]).to(device)
+                        )
+                    elif name == "err_corr_Hx":
+                        assert model.err_correction
+                        log_loss = log_criterion(
+                            output_correction[:, :2, ...],
+                            field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, :2, ...],
+                            torch.ones_like(output[:, :2, ...]).to(device)
+                        )
+                    elif name == "err_corr_Hy":
+                        assert model.err_correction
+                        log_loss = log_criterion(
+                            output_correction[:, 2:4, ...],
+                            field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, 2:4, ...],
+                            torch.ones_like(output[:, 2:4, ...]).to(device)
+                        )
+                    elif name == "Hx_loss":
+                        log_loss = log_criterion(
+                            output[:, :2, ...], 
+                            field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, :2, ...], 
+                            torch.ones_like(output[:, :2, ...]).to(device)
+                        )
+                    elif name == "Hy_loss":
+                        log_loss = log_criterion(
+                            output[:, 2:4, ...], 
+                            field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, 2:4, ...], 
+                            torch.ones_like(output[:, 2:4, ...]).to(device)
+                        )
+                    loss = loss + log_loss
+                    log_meters[name].update(log_loss.item())
+    if "err_corr_Ez" in log_criterions.keys():
+        loss_to_append = log_meters["err_corr_Ez"].avg
+        if "err_corr_Hx" in log_criterions.keys():
+            assert "err_corr_Hy" in log_criterions.keys(), "H field loss must appear together"
+            loss_to_append += log_meters["err_corr_Hx"].avg + log_meters["err_corr_Hy"].avg
+    elif "Hy_loss" in log_criterions.keys():
+        assert "Hx_loss" in log_criterions.keys(), "H field loss must appear together"
+        loss_to_append = log_meters["Hx_loss"].avg + log_meters["Hy_loss"].avg + mse_meter.avg
+    else:
+        loss_to_append = mse_meter.avg
+    loss_vector.append(loss_to_append)
 
-    loss_vector.append(mse_meter.avg)
+    log_info = "\nValidation set: Average loss: {:.4e}".format(mse_meter.avg)
+    for name, log_meter in log_meters.items():
+        log_info += f" {name}: {log_meter.val:.4e}"
 
-    loss_info = "\nTest set: Average loss: {:.4e}\n".format(mse_meter.avg)
-    if Ez_loss is not None:
-        loss_info += f"Ez loss: {Ez_loss.item():.4e}\n"
-        loss_info += f"Hx loss: {Hx_loss.item():.4e}\n"
-        loss_info += f"Hy loss: {Hy_loss.item():.4e}\n"
-    for name, aux_meter in aux_meters.items():
-        loss_info += f"{name}: {aux_meter.val:.4e}"
-
-    lg.info(loss_info)
-    # mlflow.log_metrics({"test_loss": mse_meter.avg}, step=epoch)
+    lg.info(log_info)
     wandb.log(
         {
             "test_loss": mse_meter.avg,
@@ -843,7 +923,15 @@ def main() -> None:
         for name, config in configs.aux_criterion.items()
         if float(config.weight) > 0
     }
-    print(aux_criterions)
+    print("aux criterions used in training: ", aux_criterions, flush=True)
+
+    log_criterions = {
+        name: [builder.make_criterion(name, cfg=config), float(config.weight)]
+        for name, config in configs.log_criterion.items()
+        if float(config.weight) > 0
+    }
+    print("criterions to be printed: ", log_criterions, flush=True)
+
     mixup_config = configs.dataset.augment
     # mixup_fn = MixupAll(**mixup_config)
     # test_mixup_fn = MixupAll(**configs.dataset.test_augment)
@@ -943,6 +1031,7 @@ def main() -> None:
                     validation_loader,
                     epoch,
                     test_criterion,
+                    log_criterions,
                     lossv,
                     accv,
                     device,
@@ -955,7 +1044,7 @@ def main() -> None:
                     test_loader,
                     epoch,
                     test_criterion,
-                    aux_criterions,
+                    log_criterions,
                     [],
                     [],
                     device,

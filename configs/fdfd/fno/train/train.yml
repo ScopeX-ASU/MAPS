@@ -20,8 +20,37 @@ aux_criterion:
     weight: 0.0
   s_param_loss:
     weight: 0.0
-  err_corr:
+  err_corr_Ez:
     weight: 0.0
+  err_corr_Hx:
+    weight: 0.0
+  err_corr_Hy:
+    weight: 0.0
+  Hx_loss:
+    weight: 0.0
+  Hy_loss:
+    weight: 0.0
+
+log_criterion:
+  maxwell_residual_loss:
+    weight: 1
+    wl_cen: 1.55
+    wl_width: 0
+    n_wl: 1
+  grad_loss:
+    weight: 0.0
+  s_param_loss:
+    weight: 1
+  err_corr_Ez:
+    weight: 1
+  err_corr_Hx:
+    weight: 1
+  err_corr_Hy:
+    weight: 1
+  Hx_loss:
+    weight: 1
+  Hy_loss:
+    weight: 1
 
 test_criterion:
   name: mse

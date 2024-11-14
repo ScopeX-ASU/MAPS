@@ -700,7 +700,8 @@ class FNO3d(nn.Module):
         # ------------------------------------------
 
         # -----------this is after ----------------
-        x = torch.cat((eps, incident_field), dim=1)
+        # x = torch.cat((eps, incident_field), dim=1)
+        x = torch.cat((eps, src), dim=1)
 
         x = self.stem(x)
         x1 = self.stages[0](x)
