@@ -47,20 +47,40 @@ def compare_designs(design_regions_1, design_regions_2):
 
 def metacoupler_opt(device_id, operation_device):
     sim_cfg = DefaultSimulationConfig()
+    # ------------------- Parameters for the metacoupler -------------------
+    # total_height = 6
+    # total_width = 6
+    # aperture = random.uniform(5, 7)
+    # aperture = int(aperture * 50) / 50
+    # border_height = total_height - aperture / 2
+    # ridge_height_max = random.uniform(0.8, 1.2)
+    # ridge_height_max = int(ridge_height_max * 50) / 50
+    # port_len = total_width - 3 * ridge_height_max
+    # # input_port_width = random.uniform(5, aperture)
+    # # input_port_width = int(input_port_width * 50) / 50
+    # input_port_width = aperture
+    # # output_port_width = random.uniform(2.8, 3.2)
+    # # output_port_width = int(output_port_width * 50) / 50
+    # output_port_width = 3
 
-    total_height = 6
-    total_width = 6
-    aperture = random.uniform(5, 7)
-    aperture = int(aperture * 50) / 50
+    # sim_cfg.update(
+    #     dict(
+    #         solver="ceviche_torch",
+    #         border_width=[0, 0, border_height, border_height],
+    #         resolution=50,
+    #         plot_root=f"./figs/mfs_metacoupler_{device_id}",
+    #         # plot_root="./figs/metacoupler_subpixel",
+    #         # plot_root="./figs/metacoupler_periodic",
+    #     )
+    # )
+    # ------------------- Parameters for the metacoupler -------------------
+    total_height = 2.8
+    total_width = 2.8
+    aperture = 4
     border_height = total_height - aperture / 2
-    ridge_height_max = random.uniform(0.8, 1.2)
-    ridge_height_max = int(ridge_height_max * 50) / 50
-    port_len = total_width - 3 * ridge_height_max
-    # input_port_width = random.uniform(5, aperture)
-    # input_port_width = int(input_port_width * 50) / 50
-    input_port_width = aperture
-    # output_port_width = random.uniform(2.8, 3.2)
-    # output_port_width = int(output_port_width * 50) / 50
+    ridge_height_max = 1
+    port_len = total_width - 0.5 * ridge_height_max
+    input_port_width = 3
     output_port_width = 3
 
     sim_cfg.update(
@@ -68,15 +88,15 @@ def metacoupler_opt(device_id, operation_device):
             solver="ceviche_torch",
             border_width=[0, 0, border_height, border_height],
             resolution=50,
-            plot_root=f"./figs/mfs_metacoupler_{device_id}",
-            # plot_root="./figs/metacoupler_subpixel",
-            # plot_root="./figs/metacoupler_periodic",
+            plot_root=f"./figs/mfs_metacoupler_1_layer_{device_id}",
+            PML=[0.5, 0.5],
         )
     )
 
     device = MetaCoupler(
         sim_cfg=sim_cfg, 
-        aperture=aperture, 
+        aperture=aperture,
+        n_layers=1, # here to simplify the problem, we only consider 1 layer 
         ridge_height_max=ridge_height_max, 
         port_len=(port_len, port_len),
         port_width=(
@@ -96,9 +116,10 @@ def metacoupler_opt(device_id, operation_device):
     )
     last_design_region_dict = None
     # for step in range(10):
-    for step in range(10):
+    for step in range(1):
         optimizer.zero_grad()
-        results = opt.forward(sharpness=1 + 2 * step)
+        # results = opt.forward(sharpness=1 + 2 * step)
+        results = opt.forward(sharpness=256)
         print(f"Step {step}:", end=" ")
         for k, obj in results["breakdown"].items():
             print(f"{k}: {obj['value']:.3f}", end=", ")
@@ -106,8 +127,8 @@ def metacoupler_opt(device_id, operation_device):
 
         (-results["obj"]).backward()
         current_design_region_dict = opt.get_design_region_eps_dict()
-        filename_h5 = f"./data/fdfd/metacoupler/mfs_raw/metacoupler_id-{device_id}_opt_step_{step}.h5"
-        filename_yml = f"./data/fdfd/metacoupler/mfs_raw/metacoupler_id-{device_id}.yml"
+        filename_h5 = f"./data/fdfd/metacoupler/mfs_raw_1_layer/metacoupler_id-{device_id}_opt_step_{step}.h5"
+        filename_yml = f"./data/fdfd/metacoupler/mfs_raw_1_layer/metacoupler_id-{device_id}.yml"
         if last_design_region_dict is None:
             opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
             last_design_region_dict = current_design_region_dict

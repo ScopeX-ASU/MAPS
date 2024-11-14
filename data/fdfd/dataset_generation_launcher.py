@@ -2,7 +2,7 @@ import os
 from multiprocessing import Pool, Queue, Manager
 import subprocess
 
-script = 'data/fdfd/generate_bending.py'
+script = 'data/fdfd/generate_metacoupler.py'
 
 def metacoupler_launcher(queue):
     # While there are tasks in the queue, each process will fetch and execute one
@@ -26,7 +26,7 @@ def worker_process(queue):
 if __name__ == "__main__":
     num_gpus = 3  # Number of GPUs
     # taskid_begin, taskid_end = (250, 260)
-    taskid_begin, taskid_end = (20, 1000)
+    taskid_begin, taskid_end = (20, 10000)
 
     # Manager's queue allows inter-process communication for tasks
     manager = Manager()

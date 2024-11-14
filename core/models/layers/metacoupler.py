@@ -83,7 +83,7 @@ class MetaCoupler(N_Ports):
         )
 
     def init_monitors(self, verbose: bool = True):
-        rel_width = 2
+        rel_width = 1.5
         if verbose:
             logger.info("Start generating sources and monitors ...")
         src_slice = self.build_port_monitor_slice(
@@ -125,7 +125,7 @@ class MetaCoupler(N_Ports):
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             solver=self.sim_cfg["solver"],
-            plot=True,
+            plot=False,
         )
 
         norm_refl_profiles_1 = self.build_norm_sources(
@@ -136,7 +136,7 @@ class MetaCoupler(N_Ports):
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             solver=self.sim_cfg["solver"],
-            plot=True,
+            plot=False,
         )
         norm_refl_profiles_2 = self.build_norm_sources(
             source_modes=(1,),
@@ -146,7 +146,7 @@ class MetaCoupler(N_Ports):
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             solver=self.sim_cfg["solver"],
-            plot=True,
+            plot=False,
         )
 
         norm_monitor_profiles = self.build_norm_sources(
@@ -157,6 +157,6 @@ class MetaCoupler(N_Ports):
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             solver=self.sim_cfg["solver"],
-            plot=True,
+            plot=False,
         )
         return norm_source_profiles, norm_refl_profiles_1, norm_refl_profiles_2, norm_monitor_profiles

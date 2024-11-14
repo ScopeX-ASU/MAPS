@@ -25,20 +25,43 @@ else:
     _params_t = Any
 
 
-def plot_fields(fields: Tensor, ground_truth: Tensor, cmap: str = "RdBu", filepath: str = './figs/fields.png', **kwargs):
+def plot_fields(fields: Tensor, ground_truth: Tensor, cmap: str = "magma", filepath: str = './figs/fields.png', **kwargs):
     # the field is of shape (batch, 6, x, y)
     fields = fields.reshape(fields.shape[0], -1, 2, fields.shape[-2], fields.shape[-1]).permute(0, 1, 3, 4, 2).contiguous()
     fields = torch.view_as_complex(fields)
     ground_truth = ground_truth.reshape(ground_truth.shape[0], -1, 2, ground_truth.shape[-2], ground_truth.shape[-1]).permute(0, 1, 3, 4, 2).contiguous()
     ground_truth = torch.view_as_complex(ground_truth)
-    fig, ax = plt.subplots(2, ground_truth.shape[1], figsize=(15, 10), squeeze=False)
-    for i in range(ground_truth.shape[1]):
-        ax[0, i].imshow(torch.abs(fields[0, i]).cpu().numpy(), cmap=cmap)
-        ax[0, i].set_title(f"Field {i}")
-        ax[1, i].imshow(torch.abs(ground_truth[0, i]).cpu().numpy(), cmap=cmap)
-        ax[1, i].set_title(f"Ground Truth {i}")
+    fig, ax = plt.subplots(3, ground_truth.shape[1], figsize=(15, 10), squeeze=False)
+
+    field_name = ['Hx', 'Hy', 'Ez']
+    for idx, field in enumerate(field_name):
+        v_range = max(torch.abs(fields[0, idx]).max(), torch.abs(ground_truth[0, idx]).max()).item()
+        # Plot predicted fields in the first row
+        im_pred = ax[0, idx].imshow(torch.abs(fields[0, idx]).cpu().numpy(), vmin=0, vmax=v_range, cmap=cmap)
+        ax[0, idx].set_title(f"Predicted Field {field}")
+        fig.colorbar(im_pred, ax=ax[0, idx])
+        
+        # Plot ground truth fields in the second row
+        im_gt = ax[1, idx].imshow(torch.abs(ground_truth[0, idx]).cpu().numpy(), vmin=0, vmax=v_range, cmap=cmap)
+        ax[1, idx].set_title(f"Ground Truth {field}")
+        fig.colorbar(im_gt, ax=ax[1, idx])
+
+        # Plot the difference between the predicted and ground truth fields in the third row
+        im_err = ax[2, idx].imshow(torch.abs(fields[0, idx] - ground_truth[0, idx]).cpu().numpy(), cmap=cmap)
+        ax[2, idx].set_title(f"Error {field}")
+        fig.colorbar(im_err, ax=ax[2, idx])
+
+    # Save the figure with high resolution
     plt.savefig(filepath, dpi=300)
     plt.close()
+    # fig, ax = plt.subplots(2, ground_truth.shape[1], figsize=(15, 10), squeeze=False)
+    # for i in range(ground_truth.shape[1]):
+    #     ax[0, i].imshow(torch.abs(fields[0, i]).cpu().numpy(), cmap=cmap)
+    #     ax[0, i].set_title(f"Field {i}")
+    #     ax[1, i].imshow(torch.abs(ground_truth[0, i]).cpu().numpy(), cmap=cmap)
+    #     ax[1, i].set_title(f"Ground Truth {i}")
+    # plt.savefig(filepath, dpi=300)
+    # plt.close()
 
 def resize_to_targt_size(image: Tensor, size: Tuple[int, int]) -> Tensor:
     if len(image.shape) == 2:
@@ -1027,7 +1050,7 @@ class SParamLoss(torch.nn.modules.loss._Loss):
                 x=torch.arange(
                     monitor_slices_x[i][0],
                     monitor_slices_x[i][1],
-                ),
+                ).to(monitor_slices_y[i].device),
             )
             # ht_m and et_m are lists
             s_p, s_m = get_eigenmode_coefficients(
@@ -1038,15 +1061,13 @@ class SParamLoss(torch.nn.modules.loss._Loss):
                 et_m=et_m[i],
                 monitor=monitor_slice,
                 grid_step=1/50,
-                direction="x",
+                direction="y",
                 autograd=True,
                 energy=True,
             )
             s_params.append(torch.tensor([s_p, s_m], device=Ez.device))
         s_params = torch.stack(s_params, 0)
         s_params_diff = s_params - target_SParam
-        print("this is the target_SParam", target_SParam, flush=True)
-        print("this is the s_params", s_params, flush=True)
         # Step 3: Calculate the loss
         # print("this is the l2 norm of the target_SParam ", torch.norm(target_SParam, p=2, dim=-1), flush=True) ~e-9
         loss = (torch.norm(s_params_diff, p=2, dim=-1) / (torch.norm(target_SParam, p=2, dim=-1) + 1e-12)).mean()

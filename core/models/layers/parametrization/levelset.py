@@ -226,7 +226,7 @@ class LeveSetParameterization(BaseParametrization):
     ):
         if init_method == "random":
             nn.init.normal_(weight_dict["ls_knots"], mean=0, std=0.01)
-            weight_dict["ls_knots"].data += 0.05
+            # weight_dict["ls_knots"].data += 0.05 # don't really understand why add 0.05 here, if that is the case, the init will become ones instead of random
         elif init_method == "rectangle":
             weight = weight_dict["ls_knots"]
             weight.data.fill_(-0.2)
@@ -256,8 +256,7 @@ class LeveSetParameterization(BaseParametrization):
             #     )
             weight = weight_dict["ls_knots"]
             weight.data.fill_(-0.2)
-            print("this is the shape of weight.data", weight.data.shape, flush=True) #(66, 66)
-            weight_shape = weight.data.shape
+            # print("this is the shape of weight.data", weight.data.shape, flush=True) #(66, 66)
             box_size_x = region_cfg["size"][0]
             box_size_y = region_cfg["size"][1]
             x_ax = torch.linspace(0, box_size_x, weight.data.shape[0], device=self.operation_device) 

@@ -813,8 +813,12 @@ def grid_average(e, monitor, direction: str = "x", autograd=False):
             e_yee_shifted = (e[monitor] + e[e_monitor]) / 2
     elif direction == "y":
         if isinstance(monitor, Slice):
-            e_monitor = (monitor[0], monitor[1] + np.array([[-1], [0]]))
-            e_yee_shifted = mean(e[e_monitor], axis=0)
+            if isinstance(monitor[0], torch.Tensor):
+                e_monitor = (monitor[0], monitor[1] + torch.tensor([[-1], [0]], device=monitor[0].device))
+                e_yee_shifted = torch.mean(e[e_monitor], dim=0)
+            else:
+                e_monitor = (monitor[0], monitor[1] + np.array([[-1], [0]]))
+                e_yee_shifted = mean(e[e_monitor], axis=0)
         elif isinstance(monitor, np.ndarray):
             e_monitor = monitor.nonzero()
             e_monitor = (e_monitor[0] - 1, e_monitor[1])
@@ -1044,7 +1048,6 @@ def insert_mode(omega, dx, x, y, epsr, target=None, npml=0, m=1, filtering=False
     """
     if target is None:
         target = np.zeros(epsr.shape, dtype=complex)
-
     epsr_cross = epsr[x, y]
     # Solves the eigenvalue problem:
     #    [ ∂²/∂x² / (k₀²) + εr ] E = (β²/k₀²) E

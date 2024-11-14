@@ -4,6 +4,7 @@ dataset:
   test_ratio: 0.1
   train_valid_split_ratio: [0.9, 0.1]
   num_workers: 4
+  shuffle: True
 
 criterion:
   name: distanceLoss

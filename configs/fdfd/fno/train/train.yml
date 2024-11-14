@@ -20,6 +20,8 @@ aux_criterion:
     weight: 0.0
   s_param_loss:
     weight: 0.0
+  err_corr:
+    weight: 0.0
 
 test_criterion:
   name: mse

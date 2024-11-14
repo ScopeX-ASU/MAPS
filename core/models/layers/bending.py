@@ -125,7 +125,7 @@ class Bending(N_Ports):
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             solver=self.sim_cfg["solver"],
-            plot=True,
+            plot=False,
         )
 
         norm_refl_profiles = self.build_norm_sources(
@@ -136,7 +136,7 @@ class Bending(N_Ports):
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             solver=self.sim_cfg["solver"],
-            plot=True,
+            plot=False,
         )
         norm_monitor_profiles = self.build_norm_sources(
             source_modes=(1,),
@@ -146,6 +146,6 @@ class Bending(N_Ports):
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             solver=self.sim_cfg["solver"],
-            plot=True,
+            plot=False,
         )
         return norm_source_profiles, norm_refl_profiles, norm_monitor_profiles

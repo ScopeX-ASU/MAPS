@@ -507,6 +507,7 @@ def make_dataloader(
         num_workers=configs.dataset.num_workers,
         prefetch_factor=8,
         persistent_workers=True,
+        shuffle=int(configs.dataset.shuffle),
         # collate_fn=collate_fn_keep_spatial_res,
         # sampler=MySampler(train_dataset, shuffle=int(configs.dataset.shuffle)),
     )
@@ -518,6 +519,7 @@ def make_dataloader(
         num_workers=configs.dataset.num_workers,
         prefetch_factor=8,
         persistent_workers=True,
+        shuffle=int(configs.dataset.shuffle),
         # collate_fn=collate_fn_keep_spatial_res,
         # sampler=MySampler(validation_dataset, shuffle=int(configs.dataset.shuffle)),
     )
@@ -529,6 +531,7 @@ def make_dataloader(
         num_workers=configs.dataset.num_workers,
         prefetch_factor=8,
         persistent_workers=True,
+        shuffle=int(configs.dataset.shuffle),
         # collate_fn=collate_fn_keep_spatial_res,
         # sampler=MySampler(test_dataset, shuffle=int(configs.dataset.shuffle)),
     )
@@ -665,6 +668,8 @@ def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
             mode2=configs.model.mode2,
             fourier_feature=configs.model.fourier_feature,
             mapping_size=configs.model.mapping_size,
+            err_correction=configs.model.err_correction,
+            fno_block_only=configs.model.fno_block_only,
         ).to(device)
     elif "ffno2d" in configs.model.name.lower():
         model = eval(configs.model.name)(
@@ -840,6 +845,8 @@ def make_criterion(name: str = None, cfg=None) -> nn.Module:
         criterion = AspectRatioLoss(
             aspect_ratio=cfg.aspect_ratio,
         )
+    elif name == "err_corr":
+        criterion = NL2NormLoss()
     elif name == "maxwell_residual_loss":
         criterion = MaxwellResidualLoss(
             wl_cen=cfg.wl_cen,

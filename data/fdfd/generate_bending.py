@@ -73,9 +73,10 @@ def bending_opt(device_id, operation_device):
     )
     last_design_region_dict = None
     # for step in range(10):
-    for step in range(10):
+    for step in range(1):
         optimizer.zero_grad()
-        results = opt.forward(sharpness=1 + 2 * step)
+        # results = opt.forward(sharpness=1 + 2 * step)
+        results = opt.forward(sharpness=256)
         print(f"Step {step}:", end=" ")
         for k, obj in results["breakdown"].items():
             print(f"{k}: {obj['value']:.3f}", end=", ")

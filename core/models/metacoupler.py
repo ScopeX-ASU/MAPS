@@ -204,9 +204,9 @@ class MetaCouplerOptimization(BaseOptimization):
         for region_name in device.design_region_cfgs.keys():
             design_region_param_cfgs[region_name] = dict(
                 method="levelset",
-                rho_resolution=[0, 50],
-                transform=[dict(type="mirror_symmetry", dims=[1]), dict(type="blur", mfs=0.2, resolutions=[310, 310])],
-                # transform=[dict(type="mirror_symmetry", dims=[1])],
+                rho_resolution=[0, 20],
+                # transform=[dict(type="mirror_symmetry", dims=[1]), dict(type="blur", mfs=0.1, resolutions=[310, 310])],
+                transform=[dict(type="mirror_symmetry", dims=[1])],
                 init_method="random",
                 binary_projection=dict(
                     fw_threshold=100,

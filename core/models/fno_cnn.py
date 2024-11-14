@@ -18,6 +18,8 @@ from torch import nn
 from torch.functional import Tensor
 from torch.types import Device
 from neuralop.models import FNO
+from neuralop.layers.fno_block import FNOBlocks
+from neuralop.layers.spectral_convolution import SpectralConv
 import matplotlib.pyplot as plt
 
 # from .layers.local_fno import FNO
@@ -30,9 +32,35 @@ from pyutils.torch_train import set_torch_deterministic
 from core.utils import resize_to_targt_size
 from core.models.fdfd.fdfd import fdfd_ez
 from ceviche.constants import *
-
+from einops import rearrange
 __all__ = ["FNO3d"]
 
+
+class LearnableFourierFeatures(nn.Module):
+    def __init__(self, pos_dim, f_dim, h_dim, d_dim, g_dim=1, gamma=1.0):
+        super(LearnableFourierFeatures, self).__init__()
+        assert f_dim % 2 == 0, 'number of fourier feature dimensions must be divisible by 2.'
+        assert d_dim % g_dim == 0, 'number of D dimension must be divisible by the number of G dimension.'
+        enc_f_dim = int(f_dim / 2)
+        dg_dim = int(d_dim / g_dim)
+        self.Wr = nn.Parameter(torch.randn([enc_f_dim, pos_dim]) * (gamma ** 2))
+        self.mlp = nn.Sequential(
+            nn.Linear(f_dim, h_dim),
+            nn.GELU(),
+            nn.Linear(h_dim, dg_dim)
+        )
+        self.div_term = np.sqrt(f_dim)
+
+    def forward(self, pos):
+        # input pos dim: (B L G M)
+        # output dim: (B L D)
+        # L stands for sequence length. all dimensions must be flattened to a single dimension.
+        XWr = torch.matmul(pos, self.Wr.T)
+        F = torch.cat([torch.cos(XWr), torch.sin(XWr)], dim=-1) / self.div_term
+        Y = self.mlp(F)
+        pos_enc = rearrange(Y, 'b l g d -> b l (g d)')
+
+        return pos_enc
 
 class SpatialInterpolater(nn.Module):
     def __init__(self) -> None:
@@ -165,6 +193,8 @@ class FNO3d(nn.Module):
         mode2: int = 20,
         fourier_feature: str = "none",
         mapping_size: int = 2,
+        err_correction: bool = False,
+        fno_block_only: bool = False,
     ):
         super().__init__()
 
@@ -201,6 +231,8 @@ class FNO3d(nn.Module):
         self.aux_head_idx = aux_head_idx
         self.pos_encoding = pos_encoding
         self.with_cp = with_cp
+        self.err_correction = err_correction
+        self.fno_block_only = fno_block_only
         if pos_encoding == "none":
             pass
         elif pos_encoding == "linear":
@@ -221,10 +253,15 @@ class FNO3d(nn.Module):
         self.mapping_size = mapping_size
         if self.fouier_feature == "basic":
             self.B = torch.eye(2).to(device)
-        elif self.fouier_feature.startswith("gauss"):
+        elif self.fouier_feature.startswith("gauss"): # guass_10
             scale = eval(self.fouier_feature.split("_")[-1])
             self.B = torch.randn((mapping_size, 1)).to(device) * scale
             self.in_channels = self.in_channels - 1 + 2 * mapping_size
+        elif self.fouier_feature == "learnable":
+            self.LFF = LearnableFourierFeatures(
+                pos_dim=2, f_dim=2 * mapping_size, h_dim=64, d_dim=64
+            )
+            self.in_channels = self.in_channels + mapping_size
         else:
             raise ValueError("fourier_feature only supports basic and gauss")
 
@@ -234,7 +271,7 @@ class FNO3d(nn.Module):
             omega=omega,
             dL=2e-8,
             eps_r=torch.randn((260, 260)).to(device),  # random permittivity
-            npml=(50, 50),
+            npml=(25, 25),
         )
         self.padding = 9  # pad the domain if input is non-periodic
         self.build_layers()
@@ -273,6 +310,32 @@ class FNO3d(nn.Module):
                 n_layers=2,
                 norm=None,
                 factorization=None,
+            ) if not self.fno_block_only else FNOBlocks(
+                in_channels=hidden_dim,
+                out_channels=hidden_dim,
+                n_modes=(self.mode1*2, self.mode2*2),
+                output_scaling_factor=None,
+                use_mlp=False,
+                mlp_dropout=0,
+                mlp_expansion=0.5,
+                non_linearity=F.gelu,
+                stabilizer=None,
+                norm=None,
+                preactivation=False,
+                fno_skip="linear",
+                mlp_skip="soft-gating",
+                max_n_modes=None,
+                fno_block_precision="full",
+                rank=1.0,
+                fft_norm="forward",
+                fixed_rank_modes=False,
+                implementation="factorized",
+                separable=False,
+                factorization=None,
+                decomposition_kwargs=dict(),
+                joint_factorization=False,
+                SpectralConv=SpectralConv,
+                n_layers=2,
             )
         )
         hidden_dim = self.hidden_list[-1]
@@ -297,8 +360,33 @@ class FNO3d(nn.Module):
                 n_layers=2,
                 norm=None,
                 factorization=None,
+            ) if not self.fno_block_only else FNOBlocks(
+                in_channels=hidden_dim,
+                out_channels=hidden_dim,
+                n_modes=(self.mode1, self.mode2),
+                output_scaling_factor=None,
+                use_mlp=False,
+                mlp_dropout=0,
+                mlp_expansion=0.5,
+                non_linearity=F.gelu,
+                stabilizer=None,
+                norm=None,
+                preactivation=False,
+                fno_skip="linear",
+                mlp_skip="soft-gating",
+                max_n_modes=None,
+                fno_block_precision="full",
+                rank=1.0,
+                fft_norm="forward",
+                fixed_rank_modes=False,
+                implementation="factorized",
+                separable=False,
+                factorization=None,
+                decomposition_kwargs=dict(),
+                joint_factorization=False,
+                SpectralConv=SpectralConv,
+                n_layers=2,
             ),
-
             )
         )
 
@@ -311,20 +399,129 @@ class FNO3d(nn.Module):
             act_func=None,
             device=self.device,
         )
+        if self.err_correction:
+            self.stem_err_corr = nn.Sequential(
+                ConvBlock(
+                    self.in_channels + 2,
+                    self.hidden_list[0] // 4,
+                    kernel_size=3,
+                    padding=1,
+                    stride=1,
+                    act_func=self.act_func,
+                    device=self.device,
+                ),
+                ConvBlock(
+                    self.hidden_list[0] // 4,
+                    self.hidden_list[0] // 2,
+                    kernel_size=5,
+                    padding=2,
+                    stride=2,
+                    act_func=None,
+                    device=self.device,
+                ),
+            )
+            self.stages_err_corr = nn.ModuleList()
+            hidden_dim = self.hidden_list[-1] // 2
+            self.stages_err_corr.append(
+                FNO(
+                    n_modes=(self.mode1*2, self.mode2*2),
+                    in_channels=hidden_dim,
+                    out_channels=hidden_dim,
+                    lifting_channels=hidden_dim,
+                    projection_channels=hidden_dim,
+                    hidden_channels=hidden_dim,
+                    n_layers=2,
+                    norm=None,
+                    factorization=None,
+                ) if not self.fno_block_only else FNOBlocks(
+                    in_channels=hidden_dim,
+                    out_channels=hidden_dim,
+                    n_modes=(self.mode1*2, self.mode2*2),
+                    output_scaling_factor=None,
+                    use_mlp=False,
+                    mlp_dropout=0,
+                    mlp_expansion=0.5,
+                    non_linearity=F.gelu,
+                    stabilizer=None,
+                    norm=None,
+                    preactivation=False,
+                    fno_skip="linear",
+                    mlp_skip="soft-gating",
+                    max_n_modes=None,
+                    fno_block_precision="full",
+                    rank=1.0,
+                    fft_norm="forward",
+                    fixed_rank_modes=False,
+                    implementation="factorized",
+                    separable=False,
+                    factorization=None,
+                    decomposition_kwargs=dict(),
+                    joint_factorization=False,
+                    SpectralConv=SpectralConv,
+                    n_layers=2,
+                )
+            )
+            hidden_dim = self.hidden_list[-1]
+            self.stages_err_corr.append(
+                nn.Sequential(
+                    ConvBlock(
+                    hidden_dim // 2,
+                    hidden_dim,
+                    kernel_size=2,
+                    padding=1,
+                    stride=2,
+                    act_func=None,
+                    device=self.device,
+                ),
+                FNO(
+                    n_modes=(self.mode1, self.mode2),
+                    in_channels=hidden_dim,
+                    out_channels=hidden_dim,
+                    lifting_channels=hidden_dim,
+                    projection_channels=hidden_dim,
+                    hidden_channels=hidden_dim,
+                    n_layers=2,
+                    norm=None,
+                    factorization=None,
+                ) if not self.fno_block_only else FNOBlocks(
+                    in_channels=hidden_dim,
+                    out_channels=hidden_dim,
+                    n_modes=(self.mode1, self.mode2),
+                    output_scaling_factor=None,
+                    use_mlp=False,
+                    mlp_dropout=0,
+                    mlp_expansion=0.5,
+                    non_linearity=F.gelu,
+                    stabilizer=None,
+                    norm=None,
+                    preactivation=False,
+                    fno_skip="linear",
+                    mlp_skip="soft-gating",
+                    max_n_modes=None,
+                    fno_block_precision="full",
+                    rank=1.0,
+                    fft_norm="forward",
+                    fixed_rank_modes=False,
+                    implementation="factorized",
+                    separable=False,
+                    factorization=None,
+                    decomposition_kwargs=dict(),
+                    joint_factorization=False,
+                    SpectralConv=SpectralConv,
+                    n_layers=2,
+                ),
+                )
+            )
 
-        # print("this is the mode to pass to the FNO", self.mode1, self.mode2, flush=True)
-        # self.head = FNO(
-        #     n_modes=(self.mode1, self.mode2),
-        #     # in_channels=self.in_channels,
-        #     in_channels=self.hidden_list[0],
-        #     out_channels=self.out_channels,
-        #     lifting_channels=self.hidden_list[-1],
-        #     projection_channels=96,
-        #     hidden_channels=self.hidden_list[-1],
-        #     n_layers=4,
-        #     norm=None,
-        #     factorization=None,
-        # )
+            self.head_err_corr = ConvBlock(
+                hidden_dim // 2+hidden_dim,
+                self.out_channels,
+                kernel_size=1,
+                padding=0,
+                ln=False,
+                act_func=None,
+                device=self.device,
+            )
 
         if self.aux_head:
             hidden_list = [self.kernel_list[self.aux_head_idx]] + self.hidden_list
@@ -476,7 +673,22 @@ class FNO3d(nn.Module):
         # )  # take the inverse of the permittivity to easy the training difficulty
         eps = eps / 12.11
         eps = eps.unsqueeze(1)  # B, 1, H, W
-
+        if self.fouier_feature == "learnable":
+            H = eps.shape[-2]
+            W = eps.shape[-1]
+            bs = eps.shape[0]
+            y = torch.linspace(-1, 1, H).to(eps.device)
+            x = torch.linspace(-1, 1, W).to(eps.device)
+            grid_y, grid_x = torch.meshgrid(y, x, indexing='ij')
+            grid = torch.stack((grid_x, grid_y), dim=-1)  # Shape (H, W, 2)
+            grid_flat = rearrange(grid, 'h w d -> (h w) d')  # Flatten spatial to shape (H*W, 2)
+            pos = grid_flat.unsqueeze(0).unsqueeze(2).expand(bs, H * W, 1, 2)
+            enc = self.LFF(pos).permute(0, 2, 1).reshape(bs, -1, H, W)
+            eps = torch.cat((eps, enc), dim=1)
+        elif self.fouier_feature != "none":
+            eps = self.fouier_feature_mapping(eps)
+        else:
+            raise ValueError("fourier_feature only supports learnable")
         # -----------this is before ----------------
         # eps = torch.cat((eps, eps), dim=0)
         # sources = torch.cat((src, adj_src), dim=0)
@@ -488,9 +700,8 @@ class FNO3d(nn.Module):
         # ------------------------------------------
 
         # -----------this is after ----------------
-        if self.fouier_feature != "none":
-            eps = self.fouier_feature_mapping(eps)
         x = torch.cat((eps, incident_field), dim=1)
+
         x = self.stem(x)
         x1 = self.stages[0](x)
         x2 = self.stages[1](x1)
@@ -507,13 +718,35 @@ class FNO3d(nn.Module):
         x = torch.cat((x1, x2), dim=1)
         forward_Ez_field = self.head(x)
 
+        if len(forward_Ez_field.shape) == 3:
+            forward_Ez_field = forward_Ez_field.unsqueeze(0)
+        
+        forward_Ez_field_copy = forward_Ez_field.clone().detach()
+
+        if self.err_correction:
+            x = torch.cat((eps, incident_field, forward_Ez_field_copy), dim=1)
+            x = self.stem_err_corr(x)
+            x1 = self.stages_err_corr[0](x)
+            x2 = self.stages_err_corr[1](x1)
+            x1 = resize_to_targt_size(
+                x1, (src.shape[-2], src.shape[-1])
+            )
+            if len(x1.shape) == 3:
+                x1 = x1.unsqueeze(0)
+            x2 = resize_to_targt_size(
+                x2, (src.shape[-2], src.shape[-1])
+            )
+            if len(x2.shape) == 3:
+                x2 = x2.unsqueeze(0)
+            x = torch.cat((x1, x2), dim=1)
+            forward_Ez_field_err_corr = self.head_err_corr(x) + forward_Ez_field_copy
+
+
 
         # forward_Ez_field = self.head(x)
         # forward_Ez_field = resize_to_targt_size(
         #     forward_Ez_field, (src.shape[-2], src.shape[-1])
         # )
-        if len(forward_Ez_field.shape) == 3:
-            forward_Ez_field = forward_Ez_field.unsqueeze(0)
         # feature = self.features(x)
         # forward_Ez_field = self.head(feature)
         # ------------------------------------------
@@ -526,9 +759,22 @@ class FNO3d(nn.Module):
         forward_field = torch.cat(
             (forward_Hx_field, forward_Hy_field, forward_Ez_field), dim=1
         )
+
+        if self.err_correction:
+            forward_Hx_field_err_corr, forward_Hy_field_err_corr = self.from_Ez_to_Hx_Hy(
+                eps_copy, forward_Ez_field_err_corr
+            )
+            forward_field_err_corr = torch.cat(
+                (forward_Hx_field_err_corr, forward_Hy_field_err_corr, forward_Ez_field_err_corr), dim=1
+            )
+            forward_field_err_corr = self.pml_mask.unsqueeze(0).unsqueeze(0) * forward_field_err_corr
+
         adjoint_field = torch.randn_like(forward_Ez_field).to(forward_Ez_field.device)
 
         forward_field = self.pml_mask.unsqueeze(0).unsqueeze(0) * forward_field
         adjoint_field = self.pml_mask.unsqueeze(0).unsqueeze(0) * adjoint_field
 
-        return forward_field, adjoint_field
+        if self.err_correction:
+            return forward_field, adjoint_field, forward_field_err_corr
+        else:
+            return forward_field, adjoint_field
