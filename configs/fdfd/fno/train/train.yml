@@ -42,11 +42,11 @@ log_criterion:
   s_param_loss:
     weight: 1
   err_corr_Ez:
-    weight: 1
+    weight: 0
   err_corr_Hx:
-    weight: 1
+    weight: 0
   err_corr_Hy:
-    weight: 1
+    weight: 0
   Hx_loss:
     weight: 1
   Hy_loss:

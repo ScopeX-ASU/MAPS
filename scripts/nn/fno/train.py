@@ -61,6 +61,10 @@ def task_launcher(args):
             f"--aux_criterion.Hx_loss.weight={H_loss}",
             f"--aux_criterion.Hy_loss.weight={H_loss}",
 
+            f"--log_criterion.err_corr_Ez.weight={1 if err_correction else 0}",
+            f"--log_criterion.err_corr_Hx.weight={1 if err_correction else 0}",
+            f"--log_criterion.err_corr_Hy.weight={1 if err_correction else 0}",
+
             f"--test_criterion.name={'nmse'}",
             f"--test_criterion.weighted_frames={0}",
             f"--test_criterion.weight={1}",

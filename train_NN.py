@@ -360,8 +360,8 @@ def train(
                     )
                 elif name == "s_param_loss":
                     aux_loss = weight * aux_criterion(
-                        # fields=output, 
-                        fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"],
+                        fields=output, 
+                        # fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"],
                         ht_m=ht_m['ht_m-wl-1.55-port-out_port_1-mode-1'],
                         et_m=et_m['et_m-wl-1.55-port-out_port_1-mode-1'],
                         monitor_slices=monitor_slices, # 'port_slice-out_port_1_x', 'port_slice-out_port_1_y'
@@ -556,6 +556,7 @@ def validate(
                     torch.ones_like(output[:, -2:, ...]).to(device)
                 )
                 mse_meter.update(val_loss.item())
+                loss = val_loss
 
                 for name, config in log_criterions.items():
                     log_criterion, _ = config
@@ -583,8 +584,8 @@ def validate(
                         )
                     elif name == "s_param_loss":
                         log_loss = log_criterion(
-                            # fields=output, 
-                            fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"],
+                            fields=output, 
+                            # fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"],
                             ht_m=ht_m['ht_m-wl-1.55-port-out_port_1-mode-1'],
                             et_m=et_m['et_m-wl-1.55-port-out_port_1-mode-1'],
                             monitor_slices=monitor_slices, # 'port_slice-out_port_1_x', 'port_slice-out_port_1_y'
@@ -763,7 +764,7 @@ def test(
                     torch.ones_like(output[:, -2:, ...]).to(device)
                 )
                 mse_meter.update(val_loss.item())
-
+                loss = val_loss
                 for name, config in log_criterions.items():
                     log_criterion, _ = config
                     if name == "maxwell_residual_loss":
@@ -790,8 +791,8 @@ def test(
                         )
                     elif name == "s_param_loss":
                         log_loss = log_criterion(
-                            # fields=output, 
-                            fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"],
+                            fields=output, 
+                            # fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"],
                             ht_m=ht_m['ht_m-wl-1.55-port-out_port_1-mode-1'],
                             et_m=et_m['et_m-wl-1.55-port-out_port_1-mode-1'],
                             monitor_slices=monitor_slices, # 'port_slice-out_port_1_x', 'port_slice-out_port_1_y'
@@ -844,7 +845,7 @@ def test(
         loss_to_append = mse_meter.avg
     loss_vector.append(loss_to_append)
 
-    log_info = "\nValidation set: Average loss: {:.4e}".format(mse_meter.avg)
+    log_info = "\nTest set: Average loss: {:.4e}".format(mse_meter.avg)
     for name, log_meter in log_meters.items():
         log_info += f" {name}: {log_meter.val:.4e}"
 

@@ -1023,7 +1023,7 @@ class SParamLoss(torch.nn.modules.loss._Loss):
         ht_m,
         et_m,
         monitor_slices,
-        target_SParam
+        target_SParam,
     ):
         # Step 1: Resize all the fields to the target size
         Ez = fields[:, -2:, :, :].permute(0, 2, 3, 1).contiguous()
