@@ -6,24 +6,27 @@ FilePath: /MAPS/core/models/fdfd/solver.py
 """
 
 import cupy as cp
+import numpy as np
 import scipy.sparse as sp
 import torch
-from cupyx.scipy.sparse.linalg import spsolve, factorized
 from ceviche.solvers import solve_linear
-import numpy as np
-from torch import Tensor
-from core.models.fdfd.utils import torch_sparse_to_scipy_sparse
 from ceviche.utils import make_sparse
-import numpy as np
-from pyutils.general import print_stat
+from cupyx.scipy.sparse.linalg import factorized, spsolve
 from pyMKL import pardisoSolver
+from pyutils.general import print_stat, TimerCtx
+from torch import Tensor
+
+from core.models.fdfd.utils import torch_sparse_to_scipy_sparse
 from core.utils import print_stat
+
+
 def coo_torch2cupy(A):
     A = A.data.coalesce()
     Avals_cp = cp.asarray(A.values())
     Aidx_cp = cp.asarray(A.indices())
     # return cp.sparse.csr_matrix((Avals_cp, Aidx_cp), shape=A.shape)
     return cp.sparse.coo_matrix((Avals_cp, Aidx_cp))
+
 
 # Custom PyTorch sparse solver exploiting a CuPy backend
 # See https://blog.flaport.net/solving-sparse-linear-systems-in-pytorch.html
@@ -91,15 +94,37 @@ def coo_torch2cupy(A):
 
 class SparseSolveTorchFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, entries_a, indices_a, eps_diag: Tensor, b: np.ndarray | Tensor, solver_instance, port_name, mode):
+    def forward(
+        ctx,
+        entries_a,
+        indices_a,
+        eps_diag: Tensor,
+        b: np.ndarray | Tensor,
+        solver_instance,
+        port_name,
+        mode,
+        Pl,
+        Pr,
+    ):
         ### entries_a: values of the sparse matrix A
         ### indices_a: row/column indices of the sparse matrix A
         ### eps_diag: diagonal of A, e.g., -omega**2 * epr_0 * eps_r
         if isinstance(b, Tensor):
             b = b.cpu().numpy()
         A = make_sparse(entries_a, indices_a, (eps_diag.shape[0], eps_diag.shape[0]))
-        # x = _solve_direct(A, b)
-        x = solve_linear(A, b)
+
+        if Pl is not None and Pr is not None:
+            A = Pl @ A @ Pr
+            b = Pl @ b
+            symmetry = False # pardiso symmetric mode is wrong
+        else:
+            symmetry = False
+        # with TimerCtx() as t:
+        x = solve_linear(A, b, symmetry=symmetry)
+            # x = solve_linear(A, b, iterative_method="lgmres", symmetry=symmetry, rtol=1e-2)
+        # print(f"my solve time (symmetry={symmetry}): {t.interval}")
+        if Pl is not None and Pr is not None:
+            x = Pr @ x
 
         x = torch.from_numpy(x).to(torch.complex128).to(eps_diag.device)
         ctx.entries_a = entries_a
@@ -108,6 +133,8 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         ctx.solver_instance = solver_instance
         ctx.port_name = port_name
         ctx.mode = mode
+        ctx.Pl = Pl
+        ctx.Pr = Pr
         return x
 
     @staticmethod
@@ -118,15 +145,28 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         solver_instance = ctx.solver_instance
         port_name = ctx.port_name
         mode = ctx.mode
+        Pl, Pr = ctx.Pl, ctx.Pr
         A_t = make_sparse(entries_a, indices_a, (eps_diag.shape[0], eps_diag.shape[0]))
         grad = grad.cpu().numpy().astype(np.complex128)
         adj_src = grad.conj()
-        if (port_name != "Norm" and mode != "Norm") or (port_name != "adj" and mode != "adj"):
-            solver_instance.adj_src[(port_name, mode)] = torch.from_numpy(adj_src).to(torch.complex128).to(eps_diag.device)
+        if (port_name != "Norm" and mode != "Norm") or (
+            port_name != "adj" and mode != "adj"
+        ):
+            solver_instance.adj_src[(port_name, mode)] = (
+                torch.from_numpy(adj_src).to(torch.complex128).to(eps_diag.device)
+            )
         ## this adj_src = "-v" in ceviche
         # print_stat(adj_src, "my adjoint source")
         # print(f"my adjoint A_t", A_t)
-        adj = solve_linear(A_t, adj_src)
+        if Pl is not None and Pr is not None:
+            A_t = (Pr.T @ A_t @ Pl.T)
+            adj_src = Pr.T @ adj_src
+            symmetry = False # pardiso symmetric mode is wrong
+        else:
+            symmetry = False
+        adj = solve_linear(A_t, adj_src, symmetry=symmetry)
+        if Pl is not None and Pr is not None:
+            adj = Pl.T @ adj
         adj = torch.from_numpy(adj).to(torch.complex128).to(eps_diag.device)
 
         grad_epsilon = -adj.mul_(x).to(eps_diag.device).real
@@ -140,15 +180,29 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         # else:
 
         grad_b = None
-        return None, None, grad_epsilon, grad_b, None, None, None
-    
+        return None, None, grad_epsilon, grad_b, None, None, None, None, None
+
+
 class SparseSolveTorch(torch.nn.Module):
     def __init__(self):
         super(SparseSolveTorch, self).__init__()
-        self.adj_src = {} # now the adj_src is a dictionary in which the key is (port_name, mode) with same wl, different wl have different simulation objects
+        self.adj_src = {}  # now the adj_src is a dictionary in which the key is (port_name, mode) with same wl, different wl have different simulation objects
 
-    def forward(self, entries_a, indices_a, eps_diag: Tensor, b: np.ndarray | Tensor, port_name, mode):
-        x = SparseSolveTorchFunction.apply(entries_a, indices_a, eps_diag, b, self, port_name, mode)
+    def forward(
+        self,
+        entries_a,
+        indices_a,
+        eps_diag: Tensor,
+        b: np.ndarray | Tensor,
+        port_name,
+        mode,
+        Pl=None,
+        Pr=None,
+    ):
+        x = SparseSolveTorchFunction.apply(
+            entries_a, indices_a, eps_diag, b, self, port_name, mode, Pl, Pr
+        )
         return x
+
 
 sparse_solve_torch = SparseSolveTorchFunction.apply

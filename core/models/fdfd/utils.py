@@ -168,17 +168,20 @@ def sparse_mv(A, x):
 
 def hankel(n: int, x: Tensor):
     ## hankel function J + iY
+    # dtype = x.dtype
+    # x = x.to(torch.float32)
     if n == 0:
-        return torch.complex(torch.special.bessel_j0(x), torch.special.bessel_y0(x))
+        res = torch.complex(torch.special.bessel_j0(x), torch.special.bessel_y0(x))
     elif n == 1:
-        return torch.complex(torch.special.bessel_j1(x), torch.special.bessel_y1(x))
+        res = torch.complex(torch.special.bessel_j1(x), torch.special.bessel_y1(x))
     elif n >= 2:  # must use scipy.special
         x_np = x.cpu().numpy()
-        return torch.complex(
+        res = torch.complex(
             torch.from_numpy(jn(n, x_np)), torch.from_numpy(yn(n, x_np))
         ).to(x.device)
     else:
         raise ValueError("n must be a non-negative integer")
+    return res
 
 
 ## https://github.com/NanoComp/meep/blob/master/src/near2far.cpp#L208
@@ -201,19 +204,23 @@ def green2d(
 
     # [n, 1, 2] - [1, s, 2] = [n, s, 2]
     rhat = x[..., None, :] - x0[None, ...]  # distance vector # [n, s, 2]
+
     r = rhat.norm(p=2, dim=-1, keepdim=True)  # [n, s, 1]
     rhat = rhat / r  # unit vector # [n, s, 2]
-    omega = 2 * np.pi * freqs  # [nf] angular frequencies
+    # print(rhat)
+    omega = 2 * np.pi * freqs / 1e-6  # [nf] angular frequencies
     k = omega * (eps * mu) ** 0.5  # [nf] wave numbers
-    ik = 1j * k  # [nf] imaginary wave numbers
+    ik = (1j * k).to(f0.dtype)  # [nf] imaginary wave numbers
     # [nf] * [n, s, 1] = [n, s, nf]
-    kr = k * r[..., None]
+    kr = k * r
     # Z = (mu / eps) ** 0.5
 
     if c0 in {"Ez", "Hz"}:  # vertical source
         # [n, s, nf] * [bs, s, nf] = [bs, n, nf]
-        H0 = einsum(hankel(0, kr), f0, "n s f, b s f -> b n f")
-        H1 = einsum(hankel(1, kr), f0, "n s f, b s f -> b n s f")
+        print(kr.shape, kr.dtype, f0.shape, f0.dtype)
+        # print(f0)
+        H0 = einsum(hankel(0, kr).to(f0.dtype), f0, "n s f, b s f -> b n f")
+        H1 = einsum(hankel(1, kr).to(f0.dtype), f0, "n s f, b s f -> b n s f")
         # ikH1 = 0.25 * ik * H1  # [bs, n, s, nf]
         ik_1_by_4 = 0.25 * ik
 
@@ -222,11 +229,22 @@ def green2d(
             # [nf] * [bs, n, nf] = [bs, n, nf]
             Ez = -0.25 * omega * mu * H0  # [bs, n, nf]
             # [bs, n, s] * [bs, n, s, nf] = [bs, n, nf]
-            Hx = torch.einsum("ns,f,bnsf->bnf", -rhat[..., 1], ik_1_by_4, H1)
-            Hy = torch.einsum("ns,f,bnsf->bnf", rhat[..., 0], ik_1_by_4, H1)
+            print(H1[0, 0, 0], ik_1_by_4[0])
+            print(H1[0, 0, 0] * ik_1_by_4[0])
+            Hx = torch.einsum(
+                "ns,f,bnsf->bnf", -rhat[..., 1].to(ik_1_by_4.dtype), ik_1_by_4, H1
+            )
+            Hy = torch.einsum(
+                "ns,f,bnsf->bnf", rhat[..., 0].to(ik_1_by_4.dtype), ik_1_by_4, H1
+            )
+
         elif c0 == "Hz":  # Hz source
-            Ex = torch.einsum("ns,f,bnsf->bnf", rhat[..., 1], ik_1_by_4, H1)
-            Ey = torch.einsum("ns,f,bnsf->bnf", -rhat[..., 0], ik_1_by_4, H1)
+            Ex = torch.einsum(
+                "ns,f,bnsf->bnf", rhat[..., 1].to(ik_1_by_4.dtype), ik_1_by_4, H1
+            )
+            Ey = torch.einsum(
+                "ns,f,bnsf->bnf", -rhat[..., 0].to(ik_1_by_4.dtype), ik_1_by_4, H1
+            )
             Hz = -0.25 * omega * eps * H0  # [bs, n, nf]
             Ez = Hx = Hy = 0
     elif c0 in {"Ex", "Ey", "Hx", "Hy"}:  # in-plane source
@@ -296,7 +314,7 @@ def get_farfields(
 ):
     """
     nearfield_regions: list of nearfield monitor, {monitor_name: {"slice": slice, "center": center, "size": size}}
-    fields: [bs, s, nf] a batch of nearfield fields, e.g., Ez
+    fields: [bs, X, Y, nf] a batch of nearfield fields, e.g., Ez
     x: [n, 2], batch size, n far field target points, 2 dimension, x and y
     freqs: [nf] frequencies
     eps: scalar, permittivity in the homogeneous medium
@@ -305,29 +323,28 @@ def get_farfields(
     """
     far_fields = {"Ex": 0, "Ey": 0, "Ez": 0, "Hx": 0, "Hy": 0, "Hz": 0}
     for name, nearfield_region in nearfield_regions.items():
-
         nearfield_slice = nearfield_region["slice"]
-        f0 = fields[nearfield_slice]
+        f0 = fields[..., *nearfield_slice, :]  # [bs, s, nf]
         center = nearfield_region["center"]
         size = nearfield_region["size"]
         if size[0] == 0:  # vertical monitor
             n_src_points = nearfield_slice[1].shape[0]
 
             xs_y = torch.linspace(
-                center[1] - size[1] / 2, center + size[1] / 2, n_src_points
+                center[1] - size[1] / 2, center[1] + size[1] / 2, n_src_points
             )
             xs_x = torch.empty_like(xs_y).fill_(center[0])
         else:
             n_src_points = nearfield_slice[0].shape[0]  # horizontal monitor
             xs_x = torch.linspace(
-                center[0] - size[0] / 2, center + size[0] / 2, n_src_points
+                center[0] - size[0] / 2, center[0] + size[0] / 2, n_src_points
             )
             xs_y = torch.empty_like(xs_x).fill_(center[1])
 
         xs = torch.stack((xs_x, xs_y), dim=-1)  # [num_src_points, 2]
 
         Ex, Ey, Ez, Hx, Hy, Hz = green2d(
-            x=x, freqs=freqs, eps=eps, mu=mu, xs=xs, f0=f0, c0=component
+            x=x, freqs=freqs, eps=eps, mu=mu, x0=xs, f0=f0, c0=component
         )
         far_fields["Ex"] += Ex
         far_fields["Ey"] += Ey
