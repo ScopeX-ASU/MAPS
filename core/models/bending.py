@@ -124,9 +124,9 @@ class BendingOptimization(BaseOptimization):
         for region_name in device.design_region_cfgs.keys():
             design_region_param_cfgs[region_name] = dict(
                 method="levelset",
-                rho_resolution=[5, 5],
+                rho_resolution=[25, 25],
                 transform=[dict(type="transpose_symmetry", flag=True), dict(type="blur", mfs=0.1, resolutions=[310, 310])],
-                init_method="random", # this can only converge to fwd transmission ~ 25% in TE1 mode
+                init_method="random",
                 # init_method="ring",
                 binary_projection=dict(
                     fw_threshold=100,

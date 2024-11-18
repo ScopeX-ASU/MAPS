@@ -649,6 +649,7 @@ def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
         ).to(device)
     elif "fno3d" in configs.model.name.lower():
         model = eval(configs.model.name)(
+            train_field=configs.model.train_field,
             in_channels=configs.model.in_channels,
             out_channels=configs.model.out_channels,
             kernel_list=configs.model.kernel_list,

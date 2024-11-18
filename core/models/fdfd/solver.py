@@ -18,12 +18,81 @@ import numpy as np
 from pyutils.general import print_stat
 from pyMKL import pardisoSolver
 from core.utils import print_stat
+import scipy.sparse.linalg as spl
+try:
+    from pyMKL import pardisoSolver
+    HAS_MKL = True
+    # print('using MKL for direct solvers')
+except:
+    HAS_MKL = False
 def coo_torch2cupy(A):
     A = A.data.coalesce()
     Avals_cp = cp.asarray(A.values())
     Aidx_cp = cp.asarray(A.indices())
     # return cp.sparse.csr_matrix((Avals_cp, Aidx_cp), shape=A.shape)
     return cp.sparse.coo_matrix((Avals_cp, Aidx_cp))
+
+# ---------------------- Sparse Solver Copied from Ceviche ----------------------
+DEFAULT_ITERATIVE_METHOD = 'bicg'
+
+# dict of iterative methods supported (name: function)
+ITERATIVE_METHODS = {
+    'bicg': spl.bicg,
+    'bicgstab': spl.bicgstab,
+    'cg': spl.cg,
+    'cgs': spl.cgs,
+    'gmres': spl.gmres,
+    'lgmres': spl.lgmres,
+    'qmr': spl.qmr,
+    'gcrotmk': spl.gcrotmk
+}
+
+# convergence tolerance for iterative solvers.
+ATOL = 1e-8
+
+""" ========================== SOLVER FUNCTIONS ========================== """
+
+def solve_linear(A, b, iterative_method=False):
+    """ Master function to call the others """
+
+    if iterative_method and iterative_method is not None:
+        # if iterative solver string is supplied, use that method
+        return _solve_iterative(A, b, iterative_method=iterative_method)
+    elif iterative_method and iterative_method is None:
+        # if iterative_method is supplied as None, use the default
+        return _solve_iterative(A, b, iterative_method=DEFAULT_ITERATIVE_METHOD)
+    else:
+        # otherwise, use a direct solver
+        return _solve_direct(A, b)
+
+def _solve_direct(A, b):
+    """ Direct solver """
+
+    if HAS_MKL:
+        # prefered method using MKL. Much faster (on Mac at least)
+        pSolve = pardisoSolver(A, mtype=13)
+        pSolve.factor()
+        x = pSolve.solve(b)
+        pSolve.clear()
+        return x
+    else:
+        # scipy solver.
+        return spl.spsolve(A, b)
+
+def _solve_iterative(A, b, iterative_method=DEFAULT_ITERATIVE_METHOD):
+    """ Iterative solver """
+
+    # error checking on the method name (https://docs.scipy.org/doc/scipy/reference/sparse.linalg.html)
+    try:
+        solver_fn = ITERATIVE_METHODS[iterative_method]
+    except:
+        raise ValueError("iterative method {} not found.\n supported methods are:\n {}".format(iterative_method, ITERATIVE_METHODS))
+
+    # call the solver using scipy's API
+    x, info = solver_fn(A, b, atol=ATOL)
+    return x
+
+# ---------------------- Sparse Solver Copied from Ceviche ----------------------
 
 # Custom PyTorch sparse solver exploiting a CuPy backend
 # See https://blog.flaport.net/solving-sparse-linear-systems-in-pytorch.html

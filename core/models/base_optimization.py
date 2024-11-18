@@ -421,7 +421,10 @@ class BaseOptimization(nn.Module):
                             store_s_params[key] = s_param.detach().cpu().numpy()
                         if isinstance(s_param, ArrayBox):
                             store_s_params = s_param._value
-                    store_s_params = np.stack((store_s_params["s_p"], store_s_params["s_m"]), axis=0)
+                    if "s_p" in store_s_params.keys():
+                        store_s_params = np.stack((store_s_params["s_p"], store_s_params["s_m"]), axis=0)
+                    else:
+                        store_s_params = store_s_params["s"]
                     f.create_dataset(f's_params-{port_name}-{wl}-{out_mode}', data=store_s_params) # 3d numpy array
                 adj_srcs, fields_adj, field_adj_normalizer = self.objective.obtain_adj_srcs()
                 for wl, adj_src in adj_srcs.items():

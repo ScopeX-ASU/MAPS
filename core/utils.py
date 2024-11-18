@@ -16,7 +16,8 @@ from torch import Tensor
 from torch_sparse import spmm
 from typing import Callable, List, Tuple
 from ceviche.utils import get_entries_indices
-from core.models.layers.utils import get_eigenmode_coefficients, Slice
+from core.models.layers.utils import get_eigenmode_coefficients, Slice, get_flux, grid_average, cross, overlap
+import autograd.numpy as npa
 
 
 if TYPE_CHECKING:
@@ -24,6 +25,213 @@ if TYPE_CHECKING:
 else:
     _params_t = Any
 
+def cal_fom_from_fields(
+    Ez,
+    Hx,
+    Hy,
+    ht_m,
+    et_m,
+    monitor_out,
+    monitor_refl,
+):
+    fwd_trans, _ = get_eigenmode_coefficients(
+                hx=Hx,
+                hy=Hy,
+                ez=Ez,
+                ht_m=ht_m,
+                et_m=et_m,
+                monitor=monitor_out,
+                grid_step=1/50,
+                direction="y",
+                energy=True,
+            )
+    fwd_trans = fwd_trans / 1e-8 # normalize with the input power
+
+    refl_fom = get_flux(
+                hx=Hx,
+                hy=Hy,
+                ez=Ez,
+                monitor=monitor_refl,
+                grid_step=1/50,
+                direction="x",
+            )
+    refl_fom = torch.abs(torch.abs(refl_fom / 1e-8) - 1) # normalize with the input power
+
+    total_fom = -fwd_trans + 0.1 * refl_fom
+
+    return total_fom
+
+def cal_adj_src_from_fwd_field(
+    fwd_field,
+    ht_ms,
+    et_ms,
+    monitors,
+) -> Tensor:
+    Ez = torch.view_as_complex(fwd_field[:, -2:, ...].permute(0, 2, 3, 1).contiguous()) # bs, H, W complex
+    # the Hx and Hy should be calculated from Ez again in cal_fom_from_fields, not directily read from fields
+    Hx = torch.view_as_complex(fwd_field[:, :2, ...].permute(0, 2, 3, 1).contiguous()) # bs, H, W complex
+    Hy = torch.view_as_complex(fwd_field[:, 2:4, ...].permute(0, 2, 3, 1).contiguous()) # bs, H, W complex
+    ht_m = ht_ms['ht_m-wl-1.55-port-out_port_1-mode-1']
+    et_m = et_ms['et_m-wl-1.55-port-out_port_1-mode-1']
+    monitor_out_x = monitors["port_slice-out_port_1_x"]
+    monitor_out_y = monitors["port_slice-out_port_1_y"]
+    monitor_refl_x = monitors["port_slice-refl_port_1_x"]
+    monitor_refl_y = monitors["port_slice-refl_port_1_y"]
+    gradient_list = []
+    for i in range(Ez.shape[0]):
+        Ez_i = Ez[i].clone().requires_grad_()
+        monitor_slice_out = Slice(
+                        y=monitor_out_y[i],
+                        x=torch.arange(
+                            monitor_out_x[i][0],
+                            monitor_out_x[i][1],
+                        ).to(monitor_out_y[i].device),
+                    )
+        monitor_slice_refl = Slice(
+            x=monitor_refl_x[i],
+            y=torch.arange(
+                    monitor_refl_y[i][0],
+                    monitor_refl_y[i][1],
+                ).to(monitor_refl_x[i].device),
+            )
+        fom = cal_fom_from_fields(
+            Ez_i, 
+            Hx[i], 
+            Hy[i], 
+            ht_m[i], 
+            et_m[i], 
+            monitor_slice_out,
+            monitor_slice_refl,
+        )
+        gradient = torch.autograd.grad(fom, Ez_i, create_graph=True)[0]
+        gradient_list.append(gradient)
+
+    return torch.stack(gradient_list, dim=0)
+
+def cal_total_field_adj_src_from_fwd_field(
+    Ez,
+    eps,
+    ht_ms,
+    et_ms,
+    monitors,
+    pml_mask,
+    from_Ez_to_Hx_Hy_func,
+    return_adj_src,
+) -> Tensor:
+    from core.models.fdfd.fdfd import fdfd_ez
+    if not return_adj_src:
+        Hx, Hy = from_Ez_to_Hx_Hy_func(
+            eps, Ez # the eps_map doesn't really matter here actually
+        )
+        total_field = torch.cat(
+            (Hx, Hy, Ez), dim=1
+        )
+        total_field = pml_mask.unsqueeze(0).unsqueeze(0) * total_field
+        return total_field, None
+    else:
+        ht_m = ht_ms['ht_m-wl-1.55-port-out_port_1-mode-1']
+        et_m = et_ms['et_m-wl-1.55-port-out_port_1-mode-1']
+        monitor_out_x = monitors["port_slice-out_port_1_x"]
+        monitor_out_y = monitors["port_slice-out_port_1_y"]
+        monitor_refl_x = monitors["port_slice-refl_port_1_x"]
+        monitor_refl_y = monitors["port_slice-refl_port_1_y"]
+        omega = 2 * np.pi * C_0 / (1.55 * 1e-6)
+        sim = fdfd_ez(
+            omega=omega,
+            dL=2e-8,
+            eps_r=torch.randn((260, 260)).to(Ez.device),  # random permittivity
+            npml=(25, 25),
+        )
+        Ez_copy = Ez.clone()
+        Ez = Ez.permute(0, 2, 3, 1).contiguous()
+        Ez = torch.view_as_complex(Ez)
+        gradient_list = []
+        Hx_list = []
+        Hy_list = []
+        for i in range(Ez.shape[0]):
+            Ez_i = Ez[i].clone().requires_grad_()
+
+            sim.eps_r = eps[i]
+            Hx_vec, Hy_vec = sim._Ez_to_Hx_Hy(Ez_i.flatten())
+            Hx_i = Hx_vec.reshape(Ez_i.shape)
+            Hy_i = Hy_vec.reshape(Ez_i.shape)
+
+            Hx_to_append = torch.view_as_real(Hx_i).permute(2, 0, 1)
+            Hy_to_append = torch.view_as_real(Hy_i).permute(2, 0, 1)
+
+            Hx_list.append(Hx_to_append)
+            Hy_list.append(Hy_to_append)
+
+            monitor_slice_out = Slice(
+                            y=monitor_out_y[i],
+                            x=torch.arange(
+                                monitor_out_x[i][0],
+                                monitor_out_x[i][1],
+                            ).to(monitor_out_y[i].device),
+                        )
+            monitor_slice_refl = Slice(
+                x=monitor_refl_x[i],
+                y=torch.arange(
+                        monitor_refl_y[i][0],
+                        monitor_refl_y[i][1],
+                    ).to(monitor_refl_x[i].device),
+                )
+            fom = cal_fom_from_fields(
+                Ez_i, 
+                Hx_i, 
+                Hy_i, 
+                ht_m[i], 
+                et_m[i], 
+                monitor_slice_out,
+                monitor_slice_refl,
+            )
+            gradient = torch.autograd.grad(fom, Ez_i, create_graph=True)[0]
+            gradient_list.append(gradient)
+        Hx = torch.stack(Hx_list, dim=0)
+        Hy = torch.stack(Hy_list, dim=0)
+        total_field = torch.cat(
+            (Hx, Hy, Ez_copy), dim=1
+        )
+        total_field = pml_mask.unsqueeze(0).unsqueeze(0) * total_field
+        adj_src = torch.conj(torch.stack(gradient_list, dim=0))
+        return total_field, adj_src
+
+def plot_fourier_eps(
+    eps_map: torch.Tensor,
+    filepath: str,
+) -> None:
+    eps_map = 1 / eps_map[0]
+    eps_map0 = eps_map.cpu().numpy()
+    plt.imshow(eps_map0)
+    plt.colorbar()
+    plt.savefig(filepath.replace(".png", "_org_eps.png"))
+    eps_map = torch.fft.fft2(eps_map)           # 2D FFT
+    eps_map = torch.fft.fftshift(eps_map)       # Shift zero frequency to center
+    eps_map = torch.abs(eps_map) 
+    print_stat(eps_map)
+    eps_map = eps_map.cpu().numpy()
+    plt.imshow(eps_map)
+    plt.colorbar()
+    plt.savefig(filepath)
+    plt.close()
+
+def plot_fouier_transform(
+    field: torch.Tensor,
+    filepath: str,
+) -> None:
+    field = field.reshape(field.shape[0], -1, 2, field.shape[-2], field.shape[-1]).permute(0, 1, 3, 4, 2).contiguous()
+    field = torch.abs(torch.view_as_complex(field)).squeeze()
+    field = field[0]
+    field0 = field.cpu().numpy()
+    plt.imshow(field0)
+    plt.savefig(filepath.replace(".png", "_org_field.png"))
+    field = torch.fft.fft2(field)           # 2D FFT
+    field = torch.fft.fftshift(field)       # Shift zero frequency to center
+    field = torch.abs(field) 
+    field = field.cpu().numpy()
+    plt.imshow(field)
+    plt.savefig(filepath)
+    plt.close()
 
 def plot_fields(fields: Tensor, ground_truth: Tensor, cmap: str = "magma", filepath: str = './figs/fields.png', **kwargs):
     # the field is of shape (batch, 6, x, y)
@@ -826,127 +1034,6 @@ def rip_padding(eps, pady_0, pady_1, padx_0, padx_1):
     """
     return eps[padx_0:-padx_1, pady_0:-pady_1]
 
-# class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
-#     def __init__(
-#         self,
-#         wl_cen: float = 1.55,
-#         wl_width: float = 0,
-#         n_wl: int = 1,
-#         size_average=None,
-#         reduce=None,
-#         reduction: str = "mean",
-#     ):
-#         super().__init__(size_average, reduce, reduction)
-#         self.wl_list = torch.linspace(
-#             wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl
-#         )
-#         self.omegas = 2 * np.pi * C_0 / (self.wl_list * 1e-6)
-#         self.As = (None, None)
-#         self.bs = {}
-#         self.sim = None
-
-#     def make_A(self, eps_r: torch.Tensor, wl_list: List[float]):
-#         ## eps_r: [bs, h, w] real tensor
-#         ## wl_list: [n_wl] list of wls in um, support spectral bundling
-#         eps_vec = eps_r.flatten(1)
-#         tot_entries_list = []
-#         tot_indices_list = []
-#         for eps_v in eps_vec:
-#             entries_list = []
-#             indices_list = []
-#             for wl in wl_list:
-#                 self.sim.omega = 2 * np.pi * C_0 / (wl.item() * 1e-6)
-#                 self.sim._setup_derivatives() # reset the derivatives since we changed the omega
-#                 entries_a, indices_a = self.sim._make_A(
-#                     eps_v
-#                 )  # return scipy sparse indices and values
-#                 entries_list.append(torch.from_numpy(entries_a) if isinstance(entries_a, np.ndarray) else entries_a)
-#                 indices_list.append(torch.from_numpy(indices_a) if isinstance(indices_a, np.ndarray) else indices_a)
-#             entries_list = torch.stack(entries_list, 0)
-#             indices_list = torch.stack(indices_list, 0)
-#             tot_entries_list.append(entries_list)
-#             tot_indices_list.append(indices_list)
-#         tot_entries_list = torch.stack(tot_entries_list, 0).to(
-#             eps_r.device
-#         )  # [bs, n_wl, 5*h*w]
-#         tot_indices_list = (
-#             torch.stack(tot_indices_list, 0).to(eps_r.device).long()
-#         )  # [bs, n_wl, 2, 5*h*w]
-#         self.As = (tot_entries_list, tot_indices_list)
-#         return self.As
-    
-#     def make_sim(self, eps_r: torch.Tensor):
-#         from core.models.fdfd.fdfd import fdfd_ez, My_fdfd_ez
-#         # self.sim = fdfd_ez(
-#         #     omega=2 * np.pi * C_0 / (1.55 * 1e-6), # this is just a init wl value, later will update this
-#         #     dL=2e-8,
-#         #     eps_r=eps_r[0],
-#         #     npml=(50, 50),
-#         # )
-#         self.sim = My_fdfd_ez(
-#             omega=2 * np.pi * C_0 / (1.55 * 1e-6), # this is just a init wl value, later will update this
-#             dL=2e-8,
-#             eps_r=eps_r[0],
-#             npml=(50, 50),
-#         )
-
-#     def forward(self, Ez: Tensor, eps_r: Tensor, source: Tensor, target_size, As):
-#         Ez = Ez[:, :2, :, :]
-#         Ez = resize_to_targt_size(Ez, target_size).permute(0, 2, 3, 1).contiguous()
-#         Ez = torch.view_as_complex(Ez) # convert Ez to the required complex format
-#         eps_r = resize_to_targt_size(eps_r, target_size)
-#         source = torch.view_as_real(source).permute(0, 3, 1, 2) # B, 2, H, W
-#         source = resize_to_targt_size(source, target_size).permute(0, 2, 3, 1).contiguous()
-#         source = torch.view_as_complex(source) # convert source to the required complex format
-
-#         # there is only one omega in this case
-#         Ez = Ez.unsqueeze(1)
-#         source = source.unsqueeze(1)
-
-#         ## Ez: [bs, n_wl, h, w] complex tensor
-#         ## eps_r: [bs, h, w] real tensor
-#         ## source: [bs, n_wl, h, w] complex tensor, source in sim.solve(source), not b, b = 1j * omega * source
-
-#         # step 0: build self.sim
-#         if self.sim is None:
-#             self.make_sim(eps_r=eps_r**2)
-#         # step 1: make A
-#         print("begin to make A ... ", flush=True)
-#         self.make_A(eps_r**2, self.wl_list)
-#         print("finish making A :)", flush=True)
-
-#         # step 2: calculate loss
-#         entries, indices = self.As
-#         lhs = []
-#         if self.omegas.device != source.device:
-#             self.omegas = self.omegas.to(source.device)
-#         for i in range(Ez.shape[0]): # loop over samples in a batch
-#             for j in range(Ez.shape[1]): # loop over different wavelengths
-#                 ez = Ez[i, j].flatten()
-#                 omega = 2 * np.pi * C_0 / (self.wl_list[j] * 1e-6)
-#                 entries = As[f'A-wl-{self.wl_list[j]}-entries_a'][i]
-#                 indices = As[f'A-wl-{self.wl_list[j]}-indices_a'][i]
-#                 b = source[i, j].flatten() * (1j * omega)
-#                 A_by_e = spmm(
-#                     indices[i, j],
-#                     entries[i, j],
-#                     m=ez.shape[0],
-#                     n=ez.shape[0],
-#                     matrix=ez[:, None],
-#                 )[:, 0]
-#                 lhs.append(A_by_e)
-#         lhs = torch.stack(lhs, 0)  # [bs*n_wl, h*w]
-#         b = (
-#             (source * (1j * self.omegas[None, :, None, None])).flatten(0, 1).flatten(1)
-#         )  # [bs*n_wl, h*w]
-#         difference = lhs - b
-#         difference = torch.view_as_real(difference).double()
-#         b = torch.view_as_real(b).double()
-#         # print("this is the l2 norm of the b ", torch.norm(b, p=2, dim=(-2, -1)), flush=True) # ~e+22
-#         loss = (torch.norm(difference, p=2, dim=(-2, -1)) / (torch.norm(b, p=2, dim=(-2, -1)) + 1e-6)).mean()
-#         return loss
-
-
 class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
     def __init__(
         self,
@@ -963,17 +1050,21 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
         )
         self.omegas = 2 * np.pi * C_0 / (self.wl_list * 1e-6)
 
-    def forward(self, Ez: Tensor, eps_r: Tensor, source: Tensor, target_size, As):
-        Ez = Ez[:, :2, :, :]
+    def forward(self, Ez: Tensor, source: Tensor, As, transpose_A):
+        Ez = Ez[:, -2:, :, :]
         Ez = Ez.permute(0, 2, 3, 1).contiguous()
         Ez = torch.view_as_complex(Ez) # convert Ez to the required complex format
         source = torch.view_as_real(source).permute(0, 3, 1, 2) # B, 2, H, W
         source = source.permute(0, 2, 3, 1).contiguous()
         source = torch.view_as_complex(source) # convert source to the required complex format
+        
 
         # there is only one omega in this case
         Ez = Ez.unsqueeze(1)
         source = source.unsqueeze(1)
+
+        free_space_mask = source.abs() <= 1e-10
+        free_space_mask = free_space_mask.flatten(0, 1).flatten(1)
 
         ## Ez: [bs, n_wl, h, w] complex tensor
         ## eps_r: [bs, h, w] real tensor
@@ -986,11 +1077,17 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
         for i in range(Ez.shape[0]): # loop over samples in a batch
             for j in range(Ez.shape[1]): # loop over different wavelengths
                 ez = Ez[i, j].flatten()
-                omega = 2 * np.pi * C_0 / (self.wl_list[j] * 1e-6)
+                # omega = 2 * np.pi * C_0 / (self.wl_list[j] * 1e-6)
                 wl = round(self.wl_list[j].item()*100)/100
                 entries = As[f'A-wl-{wl}-entries_a'][i]
                 indices = As[f'A-wl-{wl}-indices_a'][i]
-                b = source[i, j].flatten() * (1j * omega)
+                # b = source[i, j].flatten() * (1j * omega)
+                # print("this is the shape of the indices", indices.shape, flush=True) # this is the shape of the indices torch.Size([2, 405600])
+                # assert len(indices.shape) == 3
+                if transpose_A:
+                    # print("this is the shape of the indices", indices.shape, flush=True) # this is the shape of the indices torch.Size([2, 405600])
+                    indices = torch.flip(indices, [0]) # considering the batch dimension, the axis set to 1 corresponds to axis = 0 in solver.
+                    # b = b / 1j / omega
                 A_by_e = spmm(
                     indices,
                     entries,
@@ -1000,10 +1097,26 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
                 )[:, 0]
                 lhs.append(A_by_e)
         lhs = torch.stack(lhs, 0)  # [bs*n_wl, h*w]
-        b = (
-            (source * (1j * self.omegas[None, :, None, None])).flatten(0, 1).flatten(1)
-        )  # [bs*n_wl, h*w]
+        if not transpose_A:
+            b = (
+                (source * (1j * self.omegas[None, :, None, None])).flatten(0, 1).flatten(1)
+            )  # [bs*n_wl, h*w]
+        else:
+            b = (
+                (source).flatten(0, 1).flatten(1)
+            )
         difference = lhs - b
+        difference[~free_space_mask] = 0
+        # b[~free_space_mask] = 0
+        # fig, ax = plt.subplots(1, 3, figsize=(15, 5))
+        # diff = ax[0].imshow(torch.abs(difference[0]).reshape(Ez.shape[-2], Ez.shape[-1]).detach().cpu().numpy())
+        # lhs_plot = ax[1].imshow(torch.abs(lhs[0]).reshape(Ez.shape[-2], Ez.shape[-1]).detach().cpu().numpy())
+        # b_plot = ax[2].imshow(torch.abs(b[0]).reshape(Ez.shape[-2], Ez.shape[-1]).detach().cpu().numpy())
+        # plt.colorbar(diff, ax=ax[0])
+        # plt.colorbar(lhs_plot, ax=ax[1])
+        # plt.colorbar(b_plot, ax=ax[2])
+        # plt.savefig("./figs/maxwell_residual_plot.png", dpi = 300)
+        # plt.close()
         difference = torch.view_as_real(difference).double()
         b = torch.view_as_real(b).double()
         # print("this is the l2 norm of the b ", torch.norm(b, p=2, dim=(-2, -1)), flush=True) # ~e+22
@@ -1083,56 +1196,14 @@ class GradientLoss(torch.nn.modules.loss._Loss):
     def forward(
         self, 
         forward_fields,
-        backward_fields,
         adjoint_fields,  
-        backward_adjoint_fields,
         target_gradient,
         gradient_multiplier,
         dr_mask = None,
     ):
-        # forward_fields_ez = forward_fields[:, -2:, :, :] # the forward fields has three components, we only need the Ez component
-        # forward_fields_ez = torch.view_as_complex(forward_fields_ez.permute(0, 2, 3, 1).contiguous())
-        # backward_fields_ez = backward_fields[:, -2:, :, :]
-        # backward_fields_ez = torch.view_as_complex(backward_fields_ez.permute(0, 2, 3, 1).contiguous())
-        # adjoint_fields = torch.view_as_complex(adjoint_fields.permute(0, 2, 3, 1).contiguous()) # adjoint fields only Ez 
-        # backward_adjoint_fields = torch.view_as_complex(backward_adjoint_fields.permute(0, 2, 3, 1).contiguous()) # adjoint fields only Ez
-        # gradient = -(adjoint_fields*forward_fields_ez).real
-        # backward_gradient = -(backward_adjoint_fields*backward_fields_ez).real
-        # batch_size = gradient.shape[0]
-        # for i in range(batch_size):
-        #     gradient[i] = gradient[i] / gradient_multiplier["field_adj_normalizer-wl-1.55-port-in_port_1-mode-1"][i]
-        #     backward_gradient[i] = backward_gradient[i] / gradient_multiplier["field_adj_normalizer-wl-1.55-port-out_port_1-mode-1"][i]
-        # # Step 0: build one_mask from dr_mask
-        # ## This is not correct
-        # # need to build a design region mask whose size shold be b, H, W
-        # if dr_mask is not None:
-        #     dr_masks = []
-        #     for i in range(batch_size):
-        #         mask = torch.zeros_like(gradient[i]).to(gradient.device)
-        #         for key, value in dr_mask.items():
-        #             if key.endswith("x_start"):
-        #                 x_start = value[i]
-        #             elif key.endswith("x_stop"):
-        #                 x_stop = value[i]
-        #             elif key.endswith("y_start"):
-        #                 y_start = value[i]
-        #             elif key.endswith("y_stop"):
-        #                 y_stop = value[i]
-        #             else:
-        #                 raise ValueError(f"Invalid key: {key}")
-        #         mask[x_start:x_stop, y_start:y_stop] = 1
-        #         dr_masks.append(mask)
-        #     dr_masks = torch.stack(dr_masks, 0)
-        # else:
-        #     dr_masks = torch.ones_like(gradient)
-        
-        # x = - EPSILON_0 * (2 * torch.pi * C_0 / (1.55 * 1e-6))**2 * (gradient + backward_gradient)
-        # y = target_gradient
-        # error_energy = torch.norm((x - y) * dr_masks, p=2, dim=(-1, -2))
-        # field_energy = torch.norm(y * dr_masks, p=2, dim=(-1, -2)) + 1e-6
-        # return (error_energy / field_energy).mean()
         forward_fields_ez = forward_fields[:, -2:, :, :] # the forward fields has three components, we only need the Ez component
         forward_fields_ez = torch.view_as_complex(forward_fields_ez.permute(0, 2, 3, 1).contiguous())
+        adjoint_fields = adjoint_fields[:, -2:, :, :] # the adjoint fields has three components, we only need the Ez component
         adjoint_fields = torch.view_as_complex(adjoint_fields.permute(0, 2, 3, 1).contiguous()) # adjoint fields only Ez 
         gradient = -(adjoint_fields*forward_fields_ez).real
         batch_size = gradient.shape[0]

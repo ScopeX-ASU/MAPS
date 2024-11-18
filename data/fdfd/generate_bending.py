@@ -47,7 +47,7 @@ def bending_opt(device_id, operation_device):
             solver="ceviche_torch",
             border_width=[0, port_len, port_len, 0],
             resolution=50,
-            plot_root=f"./figs/larger_mfs_bending_{device_id}",
+            plot_root=f"./figs/test_mfs_bending_{device_id}",
             PML=[0.5, 0.5],
         )
     )
@@ -72,11 +72,11 @@ def bending_opt(device_id, operation_device):
         optimizer, T_max=70, eta_min=0.0002
     )
     last_design_region_dict = None
-    # for step in range(10):
-    for step in range(1):
+    for step in range(10):
+    # for step in range(1):
         optimizer.zero_grad()
-        # results = opt.forward(sharpness=1 + 2 * step)
-        results = opt.forward(sharpness=256)
+        results = opt.forward(sharpness=1 + 2 * step)
+        # results = opt.forward(sharpness=256)
         print(f"Step {step}:", end=" ")
         for k, obj in results["breakdown"].items():
             print(f"{k}: {obj['value']:.3f}", end=", ")
@@ -84,8 +84,8 @@ def bending_opt(device_id, operation_device):
 
         (-results["obj"]).backward()
         current_design_region_dict = opt.get_design_region_eps_dict()
-        filename_h5 = f"./data/fdfd/bending/mfs_raw_larger/bending_id-{device_id}_opt_step_{step}.h5"
-        filename_yml = f"./data/fdfd/bending/mfs_raw_larger/bending_id-{device_id}.yml"
+        filename_h5 = f"./data/fdfd/bending/mfs_raw_test/bending_id-{device_id}_opt_step_{step}.h5"
+        filename_yml = f"./data/fdfd/bending/mfs_raw_test/bending_id-{device_id}.yml"
         if last_design_region_dict is None:
             opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
             last_design_region_dict = current_design_region_dict

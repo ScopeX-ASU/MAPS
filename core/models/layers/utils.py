@@ -894,6 +894,7 @@ def get_flux(hx, hy, ez, monitor, grid_step, direction: str = "x", autograd=Fals
         real = np.real
     if isinstance(ez, torch.Tensor):
         ravel = torch.ravel
+        real = torch.real
 
     if direction == "x":
         h = (0.0, ravel(hy[monitor]), 0)
@@ -1288,6 +1289,7 @@ class ObjectiveFunc(object):
                     in_mode=in_mode,
                     direction=direction,
                     type=type,
+                    name = name,
                 ):
                     s_list = []
                     ## for each wavelength, we evaluate the objective
@@ -1320,6 +1322,9 @@ class ObjectiveFunc(object):
                             )  ## if it is larger than 1, then this slice must include source, we minus the power from source
 
                         s_list.append(s)
+                        self.s_params[(name, wl, type)] = {
+                            "s": s,
+                        }
                     if isinstance(s_list[0], Tensor):
                         return torch.mean(torch.stack(s_list))
                     else:

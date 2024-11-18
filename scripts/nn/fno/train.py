@@ -24,7 +24,7 @@ configs.load(config_file, recursive=True)
 
 
 def task_launcher(args):
-    mixup, device_type, alg, fno_block_only, err_correction, mode1, mode2, id, description, gpu_id, epochs, lr, criterion, criterion_weight, H_loss, maxwell_loss, grad_loss, s_param_loss, checkpt, bs = args
+    mixup, device_type, alg, train_field, include_adjoint_NN, fourier_feature, fno_block_only, err_correction, mode1, mode2, id, description, gpu_id, epochs, lr, criterion, criterion_weight, H_loss, maxwell_loss, grad_loss, s_param_loss, checkpt_fwd, checkpt_adj, bs = args
     env = os.environ.copy()
     env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
     
@@ -45,9 +45,10 @@ def task_launcher(args):
             f"--run.batch_size={bs}",
             f"--run.use_cuda={1}",
             f"--run.gpu_id={gpu_id}",
-            f"--run.log_interval={400}",
+            f"--run.log_interval={40}",
             f"--run.random_state={59}",
             f"--run.fp16={False}",
+            f"--run.include_adjoint_NN={include_adjoint_NN}",
 
             f"--criterion.name={criterion}",
             f"--criterion.weight={criterion_weight}",
@@ -75,7 +76,7 @@ def task_launcher(args):
             f"--plot.valid={True}",
             f"--plot.test={True}",
             f"--plot.interval=1",
-            f"--plot.dir_name={model}_{exp_name}_des-{description}_id-{id}",
+            f"--plot.dir_name={model}_{exp_name}_id-{id}_des-{description}",
             f"--optimizer.lr={lr}",
 
             f"--model.name={alg}",
@@ -88,15 +89,17 @@ def task_launcher(args):
             # f"--model.mode2={45}",
             f"--model.mode1={mode1}",
             f"--model.mode2={mode2}",
-            f"--model.fourier_feature={'learnable'}",
-            # f"--model.fourier_feature={'gauss_10'}",
+            f"--model.fourier_feature={fourier_feature}",
+            # f"--model.fourier_feature={'none'}",
             f"--model.mapping_size={64}",
             f"--model.err_correction={err_correction}",
             f"--model.fno_block_only={fno_block_only}",
+            f"--model.train_field={train_field}",
 
             f"--checkpoint.model_comment={suffix}",
-            f"--checkpoint.resume={False}" if checkpt == "none" else f"--checkpoint.resume={True}",
-            f"--checkpoint.restore_checkpoint={checkpt}",
+            f"--checkpoint.resume={False}" if checkpt_fwd == "none" else f"--checkpoint.resume={True}",
+            f"--checkpoint.restore_checkpoint_fwd={checkpt_fwd}",
+            f"--checkpoint.restore_checkpoint_adj={checkpt_adj}",
             f"--checkpoint.checkpoint_dir={checkpoint_dir}",
             ]
         logger.info(f"running command {pres + exp}")
@@ -124,8 +127,16 @@ if __name__ == '__main__':
         # [0.0, "bending", "FNO3d", True, False, 33, 66, 8, "LFF_bs_8_no_corr", 2, 50, 0.002, "nmse", 1, 0.0, 0.0, 0.0, "none", 8],
         # [0.0, "bending", "FNO3d", True, False, 33, 66, 9, "LFF_bs_8_no_corr_all_field_loss", 3, 50, 0.002, "nmse", 1, 0.0, 0.0, 0.0, "none", 8],
         # [0.0, "bending", "FNO3d", True, False, 33, 66, 10, "LFF_bs_8_no_corr_all_field_loss_print_loss_comp", 3, 50, 0.002, "nmse", 1, 0.0, 0.0, 0.5, "./checkpoint/fdfd/fno/train/FNO3d_model-FNO3d_dev-bending_id-9_dcrp-LFF_bs_8_no_corr_all_field_loss_err-0.0679_epoch-50.pt", 8],
-        # [0.0, "bending", "FNO3d", True, False, 33, 66, 11, "LFF_bs_8_no_corr_print_loss_comp", 2, 50, 0.002, "nmse", 1, 0.0, 0.0, 0.5, "./checkpoint/fdfd/fno/train/FNO3d_model-FNO3d_dev-bending_id-8_dcrp-LFF_bs_8_no_corr_err-0.0589_epoch-50.pt", 8],
-        [0.0, "bending", "FNO3d", True, False, 33, 66, 12, "no_corr_src", 0, 50, 0.002, "nmse", 1, 0.0, 0.0, 0.0, 0.0, "none", 8],
+        # [0.0, "bending", "FNO3d", True, False, 33, 66, 18, "LFF_bs_8_no_corr_print_loss_comp", 2, 50, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, "./checkpoint/fdfd/fno/train/FNO3d_model-FNO3d_dev-bending_id-8_dcrp-LFF_bs_8_no_corr_err-0.0589_epoch-50.pt", 8],
+        # [0.0, "bending", "FNO3d", True, False, 33, 66, 12, "no_corr_src", 0, 50, 0.002, "nmse", 1, 0.0, 0.0, 0.0, 0.0, "none", 8],
+        # [0.0, "bending", "FNO3d", True, False, 33, 66, 13, "no_corr_src_maxwell", 1, 50, 0.002, "nmse", 1, 0.0, 20, 0.0, 0.0, "none", 8],
+        # [0.0, "bending", "FNO3d", True, False, 33, 66, 14, "no_corr_src_maxwell_no_regression", 0, 50, 0.002, "nmse", 1, 0.0, 20, 0.0, 0.0, "none", 8],
+        # [0.0, "bending", "FNO3d", True, False, 33, 66, 15, "no_corr_src_no_pos_enc", 0, 50, 0.002, "nmse", 1, 0.0, 0.0, 0.0, 0.0, "none", 8],
+        # [0.0, "bending", "FNO3d", True, False, 33, 66, 16, "LFF_lightFiled_HLoss", 0, 50, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, "none", 8],
+        # [0.0, "bending", "FNO3d", True, False, 33, 66, 17, "no_pos_enc_lightFiled_HLoss", 1, 50, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, "none", 8],
+        # [0.0, "bending", "FNO3d", "both", "learnable", True, False, 33, 66, 18, "LFF_HLoss_fwd_adj", 1, 50, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, "none", 8],
+        # [0.0, "bending", "FNO3d", "both", "learnable", True, False, 33, 66, 19, "LFF_HLoss_fwd_adj_grad_loss", 2, 50, 0.002, "nmse", 1, 1, 0.0, 0.5, 0.0, "none", 8],
+        [0.0, "bending", "FNO3d", "fwd", True, "learnable", True, False, 33, 66, 20, "end2end_fwd_adj", 1, 50, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, "none", "none", 8],
     ]
 
     with Pool(8) as p:
