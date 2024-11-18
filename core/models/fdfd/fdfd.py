@@ -2,26 +2,21 @@ import numpy as np
 import torch
 from ceviche import fdfd_ez as fdfd_ez_ceviche
 from ceviche.constants import *
+from ceviche.derivatives import create_sfactor
 from torch import Tensor, nn
 from torch_sparse import spmm
 
+from core.models.layers.utils import (
+    Slice,
+    get_flux,
+)
+
 from .derivatives import compute_derivative_matrices
-from .solver import sparse_solve_torch, SparseSolveTorch
+from .preconditioner import create_symmetrizer
+from .solver import SparseSolveTorch, sparse_solve_torch
 
 # notataion is similar to that used in: http://www.jpier.org/PIERB/pierb36/11.11092006.pdf
 from .utils import sparse_mm, sparse_mv
-from core.models.layers.utils import (
-    # Si_eps,
-    # SiO2_eps,
-    Slice,
-    # apply_regions_gpu,
-    get_eigenmode_coefficients,
-    get_flux,
-    # get_grid,
-    # insert_mode,
-    # plot_eps_field,
-)
-from core.utils import print_stat
 
 __all__ = ["fdfd", "fdfd_ez"]
 
@@ -269,26 +264,45 @@ class fdfd_ez_torch(fdfd):
 
 class fdfd_ez(fdfd_ez_ceviche):
     def __init__(
-            self, 
-            omega,
-            dL, 
-            eps_r, 
-            npml, 
-            power=1e-8, 
-            bloch_phases=None,
-            neural_solver=None,
-            numerical_solver="solve_direct",
-        ):
+        self,
+        omega,
+        dL,
+        eps_r,
+        npml,
+        power=1e-8,
+        bloch_phases=None,
+        neural_solver=None,
+        numerical_solver="solve_direct",
+        sym_precond: bool = False,
+    ):
         self.power = power
         self.A = None
         self.neural_solver = neural_solver
         self.numerical_solver = numerical_solver
         if self.numerical_solver == "solve_direct":
-            assert self.neural_solver is None, "neural_solver is useless if numerical_solver is solve_direct"
+            assert (
+                self.neural_solver is None
+            ), "neural_solver is useless if numerical_solver is solve_direct"
         self.solver = SparseSolveTorch()
         if isinstance(eps_r, np.ndarray):
             eps_r = torch.from_numpy(eps_r)
         super().__init__(omega, dL, eps_r, npml, bloch_phases=bloch_phases)
+
+        self.Pl = self.Pr = None
+        # if run this function, will enable symmetric precondictioner
+        if sym_precond:
+            self._make_precond()
+
+    def _make_precond(self):
+        Nx, Ny = self.shape
+        Nx_pml, Ny_pml = self.npml
+
+        # Create the sfactor in each direction and for 'f' and 'b'
+        sxb = create_sfactor("b", self.omega, self.dL, Nx, Nx_pml)
+        syb = create_sfactor("b", self.omega, self.dL, Ny, Ny_pml)
+   
+        [Sxb, Syb] = np.meshgrid(sxb, syb, indexing="ij")
+        self.Pl, self.Pr = create_symmetrizer(Sxb, Syb)
 
     def _make_A(self, eps_vec: torch.Tensor):
         return super()._make_A(eps_vec.detach().cpu().numpy())
@@ -345,7 +359,7 @@ class fdfd_ez(fdfd_ez_ceviche):
         Hx_vec = self._Ez_to_Hx(Ez_vec)
         Hy_vec = self._Ez_to_Hy(Ez_vec)
         return Hx_vec, Hy_vec
-    
+
     def norm_adj_power(self):
         Nx = self.eps_r.shape[0]
         Ny = self.eps_r.shape[1]
@@ -356,14 +370,14 @@ class fdfd_ez(fdfd_ez_ceviche):
                     0 + self.npml[1] + 5,
                     Ny - self.npml[1] - 5,
                 ),
-            ), 
+            ),
             Slice(
                 x=np.array(Nx - self.npml[0] - 5),
                 y=np.arange(
                     0 + self.npml[1] + 5,
                     Ny - self.npml[1] - 5,
                 ),
-            ), 
+            ),
         ]
         y_slices = [
             Slice(
@@ -387,20 +401,36 @@ class fdfd_ez(fdfd_ez_ceviche):
         normalization_factor = {}
         with torch.no_grad():
             for key in self.solver.adj_src:
-                J_adj = self.solver.adj_src[key] / 1j / self.omega # b_adj --> J_adj
+                J_adj = self.solver.adj_src[key] / 1j / self.omega  # b_adj --> J_adj
                 # print("this is the state of the J_adj")
                 # print_stat(torch.abs(J_adj))
-                hx_adj, hy_adj, ez_adj = self.solve(J_adj, "adj", "adj") # J_adj --> Hx_adj, Hy_adj, Ez_adj
-                total_flux = torch.tensor([0.0,], device=J_adj.device, dtype=torch.float64) # Hx_adj, Hy_adj, Ez_adj --> 2 * total_flux
+                hx_adj, hy_adj, ez_adj = self.solve(
+                    J_adj, "adj", "adj"
+                )  # J_adj --> Hx_adj, Hy_adj, Ez_adj
+                total_flux = torch.tensor(
+                    [
+                        0.0,
+                    ],
+                    device=J_adj.device,
+                    dtype=torch.float64,
+                )  # Hx_adj, Hy_adj, Ez_adj --> 2 * total_flux
                 for frame_slice in x_slices:
                     # print("this is the increment of the total flux: ", torch.abs(get_flux(hx_adj, hy_adj, ez_adj, frame_slice, self.dL/1e-6, "x")))
-                    total_flux = total_flux + torch.abs(get_flux(hx_adj, hy_adj, ez_adj, frame_slice, self.dL/1e-6, "x")) # absolute to ensure positive flux
+                    total_flux = total_flux + torch.abs(
+                        get_flux(
+                            hx_adj, hy_adj, ez_adj, frame_slice, self.dL / 1e-6, "x"
+                        )
+                    )  # absolute to ensure positive flux
                 for frame_slice in y_slices:
                     # print("this is the increment of the total flux: ", torch.abs(get_flux(hx_adj, hy_adj, ez_adj, frame_slice, self.dL/1e-6, "y")))
-                    total_flux = total_flux + torch.abs(get_flux(hx_adj, hy_adj, ez_adj, frame_slice, self.dL/1e-6, "y")) # in case that opposite direction cancel each other
-                total_flux = total_flux / 2 # 2 * total_flux --> total_flux
+                    total_flux = total_flux + torch.abs(
+                        get_flux(
+                            hx_adj, hy_adj, ez_adj, frame_slice, self.dL / 1e-6, "y"
+                        )
+                    )  # in case that opposite direction cancel each other
+                total_flux = total_flux / 2  # 2 * total_flux --> total_flux
                 # print(f"this is the total flux: {total_flux}")
-                scale_factor = (self.power / total_flux)**0.5
+                scale_factor = (self.power / total_flux) ** 0.5
                 # print(f"this is the scale factor: {scale_factor}")
                 normalization_factor[key] = scale_factor
                 # print("ez_adj before scaling")
@@ -418,11 +448,14 @@ class fdfd_ez(fdfd_ez_ceviche):
                 hy_adj_dict[key] = hy_adj * scale_factor
                 # print("hy_adj after scaling")
                 # print_stat(torch.abs(hy_adj_dict[key]))
-                self.solver.adj_src[key] = J_adj * scale_factor * 1j * self.omega # J_adj --> b_adj
+                self.solver.adj_src[key] = (
+                    J_adj * scale_factor * 1j * self.omega
+                )  # J_adj --> b_adj
         return ez_adj_dict, hx_adj_dict, hy_adj_dict, normalization_factor
 
-
-    def _solve_fn(self, eps_vec, entries_a, indices_a, Jz_vec, port_name=None, mode=None):
+    def _solve_fn(
+        self, eps_vec, entries_a, indices_a, Jz_vec, port_name=None, mode=None
+    ):
         assert port_name is not None, "port_name must be provided"
         assert mode is not None, "mode must be provided"
         b_vec = 1j * self.omega * Jz_vec
@@ -434,7 +467,9 @@ class fdfd_ez(fdfd_ez_ceviche):
             # build source from Jz_vec
             # feed into the neural solver
             Ez_vec = self.neural_solver(entries_a, indices_a, eps_diag, b_vec, port_name, mode)
-        Ez_vec = self.solver(entries_a, indices_a, eps_diag, b_vec, port_name, mode)
+        Ez_vec = self.solver(
+            entries_a, indices_a, eps_diag, b_vec, port_name, mode, self.Pl, self.Pr
+        )
 
         Hx_vec, Hy_vec = self._Ez_to_Hx_Hy(Ez_vec)
         return Hx_vec, Hy_vec, Ez_vec
@@ -448,9 +483,11 @@ class fdfd_ez(fdfd_ez_ceviche):
 
         # create the A matrix for this polarization
         entries_a, indices_a = self._make_A(eps_vec)
-        self.A = (entries_a, indices_a) # record the A matrix for later storage
+        self.A = (entries_a, indices_a)  # record the A matrix for later storage
         if port_name == "adj" and mode == "adj":
-            indices_a = np.flip(indices_a, axis=0) # need to flip the indices for adjoint source
+            indices_a = np.flip(
+                indices_a, axis=0
+            )  # need to flip the indices for adjoint source
         # solve field componets usng A and the source
         Fx_vec, Fy_vec, Fz_vec = self._solve_fn(
             eps_vec, entries_a, indices_a, source_vec, port_name, mode
