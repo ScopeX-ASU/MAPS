@@ -1,0 +1,164 @@
+dataset:
+  name: fdfd
+  root: ./data
+  test_ratio: 0.1
+  train_valid_split_ratio: [0.9, 0.1]
+  num_workers: 4
+  shuffle: True
+  device_type: bending
+  processed_dir: bending
+  augment:
+    prob: 0.0
+criterion:
+  name: nmse
+  max_distance: 0.15
+  min_distance: 0.12
+  weight: 1
+aux_criterion:
+  curl_loss:
+    weight: 0.0
+  tv_loss:
+    weight: 0.0
+    norm: False
+  aspect_ratio_loss:
+    aspect_ratio: 0.1
+    weight: 0
+  maxwell_residual_loss:
+    weight: 0.0
+    wl_cen: 1.55
+    wl_width: 0
+    n_wl: 1
+  grad_loss:
+    weight: 0.0
+  s_param_loss:
+    weight: 0.0
+  err_corr_Ez:
+    weight: 0
+  err_corr_Hx:
+    weight: 0
+  err_corr_Hy:
+    weight: 0
+  Hx_loss:
+    weight: 1
+  Hy_loss:
+    weight: 1
+log_criterion:
+  curl_loss:
+    weight: 0.0
+  tv_loss:
+    weight: 0.0
+    norm: False
+  maxwell_residual_loss:
+    weight: 1
+    wl_cen: 1.55
+    wl_width: 0
+    n_wl: 1
+  grad_loss:
+    weight: 1
+  s_param_loss:
+    weight: 1
+  err_corr_Ez:
+    weight: 0
+  err_corr_Hx:
+    weight: 0
+  err_corr_Hy:
+    weight: 0
+  Hx_loss:
+    weight: 1
+  Hy_loss:
+    weight: 1
+optimizer:
+  name: adam
+  lr: 0.002
+  weight_decay: 0.0
+  line_search_fn: None
+lr_scheduler:
+  name: cosine
+  lr_gamma: 0.99
+  lr_min: 1e-3
+run:
+  experiment: fno2d
+  n_epochs: 50
+  use_cuda: 1
+  gpu_id: 1
+  deterministic: 1
+  random_state: 2024
+  log_interval: 40
+  fp16: False
+  wandb:
+    project: MAPS
+    entity: scopex
+    name: local_search
+  batch_size: 8
+  include_adjoint_NN: True
+  pid: 281722
+quantize:
+  weight_bit: 32
+  input_bit: 32
+checkpoint:
+  save_best_model_k: 3
+  checkpoint_dir: fdfd/fno/train
+  model_comment: model-FNO3d_dev-bending_id-20_dcrp-end2end_fwd_adj
+  resume: True
+  restore_checkpoint: None
+  no_linear: 0
+  restore_checkpoint_fwd: "./checkpoint/fdfd/fno/train/FNO3d_model-FNO3d_dev-bending_id-20_dcrp-end2end_fwd_adj_err-0.2711_epoch-48.pt"
+  restore_checkpoint_adj: "./checkpoint/fdfd/fno/train/FNO3d_model-FNO3d_dev-bending_id-20_dcrp-end2end_fwd_adj_adj_err-0.2711_epoch-48.pt"
+model:
+  name: FNO3d
+  out_channels: 2
+  dim: 32
+  kernel_list: [64, 64, 64, 64, 64, 64]
+  kernel_size_list: [1, 1, 1, 1, 1, 1]
+  hidden_list: [128]
+  padding_list: [0, 0, 0, 0, 0, 0]
+  mode_list: [[80, 80]]
+  act_func: GELU
+  act_thres: 100
+  domain_size: [8, 38.4]
+  grid_step: 0.1
+  buffer_width: 0.0
+  dropout_rate: 0.1
+  drop_path_rate: 0.2
+  norm: bn
+  wavelength: 1.55
+  aux_head: False
+  aux_head_idx: 1
+  pos_encoding: none
+  with_cp: False
+  in_channels: 3
+  mode1: 33
+  mode2: 66
+  fourier_feature: learnable
+  mapping_size: 64
+  err_correction: False
+  fno_block_only: True
+  train_field: fwd
+debug:
+  verbose: 1
+plot:
+  train: True
+  valid: True
+  test: True
+  interval: 1
+  root: plot
+  dir_name: fno_train_id-20_des-end2end_fwd_adj
+  phase_intensity_profile_interval: 5
+  output_video: False
+  solve_cw: False
+test_criterion:
+  name: nmse
+  weighted_frames: 0
+  weight: 1
+sharp_scheduler:
+  name: sharpness
+  init_sharp: 1
+  final_sharp: 20
+  sharp_threshold: 0.05
+res_scheduler:
+  name: resolution
+  init_res: 20
+  final_res: 20
+  test_res: 20
+scheduler:
+  lr_min: 1e-05

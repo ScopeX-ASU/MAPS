@@ -490,7 +490,14 @@ class N_Ports(BaseDevice):
         if solver == "ceviche":
             return fdfd_ez(omega, dl, eps, NPML)
         elif solver == "ceviche_torch":
-            return fdfd_ez_torch(omega, dl, eps, NPML)
+            return fdfd_ez_torch(
+                omega, 
+                dl, 
+                eps, 
+                NPML, 
+                neural_solver=self.sim_cfg["neural_solver"],
+                numerical_solver=self.sim_cfg["numerical_solver"],
+            )
         else:
             raise ValueError(f"Solver {solver} not supported")
 

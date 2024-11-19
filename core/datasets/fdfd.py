@@ -213,7 +213,6 @@ class FDFD(VisionDataset):
             s_params = {}
             adj_srcs = {}
             src_profile = {}
-            # incident_field = {}
             fields_adj = {}
             field_normalizer = {}
             design_region_mask = {}

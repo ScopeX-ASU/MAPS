@@ -6,6 +6,7 @@ from .device_base import N_Ports
 from .utils import material_fn_dict
 from pyutils.general import logger
 import warnings
+import copy
 
 __all__ = ["Bending"]
 
@@ -117,6 +118,8 @@ class Bending(N_Ports):
     def norm_run(self, verbose: bool = True):
         if verbose:
             logger.info("Start normalization run ...")
+        # norm_run_sim_cfg = copy.deepcopy(self.sim_cfg)
+        # norm_run_sim_cfg["numerical_solver"] = "solve_direct"
         norm_source_profiles = self.build_norm_sources(
             source_modes=(1,),
             input_port_name="in_port_1",
@@ -124,8 +127,9 @@ class Bending(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
-            solver=self.sim_cfg["solver"],
-            plot=False,
+            # solver=self.sim_cfg["solver"],
+            solver="ceviche",
+            plot=True,
         )
 
         norm_refl_profiles = self.build_norm_sources(
@@ -135,8 +139,9 @@ class Bending(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
-            solver=self.sim_cfg["solver"],
-            plot=False,
+            # solver=self.sim_cfg["solver"],
+            solver="ceviche",
+            plot=True,
         )
         norm_monitor_profiles = self.build_norm_sources(
             source_modes=(1,),
@@ -145,7 +150,8 @@ class Bending(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
-            solver=self.sim_cfg["solver"],
-            plot=False,
+            # solver=self.sim_cfg["solver"],
+            solver="ceviche",
+            plot=True,
         )
         return norm_source_profiles, norm_refl_profiles, norm_monitor_profiles

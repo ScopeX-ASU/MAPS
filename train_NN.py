@@ -1417,7 +1417,8 @@ def main() -> None:
         lg.info(configs)
         if (
             int(configs.checkpoint.resume)
-            and len(configs.checkpoint.restore_checkpoint) > 0
+            and len(configs.checkpoint.restore_checkpoint_fwd) > 0
+            and len(configs.checkpoint.restore_checkpoint_adj) > 0
         ):
             load_model(
                 model_fwd,

@@ -838,6 +838,9 @@ def get_eigenmode_coefficients(
     autograd=False,
     energy=False,
 ):
+    if isinstance(ht_m, np.ndarray) and isinstance(hx, torch.Tensor):
+        ht_m = torch.from_numpy(ht_m).to(ez.device)
+        et_m = torch.from_numpy(et_m).to(ez.device)
     if autograd:
         abs = npa.abs
         ravel = npa.ravel
