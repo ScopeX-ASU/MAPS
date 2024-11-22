@@ -37,7 +37,8 @@ from core.utils import print_stat, plot_fields, cal_adj_src_from_fwd_field, cal_
 from ceviche.constants import *
 
 def single_batch_check(
-    model: nn.Module,
+    model_fwd: nn.Module,
+    model_adj: nn.Module,
     train_loader: DataLoader,
     optimizer: Optimizer,
     criterion: Criterion,
@@ -47,14 +48,14 @@ def single_batch_check(
     device: torch.device = torch.device("cuda:0"),
     grad_scaler=None,
 ) -> None:
-    model.train()
+    model_fwd.train()
+    if model_adj is not None:
+        model_adj.train()
     step = epoch * len(train_loader)
 
     mse_meter = AverageMeter("mse")
     aux_meters = {name: AverageMeter(name) for name in aux_criterions}
-    aux_output_weight = getattr(configs.criterion, "aux_output_weight", 0)
 
-    # poynting_loss = PoyntingLoss(configs.model.grid_step, wavelength=1.55)
     data_counter = 0
     total_data = len(train_loader.dataset)
     rand_idx = len(train_loader.dataset) // train_loader.batch_size - 1
@@ -112,7 +113,6 @@ def single_batch_check(
             As[key] = A.to(device, non_blocking=True)
 
         data_counter += eps_map.shape[0]
-
         if mixup_fn is not None:
             eps_map, adj_src, gradient, field_solutions, s_params = mixup_fn(eps_map, adj_src, gradient, field_solutions, s_params)
         if batch_idx == rand_idx:
@@ -120,34 +120,205 @@ def single_batch_check(
 
     for iter in range(10000):
         with amp.autocast('cuda', enabled=False):
-            output = model( # now only suppose that the output is the gradient of the field
+            # forward
+            output = model_fwd( # now only suppose that the output is the gradient of the field
                 eps_map, 
-                src_profiles,
-                adj_srcs, 
+                src_profiles["source_profile-wl-1.55-port-in_port_1-mode-1"] if model_fwd.train_field == "fwd" else adj_srcs["adj_src-wl-1.55-port-in_port_1-mode-1"],
             )
-            if type(output) == tuple:
-                output, aux_output = output
+            if isinstance(output, tuple):
+                forward_Ez_field, forward_Ez_field_err_corr = output
             else:
-                aux_output = None
-            regression_loss = criterion(output[:, -2:, ...], field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], torch.ones_like(output[:, -2:, ...]).to(device))
+                forward_Ez_field = output
+                forward_field_err_corr = None
+
+            forward_field, adjoint_source = cal_total_field_adj_src_from_fwd_field(
+                                            Ez=forward_Ez_field,
+                                            eps=eps_map,
+                                            ht_ms=ht_m,
+                                            et_ms=et_m,
+                                            monitors=monitor_slices,
+                                            pml_mask=model_fwd.pml_mask,
+                                            from_Ez_to_Hx_Hy_func=model_fwd.from_Ez_to_Hx_Hy,
+                                            return_adj_src=False if (model_adj is None) or model_fwd.err_correction else True,
+                                        )
+            if adjoint_source is not None:
+                adjoint_source = adjoint_source.detach()
+            if model_fwd.err_correction:
+                forward_field_err_corr, adjoint_source = cal_total_field_adj_src_from_fwd_field(
+                                            Ez=forward_Ez_field_err_corr,
+                                            eps=eps_map,
+                                            ht_ms=ht_m,
+                                            et_ms=et_m,
+                                            monitors=monitor_slices,
+                                            pml_mask=model_fwd.pml_mask,
+                                            from_Ez_to_Hx_Hy_func=model_fwd.from_Ez_to_Hx_Hy,
+                                            return_adj_src=False if model_adj is None else True,
+                                        )
+            # finish calculating the forward field
+            if model_adj is not None:
+                assert adjoint_source is not None, "The adjoint source should be calculated"
+
+                adjoint_source = adjoint_source*(field_normalizer["field_adj_normalizer-wl-1.55-port-in_port_1-mode-1"].unsqueeze(1))
+                adjoint_output = model_adj(
+                    eps_map, 
+                    adjoint_source, # bs, H, W complex
+                )
+
+                if isinstance(adjoint_output, tuple):
+                    adjoint_Ez_field, adjoint_Ez_field_err_corr = adjoint_output
+                else:
+                    adjoint_Ez_field = adjoint_output
+                    adjoint_field_err_corr = None
+
+                adjoint_field, _ = cal_total_field_adj_src_from_fwd_field(
+                                                Ez=adjoint_Ez_field,
+                                                eps=eps_map,
+                                                ht_ms=ht_m,
+                                                et_ms=et_m,
+                                                monitors=monitor_slices,
+                                                pml_mask=model_fwd.pml_mask,
+                                                from_Ez_to_Hx_Hy_func=model_adj.from_Ez_to_Hx_Hy,
+                                                return_adj_src=False,
+                                            )
+                if model_fwd.err_correction:
+                    adjoint_field_err_corr, _ = cal_total_field_adj_src_from_fwd_field(
+                                                Ez=adjoint_Ez_field_err_corr,
+                                                eps=eps_map,
+                                                ht_ms=ht_m,
+                                                et_ms=et_m,
+                                                monitors=monitor_slices,
+                                                pml_mask=model_fwd.pml_mask,
+                                                from_Ez_to_Hx_Hy_func=model_adj.from_Ez_to_Hx_Hy,
+                                                return_adj_src=False,
+                                            )
+
+            regression_loss = criterion(
+                    forward_field[:, -2:, ...], 
+                    field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...] if model_fwd.train_field == "fwd" else fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+                    torch.ones_like(forward_field[:, -2:, ...]).to(device)
+                )
+            if model_adj is not None:
+                regression_loss = (regression_loss + criterion(
+                    adjoint_field[:, -2:, ...],
+                    fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+                    torch.ones_like(adjoint_field[:, -2:, ...]).to(device)
+                ))/2
             mse_meter.update(regression_loss.item())
             loss = regression_loss
             for name, config in aux_criterions.items():
                 aux_criterion, weight = config
-                if name == "maxwell_residual":
-                    # TODO, this is incorrect now
-                    aux_loss = weight * aux_criterion(output, gradient)
+                if name == "maxwell_residual_loss":
+                    aux_loss = weight * aux_criterion(
+                            Ez=forward_field, 
+                            # Ez=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"],
+                            source=src_profiles["source_profile-wl-1.55-port-in_port_1-mode-1"] if model_fwd.train_field == "fwd" else adj_srcs["adj_src-wl-1.55-port-in_port_1-mode-1"], 
+                            As=As,
+                            transpose_A=False if model_fwd.train_field == "fwd" else True,
+                        )
+                    if model_adj is not None:
+                        aux_loss = (aux_loss + weight * aux_criterion(
+                            Ez=adjoint_field, 
+                            # Ez=fields_adj['fields_adj-wl-1.55-port-in_port_1-mode-1'],
+                            # source=adj_srcs["adj_src-wl-1.55-port-in_port_1-mode-1"], 
+                            source=adjoint_source,
+                            As=As,
+                            transpose_A=True if model_adj.train_field == "adj" else False,
+                        ))/2
+                elif name == "grad_loss":
+                    # there is no need to distinguish the forward and adjoint field here
+                    # since the gradient must combine both forward and adjoint field
+                    aux_loss = weight * aux_criterion(
+                        forward_fields=forward_field if forward_field_err_corr is None else forward_field_err_corr,
+                        # forward_fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+                        # backward_fields=field_solutions["field_solutions-wl-1.55-port-out_port_1-mode-1"][:, -2:, ...],
+                        adjoint_fields=adjoint_field if adjoint_field_err_corr is None else adjoint_field_err_corr,  
+                        # adjoint_fields=fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+                        # backward_adjoint_fields = fields_adj['fields_adj-wl-1.55-port-in_port_1-mode-1'][:, -2:, ...],
+                        target_gradient=gradient,
+                        gradient_multiplier=field_normalizer, # TODO the nomalizer should calculate from the forward field
+                        # dr_mask=None,
+                        dr_mask=design_region_mask,
+                    )
+                elif name == "s_param_loss": 
+                    # there is also no need to distinguish the forward and adjoint field here
+                    # the s_param_loss is calculated based on the forward field and there is no label for the adjoint field
+                    assert model_fwd.train_field == "fwd", "The s_param_loss is only calculated based on the forward field"
+                    aux_loss = weight * aux_criterion(
+                        fields=forward_field if forward_field_err_corr is None else forward_field_err_corr, 
+                        # fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"],
+                        ht_m=ht_m['ht_m-wl-1.55-port-out_port_1-mode-1'],
+                        et_m=et_m['et_m-wl-1.55-port-out_port_1-mode-1'],
+                        monitor_slices=monitor_slices, # 'port_slice-out_port_1_x', 'port_slice-out_port_1_y'
+                        target_SParam=s_params['s_params-fwd_trans-1.55-1'],
+                    )
+                elif name == "err_corr_Ez":
+                    assert model_fwd.err_correction
+                    aux_loss = weight * aux_criterion(
+                        forward_field_err_corr[:, -2:, ...], 
+                        field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...] if model_fwd.train_field == "fwd" else fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+                        torch.ones_like(forward_field_err_corr[:, -2:, ...]).to(device)
+                    )
+                    if model_adj is not None:
+                        assert model_adj.err_correction
+                        aux_loss = (aux_loss + weight * aux_criterion(
+                            adjoint_field_err_corr[:, -2:, ...], 
+                            fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...], 
+                            torch.ones_like(adjoint_field_err_corr[:, -2:, ...]).to(device)
+                        ))/2
+                elif name == "err_corr_Hx":
+                    assert model_fwd.err_correction
+                    aux_loss = weight * aux_criterion(
+                        forward_field_err_corr[:, :2, ...],
+                        field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, :2, ...] if model_fwd.train_field == "fwd" else fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, :2, ...],
+                        torch.ones_like(forward_field_err_corr[:, :2, ...]).to(device)
+                    )
+                    if model_adj is not None:
+                        assert model_adj.err_correction
+                        aux_loss = (aux_loss + weight * aux_criterion(
+                            adjoint_field_err_corr[:, :2, ...],
+                            fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, :2, ...],
+                            torch.ones_like(adjoint_field_err_corr[:, :2, ...]).to(device)
+                        ))/2
+                elif name == "err_corr_Hy":
+                    assert model_fwd.err_correction
+                    aux_loss = weight * aux_criterion(
+                        forward_field_err_corr[:, 2:4, ...],
+                        field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, 2:4, ...] if model_fwd.train_field == "fwd" else fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, 2:4, ...],
+                        torch.ones_like(forward_field_err_corr[:, 2:4, ...]).to(device)
+                    )
+                    if model_adj is not None:
+                        assert model_adj.err_correction
+                        aux_loss = (aux_loss + weight * aux_criterion(
+                            adjoint_field_err_corr[:, 2:4, ...],
+                            fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, 2:4, ...],
+                            torch.ones_like(adjoint_field_err_corr[:, 2:4, ...]).to(device)
+                        ))/2
+                elif name == "Hx_loss":
+                    aux_loss = weight * aux_criterion(
+                        forward_field[:, :2, ...],
+                        field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, :2, ...] if model_fwd.train_field == "fwd" else fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, :2, ...],
+                        torch.ones_like(forward_field[:, :2, ...]).to(device)
+                    )
+                    if model_adj is not None:
+                        aux_loss = (aux_loss + weight * aux_criterion(
+                            adjoint_field[:, :2, ...],
+                            fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, :2, ...],
+                            torch.ones_like(adjoint_field[:, :2, ...]).to(device)
+                        ))/2
+                elif name == "Hy_loss":
+                    aux_loss = weight * aux_criterion(
+                        forward_field[:, 2:4, ...],
+                        field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, 2:4, ...] if model_fwd.train_field == "fwd" else fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, 2:4, ...],
+                        torch.ones_like(forward_field[:, 2:4, ...]).to(device)
+                    )
+                    if model_adj is not None:
+                        aux_loss = (aux_loss + weight * aux_criterion(
+                            adjoint_field[:, 2:4, ...],
+                            fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, 2:4, ...],
+                            torch.ones_like(adjoint_field[:, 2:4, ...]).to(device)
+                        ))/2
+                aux_meters[name].update(aux_loss.item()) # record the aux loss first
                 loss = loss + aux_loss
-                aux_meters[name].update(aux_loss.item())
-                
-            if aux_output is not None and aux_output_weight > 0:
-                # TODO, this is incorrect now
-                aux_output_loss = aux_output_weight * F.mse_loss(
-                    aux_output, field_solutions
-                )  # field magnitude learning
-                loss = loss + aux_output_loss
-            else:
-                aux_output_loss = None
 
         grad_scaler.scale(loss).backward()
 
@@ -169,8 +340,6 @@ def single_batch_check(
             )
             for name, aux_meter in aux_meters.items():
                 log += f" {name}: {aux_meter.val:.4e}"
-            if aux_output_loss is not None:
-                log += f" aux_output_loss: {aux_output_loss.item()}"
             lg.info(log)
 
             # mlflow.log_metrics({"train_loss": loss.item()}, step=step)
@@ -1479,18 +1648,19 @@ def main() -> None:
             )
             quit()
         for epoch in range(1, int(configs.run.n_epochs) + 1):
-            # single_batch_check(
-            #     model,
-            #     train_loader,
-            #     optimizer,
-            #     criterion,
-            #     aux_criterions,
-            #     epoch,
-            #     mixup_fn,
-            #     device,
-            #     grad_scaler=grad_scaler,
-            # )
-            # quit()
+            single_batch_check(
+                model_fwd,
+                model_adj,
+                train_loader,
+                optimizer,
+                criterion,
+                aux_criterions,
+                epoch,
+                mixup_fn,
+                device,
+                grad_scaler=grad_scaler,
+            )
+            quit()
             lambda_, mu = train(
                 model_fwd,
                 model_adj,
