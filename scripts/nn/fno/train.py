@@ -24,7 +24,7 @@ configs.load(config_file, recursive=True)
 
 
 def task_launcher(args):
-    mixup, device_type, alg, train_field, include_adjoint_NN, fourier_feature, fno_block_only, err_correction, mode1, mode2, id, description, gpu_id, epochs, lr, criterion, criterion_weight, H_loss, maxwell_loss, grad_loss, s_param_loss, checkpt_fwd, checkpt_adj, bs = args
+    mixup, device_type, alg, train_field, include_adjoint_NN, fourier_feature, fno_block_only, err_correction, mode1, mode2, id, description, gpu_id, epochs, alm, lr, criterion, criterion_weight, H_loss, maxwell_loss, grad_loss, s_param_loss, alm_lambda, alm_mu, mu_growth, constraint_tol, checkpt_fwd, checkpt_adj, bs = args
     env = os.environ.copy()
     env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
     
@@ -54,6 +54,7 @@ def task_launcher(args):
             f"--criterion.weight={criterion_weight}",
 
             f"--aux_criterion.maxwell_residual_loss.weight={maxwell_loss}",
+            f"--aux_criterion.maxwell_residual_loss.using_ALM={alm}",
             f"--aux_criterion.grad_loss.weight={grad_loss}",
             f"--aux_criterion.s_param_loss.weight={s_param_loss}",
             f"--aux_criterion.err_corr_Ez.weight={1 if err_correction else 0}",
@@ -62,6 +63,7 @@ def task_launcher(args):
             f"--aux_criterion.Hx_loss.weight={H_loss}",
             f"--aux_criterion.Hy_loss.weight={H_loss}",
 
+            f"--log_criterion.maxwell_residual_loss.using_ALM={alm}",
             f"--log_criterion.err_corr_Ez.weight={1 if err_correction else 0}",
             f"--log_criterion.err_corr_Hx.weight={1 if err_correction else 0}",
             f"--log_criterion.err_corr_Hy.weight={1 if err_correction else 0}",
@@ -77,7 +79,13 @@ def task_launcher(args):
             f"--plot.test={True}",
             f"--plot.interval=1",
             f"--plot.dir_name={model}_{exp_name}_id-{id}_des-{description}",
+
             f"--optimizer.lr={lr}",
+            f"--optimizer.ALM={alm}",
+            f"--optimizer.ALM_lambda={alm_lambda}",
+            f"--optimizer.ALM_mu={alm_mu}",
+            f"--optimizer.ALM_mu_growth={mu_growth}",
+            f"--optimizer.ALM_constraint_tol={constraint_tol}",
 
             f"--model.name={alg}",
             f"--model.in_channels={3}",
@@ -136,7 +144,12 @@ if __name__ == '__main__':
         # [0.0, "bending", "FNO3d", True, False, 33, 66, 17, "no_pos_enc_lightFiled_HLoss", 1, 50, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, "none", 8],
         # [0.0, "bending", "FNO3d", "both", "learnable", True, False, 33, 66, 18, "LFF_HLoss_fwd_adj", 1, 50, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, "none", 8],
         # [0.0, "bending", "FNO3d", "both", "learnable", True, False, 33, 66, 19, "LFF_HLoss_fwd_adj_grad_loss", 2, 50, 0.002, "nmse", 1, 1, 0.0, 0.5, 0.0, "none", 8],
-        [0.0, "bending", "FNO3d", "fwd", True, "learnable", True, False, 33, 66, 20, "end2end_fwd_adj", 1, 50, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, "none", "none", 8],
+        # [0.0, "bending", "FNO3d", "fwd", True, "learnable", True, False, 33, 66, 20, "end2end_fwd_adj", 1, 50, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, "none", "none", 8],
+        # [0.0, "bending", "FNO3d", "fwd", True, "learnable", True, False, 33, 66, 21, "end2end_fwd_adj_ALM", 1, 50, True, 0.002, "nmse", 1, 1, 0.5, 0.0, 0.0, 0, 1, 10, 1e-4, "none", "none", 8],
+        # [0.0, "bending", "FNO3d", "fwd", True, "learnable", True, False, 33, 66, 22, "end2end_fwd_adj_ALM", 2, 50, True, 0.002, "nmse", 1, 1, 0.5, 0.0, 0.0, 1, 1, 10, 1e-4, "none", "none", 8],
+        # [0.0, "bending", "FNO3d", "fwd", True, "learnable", True, False, 33, 66, 23, "end2end_fwd_adj_ALM", 1, 50, True, 0.002, "nmse", 1, 1, 0.5, 0.0, 0.0, 0, 1, 2, 1e-4, "none", "none", 8],
+        # [0.0, "bending", "FNO3d", "fwd", True, "learnable", True, False, 33, 66, 24, "end2end_fwd_adj_ALM", 2, 50, True, 0.002, "nmse", 1, 1, 0.5, 0.0, 0.0, 1, 1, 2, 1e-4, "none", "none", 8],
+        [0.0, "bending", "FNO3d", "fwd", False, "learnable", True, False, 33, 66, 25, "only_fwd_S_param_loss", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 1, 0, 1, 2, 1e-4, "none", "none", 8],
     ]
 
     with Pool(8) as p:

@@ -1036,9 +1036,9 @@ class FNO3d(nn.Module):
 
         x_fwd = torch.cat((eps_enc_fwd, incident_field_fwd), dim=1)
 
-        x_fwd = self.stem(x_fwd)
-        x1_fwd = self.stages[0](x_fwd)
-        x2_fwd = self.stages[1](x1_fwd)
+        x_fwd = self.stem(x_fwd) # conv2d downsample
+        x1_fwd = self.stages[0](x_fwd) # fno block
+        x2_fwd = self.stages[1](x1_fwd) # sequential conv2d downsample + fno block
         x1_fwd = resize_to_targt_size(
             x1_fwd, (src.shape[-2], src.shape[-1])
         )
@@ -1050,7 +1050,7 @@ class FNO3d(nn.Module):
         if len(x2_fwd.shape) == 3:
             x2_fwd = x2_fwd.unsqueeze(0)
         x_fwd = torch.cat((x1_fwd, x2_fwd), dim=1)
-        forward_Ez_field = self.head(x_fwd)
+        forward_Ez_field = self.head(x_fwd) # 1x1 conv
         if len(forward_Ez_field.shape) == 3:
             forward_Ez_field = forward_Ez_field.unsqueeze(0)
         

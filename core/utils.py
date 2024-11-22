@@ -1043,12 +1043,14 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
         size_average=None,
         reduce=None,
         reduction: str = "mean",
+        using_ALM: bool = False,
     ):
         super().__init__(size_average, reduce, reduction)
         self.wl_list = torch.linspace(
             wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl
         )
         self.omegas = 2 * np.pi * C_0 / (self.wl_list * 1e-6)
+        self.using_ALM = using_ALM
 
     def forward(self, Ez: Tensor, source: Tensor, As, transpose_A):
         Ez = Ez[:, -2:, :, :]
@@ -1106,7 +1108,8 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
                 (source).flatten(0, 1).flatten(1)
             )
         difference = lhs - b
-        difference[~free_space_mask] = 0
+        if not self.using_ALM: # when we are not using ALM, we set the difference to zero in the free space region
+            difference[~free_space_mask] = 0
         # b[~free_space_mask] = 0
         # fig, ax = plt.subplots(1, 3, figsize=(15, 5))
         # diff = ax[0].imshow(torch.abs(difference[0]).reshape(Ez.shape[-2], Ez.shape[-1]).detach().cpu().numpy())

@@ -1177,6 +1177,10 @@ class ObjectiveFunc(object):
         self.solutions = {}
         self.verbose = verbose
 
+    def switch_solver(self, neural_solver, numerical_solver, use_autodiff=False):
+        for simulation in self.sims.values():
+            simulation.switch_solver(neural_solver, numerical_solver, use_autodiff)
+
     def add_objective(
         self,
         cfgs: dict = dict(

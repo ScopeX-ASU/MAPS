@@ -23,6 +23,8 @@ from core.models.layers.utils import plot_eps_field
 from core.utils import set_torch_deterministic
 from torch_sparse import spspmm
 from core import builder
+import copy
+import time
 import argparse
 import random
 from pyutils.general import AverageMeter, logger as lg
@@ -47,7 +49,8 @@ def bending_opt(
         operation_device,
         neural_solver=None,
         numerical_solver="solve_direct",
-    ):
+        use_autodiff=False,
+):
     sim_cfg = DefaultSimulationConfig()
 
     bending_region_size = (1.6, 1.6)
@@ -61,6 +64,7 @@ def bending_opt(
             solver="ceviche_torch",
             neural_solver=neural_solver,
             numerical_solver=numerical_solver,
+            use_autodiff=use_autodiff,
             border_width=[0, port_len, port_len, 0],
             resolution=50,
             plot_root=f"./figs/test_mfs_bending_{device_id}",
@@ -78,28 +82,67 @@ def bending_opt(
         ), 
         device=operation_device
     )
+    print("begin to copy the device", flush=True)
     hr_device = device.copy(resolution=310)
+    print("finish copying the device", flush=True)
     print(device)
+    print("init the optimization", flush=True)
     opt = BendingOptimization(device=device, hr_device=hr_device, sim_cfg=sim_cfg, operation_device=operation_device).to(operation_device)
+    print("finish init the optimization", flush=True)
     print(opt)
-    init_lr = 1e4
+    # init_lr = 1e4
+    init_lr = 2e-2
     optimizer = torch.optim.Adam(opt.parameters(), lr=init_lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=70, eta_min=init_lr*0.01
     )
-    last_design_region_dict = None
+    fwd_trans = []
+    fwd_trans_gt = []
+    time_list = []
     for step in range(10):
     # for step in range(1):
         optimizer.zero_grad()
+        with torch.no_grad():
+            opt.switch_solver(None, "solve_direct", False)
+            results_gt = opt.forward(sharpness=1 + 2 * step)
+            print(f"***Step {step}:", end=" ")
+            for k, obj in results_gt["breakdown"].items():
+                print(f"{k}: {obj['value']:.3f}", end=", ")
+            print()
+            fwd_trans_gt.append(results_gt["breakdown"]["fwd_trans"]["value"].detach().cpu().numpy())
+            opt.switch_solver(neural_solver, numerical_solver, use_autodiff)
+            opt.plot(
+                eps_map=opt._eps_map,
+                obj=results_gt["breakdown"]["fwd_trans"]["value"],
+                plot_filename="bending_opt_step_{}_fwd_GT.png".format(step),
+                field_key=("in_port_1", 1.55, 1),
+                field_component="Ez",
+                in_port_name="in_port_1",
+                exclude_port_names=["refl_port_2"],
+            )
+        start_time = time.time()
         results = opt.forward(sharpness=1 + 2 * step)
         # results = opt.forward(sharpness=256)
         print(f"Step {step}:", end=" ")
         for k, obj in results["breakdown"].items():
             print(f"{k}: {obj['value']:.3f}", end=", ")
         print()
-
+        fwd_trans.append(results["breakdown"]["fwd_trans"]["value"].detach().cpu().numpy())
         (-results["obj"]).backward()
-        if neural_solver is not None:
+        end_time = time.time()
+        time_list.append(end_time - start_time)
+        opt.plot(
+            eps_map=opt._eps_map,
+            obj=results["breakdown"]["fwd_trans"]["value"],
+            plot_filename="bending_opt_step_{}_fwd.png".format(step),
+            field_key=("in_port_1", 1.55, 1),
+            field_component="Ez",
+            in_port_name="in_port_1",
+            exclude_port_names=["refl_port_2"],
+        )
+        # for p in opt.parameters():
+        #     print("this is the grad", p.grad, flush=True)
+        if neural_solver is not None and numerical_solver == "none":
             for p in opt.parameters():
                 if p.grad is not None:
                     max_grad = p.grad.data.abs().max()  # Get the maximum absolute gradient value
@@ -107,37 +150,16 @@ def bending_opt(
                         scale_factor = 1e3 / max_grad  # Compute the scale factor
                         p.grad.data.mul_(scale_factor)  # Scale the gradient
 
-        current_design_region_dict = opt.get_design_region_eps_dict()
-        filename_h5 = f"./data/fdfd/bending/mfs_raw_test/bending_id-{device_id}_opt_step_{step}.h5"
-        filename_yml = f"./data/fdfd/bending/mfs_raw_test/bending_id-{device_id}.yml"
-        if last_design_region_dict is None:
-            # opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
-            last_design_region_dict = current_design_region_dict
-            opt.plot(
-                eps_map=opt._eps_map,
-                obj=results["breakdown"]["fwd_trans"]["value"],
-                plot_filename="bending_opt_step_{}_fwd.png".format(step),
-                field_key=("in_port_1", 1.55, 1),
-                field_component="Ez",
-                in_port_name="in_port_1",
-                exclude_port_names=["refl_port_2"],
-            )
-        else:
-            cosine_similarity = compare_designs(last_design_region_dict, current_design_region_dict)
-            if cosine_similarity < 0.996 or step == 9:
-                # opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
-                last_design_region_dict = current_design_region_dict
-                opt.plot(
-                    eps_map=opt._eps_map,
-                    obj=results["breakdown"]["fwd_trans"]["value"],
-                    plot_filename="bending_opt_step_{}_fwd.png".format(step),
-                    field_key=("in_port_1", 1.55, 1),
-                    field_component="Ez",
-                    in_port_name="in_port_1",
-                    exclude_port_names=["refl_port_2"],
-                )
+
         optimizer.step()
         scheduler.step()
+    fwd_trans = np.array(fwd_trans)
+    fwd_trans_gt = np.array(fwd_trans_gt)
+    time_list = np.array(time_list)
+    fwd_trans_tot = np.stack([fwd_trans, fwd_trans_gt], axis=1)
+    # save it to a csv file
+    np.savetxt(f"./unitest/fwd_trans.csv", fwd_trans_tot, delimiter=",", header="Pred_fwd_trans,GT_fwd_trans", comments="")
+    np.savetxt(f"./unitest/time.csv", time_list, delimiter=",", header="time", comments="")
 
 def main():
     parser = argparse.ArgumentParser()
@@ -197,7 +219,9 @@ def main():
         int(configs.run.random_state), 
         device,
         neural_solver={"fwd_solver": model_fwd, "adj_solver": model_adj},
-        numerical_solver="none",
+        # neural_solver={"fwd_solver": None, "adj_solver": None},
+        numerical_solver="solve_iterative",
+        use_autodiff=False,
     )
 
 if __name__ == "__main__":

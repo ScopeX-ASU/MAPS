@@ -16,6 +16,9 @@ aux_criterion:
   tv_loss:
     weight: 0.0
     norm: False
+  maxwell_residual_loss:
+    weight: 0.0
+    using_ALM: False
 
 log_criterion:
   curl_loss:
@@ -23,6 +26,8 @@ log_criterion:
   tv_loss:
     weight: 0.0
     norm: False
+  maxwell_residual_loss:
+    using_ALM: False
 
 optimizer:
   name: adam

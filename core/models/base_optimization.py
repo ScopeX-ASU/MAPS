@@ -502,6 +502,9 @@ class BaseOptimization(nn.Module):
             design_region_eps_dict[key] = design_region.clone().detach()
         return design_region_eps_dict
     
+    def switch_solver(self, neural_solver, numerical_solver, use_autodiff=False):
+        self.objective.switch_solver(neural_solver, numerical_solver, use_autodiff)
+    
     def forward(
         self,
         sharpness: float = 1,
@@ -515,7 +518,8 @@ class BaseOptimization(nn.Module):
         ## need to create objective layer during forward, because all Simulations need to know the latest permittivity_list
 
         self._eps_map = eps_map
-        self._eps_map.retain_grad()
+        if self._eps_map.requires_grad:
+            self._eps_map.retain_grad()
         self._hr_eps_map = hr_eps_map
         obj = self.objective_layer([eps_map])
         self._obj = obj

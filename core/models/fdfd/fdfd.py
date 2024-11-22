@@ -273,6 +273,7 @@ class fdfd_ez(fdfd_ez_ceviche):
         bloch_phases=None,
         neural_solver=None,
         numerical_solver="solve_direct",
+        use_autodiff: bool = False,
         sym_precond: bool = False,
     ):
         self.power = power
@@ -286,6 +287,7 @@ class fdfd_ez(fdfd_ez_ceviche):
         self.solver = SparseSolveTorch(
             neural_solver=self.neural_solver, 
             numerical_solver=self.numerical_solver,
+            use_autodiff=use_autodiff,
         )
         if isinstance(eps_r, np.ndarray):
             eps_r = torch.from_numpy(eps_r)
@@ -295,6 +297,15 @@ class fdfd_ez(fdfd_ez_ceviche):
         # if run this function, will enable symmetric precondictioner
         if sym_precond:
             self._make_precond()
+
+    def switch_solver(self, neural_solver=None, numerical_solver="solve_direct", use_autodiff=False):
+        self.neural_solver = neural_solver
+        self.numerical_solver = numerical_solver
+        self.solver = SparseSolveTorch(
+            neural_solver=self.neural_solver, 
+            numerical_solver=self.numerical_solver,
+            use_autodiff=use_autodiff,
+        )
 
     def _make_precond(self):
         Nx, Ny = self.shape
@@ -465,7 +476,7 @@ class fdfd_ez(fdfd_ez_ceviche):
         eps_diag = -EPSILON_0 * self.omega**2 * eps_vec
         # Ez_vec = sparse_solve_torch(entries_a, indices_a, eps_diag, b_vec)
         Ez_vec = self.solver(
-            entries_a, indices_a, eps_diag, eps_vec, b_vec, Jz_vec, port_name, mode, self.Pl, self.Pr
+            entries_a, indices_a, eps_diag, self.omega, b_vec, port_name, mode, self.Pl, self.Pr
         )
         Hx_vec, Hy_vec = self._Ez_to_Hx_Hy(Ez_vec)
         return Hx_vec, Hy_vec, Ez_vec

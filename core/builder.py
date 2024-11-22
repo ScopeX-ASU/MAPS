@@ -853,6 +853,7 @@ def make_criterion(name: str = None, cfg=None) -> nn.Module:
             wl_cen=cfg.wl_cen,
             wl_width=cfg.wl_width,
             n_wl=cfg.n_wl,
+            using_ALM=cfg.using_ALM,
         )
     elif name == "grad_loss":
         criterion = GradientLoss()

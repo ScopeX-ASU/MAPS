@@ -205,6 +205,10 @@ def train(
     device: torch.device = torch.device("cuda:0"),
     plot: bool = False,
     grad_scaler=None,
+    lambda_: float = 1.0,  # Lagrange multiplier
+    mu: float = 1.0,       # Penalty coefficient
+    mu_growth: float = 10.0,  # Growth rate for penalty coefficient
+    constraint_tol: float = 1e-4,  # Tolerance for residual
 ) -> None:
     torch.autograd.set_detect_anomaly(True)
     model_fwd.train()
@@ -522,8 +526,10 @@ def train(
                             fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, 2:4, ...],
                             torch.ones_like(adjoint_field[:, 2:4, ...]).to(device)
                         ))/2
+                aux_meters[name].update(aux_loss.item()) # record the aux loss first
+                if lambda_ is not None and name == "maxwell_residual_loss": # which means that we are using ALM
+                    aux_loss = aux_loss * lambda_ + (mu/2) * aux_loss ** 2
                 loss = loss + aux_loss
-                aux_meters[name].update(aux_loss.item())
                 
         grad_scaler.scale(loss).backward()
         # for p in model.parameters():
@@ -567,6 +573,13 @@ def train(
         },
     )
 
+    # ALM Updates
+    if constraint_tol is not None: # which means that we are using ALM
+        if aux_meters["maxwell_residual_loss"].avg > constraint_tol:
+            lambda_ += mu * aux_meters["maxwell_residual_loss"].avg
+            mu *= mu_growth
+            lg.info(f"Updated ALM Parameters - Lambda: {lambda_}, Mu: {mu}")
+
     if plot and (
         epoch % configs.plot.interval == 0 or epoch == configs.run.n_epochs - 1
     ):
@@ -607,6 +620,8 @@ def train(
                     ground_truth=fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"],
                     filepath=filepath + "_adj.png",
                 )
+    
+    return lambda_, mu
 
 def validate(
     model_fwd: nn.Module,
@@ -622,7 +637,8 @@ def validate(
     plot: bool = True,
 ) -> None:
     model_fwd.eval()
-    model_adj.eval()
+    if model_adj is not None:
+        model_adj.eval()
     val_loss = 0
     mse_meter = AverageMeter("mse")
     log_meters = {name: AverageMeter(name) for name in log_criterions}
@@ -791,11 +807,15 @@ def validate(
                     elif name == "grad_loss":
                         # there is no need to distinguish the forward and adjoint field here
                         # since the gradient must combine both forward and adjoint field
+                        if model_adj is not None:
+                            adj_field_cal_grad = adjoint_field if adjoint_field_err_corr is None else adjoint_field_err_corr
+                        else:
+                            adj_field_cal_grad = fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...]
                         log_loss = weight * log_criterion(
                             forward_fields=forward_field if forward_field_err_corr is None else forward_field_err_corr,
                             # forward_fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
                             # backward_fields=field_solutions["field_solutions-wl-1.55-port-out_port_1-mode-1"][:, -2:, ...],
-                            adjoint_fields=adjoint_field if adjoint_field_err_corr is None else adjoint_field_err_corr,  
+                            adjoint_fields=adj_field_cal_grad,  
                             # adjoint_fields=fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
                             # backward_adjoint_fields = fields_adj['fields_adj-wl-1.55-port-in_port_1-mode-1'][:, -2:, ...],
                             target_gradient=gradient,
@@ -963,7 +983,8 @@ def test(
     plot: bool = False,
 ) -> None:
     model_fwd.eval()
-    model_adj.eval()
+    if model_adj is not None:
+        model_adj.eval()
     val_loss = 0
     mse_meter = AverageMeter("mse")
     log_meters = {name: AverageMeter(name) for name in log_criterions}
@@ -1343,6 +1364,17 @@ def main() -> None:
         name=configs.optimizer.name,
         configs=configs.optimizer,
     )
+    if configs.optimizer.ALM:
+        assert configs.aux_criterion.maxwell_residual_loss.weight > 0, "ALM is only used when maxwell_residual_loss is used"
+        lambda_ = configs.optimizer.ALM_lambda
+        mu = configs.optimizer.ALM_mu
+        mu_growth = configs.optimizer.ALM_mu_growth
+        constraint_tol = configs.optimizer.ALM_constraint_tol
+    else:
+        lambda_ = None
+        mu = None
+        mu_growth = None
+        constraint_tol = None
     scheduler = builder.make_scheduler(optimizer, config_file=configs.lr_scheduler)
     aux_criterions = {
         name: [builder.make_criterion(name, cfg=config), float(config.weight)]
@@ -1459,7 +1491,7 @@ def main() -> None:
             #     grad_scaler=grad_scaler,
             # )
             # quit()
-            train(
+            lambda_, mu = train(
                 model_fwd,
                 model_adj,
                 train_loader,
@@ -1472,6 +1504,10 @@ def main() -> None:
                 device,
                 plot=configs.plot.train,
                 grad_scaler=grad_scaler,
+                lambda_=lambda_,  # Lagrange multiplier
+                mu=mu,       # Penalty coefficient
+                mu_growth=mu_growth,  # Growth rate for penalty coefficient
+                constraint_tol=constraint_tol,  # Tolerance for residual
             )
 
             if validation_loader is not None:
