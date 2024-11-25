@@ -1,9 +1,10 @@
-'''
+"""
 Date: 2024-11-24 15:28:23
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-11-24 17:00:00
-FilePath: /MAPS/core/ai4pde/models/utils.py
-'''
+LastEditTime: 2024-11-24 19:34:45
+FilePath: /MAPS/core/train/models/utils.py
+"""
+
 """
 Date: 2024-08-24 21:37:48
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
@@ -14,11 +15,19 @@ FilePath: /Metasurface-Opt/core/models/utils.py
 import math
 import os
 
+import numpy as np
 import torch
 from pyutils.general import ensure_dir
 from torch import Tensor
 from torch.nn.utils.rnn import pad_packed_sequence
-import numpy as np
+
+__all__ = [
+    "conv_output_size",
+    "get_last_n_frames",
+    "plot_permittivity",
+    "nparray_as_real",
+    "from_Ez_to_Hx_Hy",
+]
 
 
 def conv_output_size(in_size, kernel_size, padding=0, stride=1, dilation=1):
@@ -60,23 +69,38 @@ def plot_permittivity(
     fig.tight_layout()
     fig.savefig(filepath, dpi=300)
 
+
 def nparray_as_real(data):
     return np.stack((data.real, data.imag), axis=-1)
 
 
-def from_Ez_to_Hx_Hy(sim, eps: Tensor, Ez: Tensor) -> None:
+def from_Ez_to_Hx_Hy(sim, eps: Tensor, Ez: Tensor, channel_first: bool = True) -> None:
     # sim: Simulation solver
     # eps b, h, w
     # Ez b, 2, h, w
-    Ez = Ez.permute(0, 2, 3, 1).contiguous()
-    Ez = torch.view_as_complex(Ez)
+    if not torch.is_complex(Ez):
+        is_complex = False
+        if channel_first:
+            Ez = Ez.permute(0, 2, 3, 1).contiguous()
+        Ez = torch.view_as_complex(Ez)
+    else:
+        is_complex = True
+
+    ## Ez = [bs, h, w] complex
     Hx = []
     Hy = []
     for i in range(Ez.size(0)):
-        self.sim.eps_r = eps[i]
-        Hx_vec, Hy_vec = self.sim._Ez_to_Hx_Hy(Ez[i].flatten())
-        Hx.append(torch.view_as_real(Hx_vec.reshape(Ez[i].shape)).permute(2, 0, 1))
-        Hy.append(torch.view_as_real(Hy_vec.reshape(Ez[i].shape)).permute(2, 0, 1))
-    Hx = torch.stack(Hx, 0)
-    Hy = torch.stack(Hy, 0)
+        sim.eps_r = eps[i]
+        Hx_vec, Hy_vec = sim._Ez_to_Hx_Hy(Ez[i].flatten())
+        Hx.append(torch.view_as_real(Hx_vec.reshape(Ez[i].shape)))
+        Hy.append(torch.view_as_real(Hy_vec.reshape(Ez[i].shape)))
+    Hx = torch.stack(Hx, 0)  # [bs, h, w, 2]
+    Hy = torch.stack(Hy, 0)  # [bs, h, w, 2]
+    if is_complex:
+        Hx = torch.view_as_complex(Hx)
+        Hy = torch.view_as_complex(Hy)
+    elif channel_first:
+        Hx = Hx.permute(0, 3, 1, 2).contiguous()
+        Hy = Hy.permute(0, 3, 1, 2).contiguous()
+
     return Hx, Hy

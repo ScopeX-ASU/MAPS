@@ -730,22 +730,6 @@ class FNO2d(ModelBase):
         for p in params:
             p.requires_grad_(mode)
 
-    def from_Ez_to_Hx_Hy(self, eps: Tensor, Ez: Tensor) -> None:
-        # eps b, h, w
-        # Ez b, 2, h, w
-        Ez = Ez.permute(0, 2, 3, 1).contiguous()
-        Ez = torch.view_as_complex(Ez)
-        Hx = []
-        Hy = []
-        for i in range(Ez.size(0)):
-            self.sim.eps_r = eps[i]
-            Hx_vec, Hy_vec = self.sim._Ez_to_Hx_Hy(Ez[i].flatten())
-            Hx.append(torch.view_as_real(Hx_vec.reshape(Ez[i].shape)).permute(2, 0, 1))
-            Hy.append(torch.view_as_real(Hy_vec.reshape(Ez[i].shape)).permute(2, 0, 1))
-        Hx = torch.stack(Hx, 0)
-        Hy = torch.stack(Hy, 0)
-        return Hx, Hy
-
     def incident_field_from_src(self, src: Tensor) -> Tensor:
         if self.train_field == "fwd":
             mode = src[:, int(0.4 * src.shape[-2] / 2), :]

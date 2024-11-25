@@ -332,19 +332,32 @@ class fdfd_ez(fdfd_ez_ceviche):
         # ).to(device)
 
         # print(self.indices_Dyb)
-        return (
+        if not hasattr(self, "indices_Dyb_torch"):
+            self.indices_Dyb_torch = torch.from_numpy(self.indices_Dyb).to(Ez_vec.device).long()
+            self.entries_Dyb_torch = torch.from_numpy(self.entries_Dyb).to(Ez_vec.device)
+        
+        if len(Ez_vec.shape) == 1:
+            Ez = Ez_vec[:, None]
+        else:
+            ## can have many batch dimension[..., n]
+            Ez = Ez.flatten(0, -2).t()
+        Hx = (
             -1
             / 1j
             / self.omega
             / MU_0
             * spmm(
-                torch.from_numpy(self.indices_Dyb).to(Ez_vec.device).long(),
-                torch.from_numpy(self.entries_Dyb).to(Ez_vec.device),
+                self.indices_Dyb_torch,
+                self.entries_Dyb_torch,
                 m=self.N,
                 n=self.N,
-                matrix=Ez_vec[:, None],
-            )[:, 0]
+                matrix=Ez,
+            )
         )
+
+        return Hx.t().reshape(Ez_vec.shape)
+        
+
 
     def _Ez_to_Hy(self, Ez_vec: Tensor) -> Tensor:
         # device = Ez_vec.device
@@ -355,21 +368,33 @@ class fdfd_ez(fdfd_ez_ceviche):
         #     / MU_0
         #     * self.sp_mult_Dxb(Ez_vec.data.cpu().numpy())
         # ).to(device)
-        return (
+        if not hasattr(self, "indices_Dxb_torch"):
+            self.indices_Dxb_torch = torch.from_numpy(self.indices_Dxb).to(Ez_vec.device).long()
+            self.entries_Dxb_torch = torch.from_numpy(self.entries_Dxb).to(Ez_vec.device)
+
+        if len(Ez_vec.shape) == 1:
+            Ez = Ez_vec[:, None]
+        else:
+            ## can have many batch dimension[..., n]
+            Ez = Ez.flatten(0, -2).t()
+
+        Hy = (
             1
             / 1j
             / self.omega
             / MU_0
             * spmm(
-                torch.from_numpy(self.indices_Dxb).to(Ez_vec.device).long(),
-                torch.from_numpy(self.entries_Dxb).to(Ez_vec.device),
+                self.indices_Dxb_torch,
+                self.entries_Dxb_torch,
                 m=self.N,
                 n=self.N,
-                matrix=Ez_vec[:, None],
-            )[:, 0]
+                matrix=Ez,
+            )
         )
+        return Hy.t().reshape(Ez_vec.shape)
 
     def _Ez_to_Hx_Hy(self, Ez_vec):
+        ## Ez_vec: [..., Nx*Ny] can support arbitrary batch or just 1-D vector
         Hx_vec = self._Ez_to_Hx(Ez_vec)
         Hy_vec = self._Ez_to_Hy(Ez_vec)
         return Hx_vec, Hy_vec
