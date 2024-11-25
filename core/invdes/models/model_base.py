@@ -41,7 +41,11 @@ from ceviche.constants import *
 from einops import rearrange
 from core.utils import print_stat
 
-__all__ = ["FNO3d"]
+__all__ = ["LearnableFourierFeatures",
+           "SpatialInterpolater",
+           "ConvBlock",
+           "LayerNorm",
+           ]
 
 
 class LearnableFourierFeatures(nn.Module):
