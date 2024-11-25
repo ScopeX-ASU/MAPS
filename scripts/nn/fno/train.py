@@ -3,7 +3,7 @@ Description:
 Author: Jiaqi Gu (jqgu@utexas.edu)
 Date: 2022-02-22 02:32:47
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-11-07 17:14:07
+LastEditTime: 2024-11-24 15:10:46
 '''
 import os
 import subprocess
@@ -103,6 +103,7 @@ def task_launcher(args):
             f"--model.err_correction={err_correction}",
             f"--model.fno_block_only={fno_block_only}",
             f"--model.train_field={train_field}",
+            f"--model.act_func=SINREN",
 
             f"--checkpoint.model_comment={suffix}",
             f"--checkpoint.resume={False}" if checkpt_fwd == "none" else f"--checkpoint.resume={True}",

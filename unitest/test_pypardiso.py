@@ -1,7 +1,15 @@
+'''
+Date: 2024-10-10 13:30:26
+LastEditors: Jiaqi Gu && jiaqigu@asu.edu
+LastEditTime: 2024-11-16 01:16:24
+FilePath: /MAPS/unitest/test_pypardiso.py
+'''
 import time
 import pypardiso
 import numpy as np
 import scipy.sparse as sp
+# from core.models.fdfd.solver import sparse_solve
+import torch
 try:
     from pyMKL import pardisoSolver
 except:
@@ -28,19 +36,24 @@ def pypardiso_spsolve_complex(A, b):
     print(x.shape)
     return x
 
-def pardiso_spsolve(A, b):
-    pSolve = pardisoSolver(A, mtype=13) # Matrix is complex unsymmetric due to SC-PML
+def pardiso_spsolve(A, b, mtypes=13):
+    pSolve = pardisoSolver(A, mtype=mtypes) # Matrix is complex unsymmetric due to SC-PML
     pSolve.factor()
     x = pSolve.solve(b)
     pSolve.clear()
     return x
 
-# A = sp.rand(100, 100, density=0.5, format="csr")
+# def cupy_spsolve(A, b):
+#     x = sparse_solve(A, b) # Matrix is complex unsymmetric due to SC-PML
+#     return x
+
+A = sp.rand(100, 100, density=0.5, format="csr", dtype=np.complex128)
+A = A + A.T + A*0.001
 # b = np.random.rand(100)
 # x = pypardiso.spsolve(A, b)
 # print(x)
 
-A = sp.rand(3000, 3000, density=0.005, format="csr", dtype=np.complex128)
+# A = sp.rand(300, 300, density=0.005, format="csr", dtype=np.complex128)
 
 b = np.random.rand(A.shape[0], 1).astype(np.complex128)
 beg = time.time()
@@ -60,5 +73,23 @@ x_pardiso = pardiso_spsolve(A, b)
 end = time.time()
 print("Pardiso Complex:", end-beg, "seconds")
 
-np.allclose(x_scipy, x_pypardiso)
-np.allclose(x_scipy, x_pardiso)
+beg = time.time()
+x_pardiso_sym = pardiso_spsolve(A, b, mtypes=6)
+end = time.time()
+print("Pardiso Complex(sym):", end-beg, "seconds")
+
+print(x_pardiso)
+print(x_pardiso_sym)
+print(np.allclose(x_pardiso, x_pardiso_sym))
+# Acoo = A.tocoo()
+
+# Apt = torch.sparse_coo_tensor(A.nonzero(), A.data, A.shape)
+# print(Apt)
+# b = torch.from_numpy(b).to(torch.complex128)
+# beg = time.time()
+# x_pypardiso = cupy_spsolve(Apt, b)
+# end = time.time()
+# print("Cupy Real:", end-beg, "seconds")
+
+# np.allclose(x_scipy, x_pypardiso)
+# np.allclose(x_scipy, x_pardiso)

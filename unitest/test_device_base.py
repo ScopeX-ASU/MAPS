@@ -19,7 +19,7 @@ import torch
 from ceviche import fdfd_ez as ceviche_fdfd_ez
 from ceviche.constants import *
 from pyutils.general import print_stat
-
+from pyutils.general import TimerCtx
 from core.models import (
     IsolatorOptimization,
     MetaCouplerOptimization,
@@ -190,38 +190,40 @@ def test_metacoupler_opt():
     )
 
     for step in range(100):
-        optimizer.zero_grad()
-        results = opt.forward(sharpness=1 + 2 * step)
-        opt.plot(
-            eps_map=opt._eps_map,
-            obj=results["breakdown"]["fwd_trans"]["value"],
-            plot_filename="metacoupler_opt_step_{}_fwd.png".format(step),
-            field_key=("in_port_1", 1.55, 1),
-            field_component="Ez",
-            in_port_name="in_port_1",
-            exclude_port_names=["refl_port_2"],
-        )
-        opt.plot(
-            eps_map=opt._eps_map,
-            obj=results["breakdown"]["bwd_trans"]["value"],
-            plot_filename="metacoupler_opt_step_{}_bwd.png".format(step),
-            field_key=("out_port_1", 1.55, 1),
-            field_component="Ez",
-            in_port_name="out_port_1",
-            exclude_port_names=["refl_port_1"],
-        )
-        print(f"Step {step}:", end=" ")
-        for k, obj in results["breakdown"].items():
-            print(f"{k}: {obj['value']:.3f}", end=", ")
-        print()
-        (-results["obj"]).backward()
-        # for p in opt.parameters():
-        #     print(p.grad)
-        if step % 5 == 0:
-            opt.dump_data(f"./data/fdfd/metacoupler/test2_metacoupler_opt_step_{step}.h5")
-        # print_stat(list(opt.parameters())[0], f"step {step}: grad: ")
-        optimizer.step()
-        scheduler.step()
+        with TimerCtx() as t:
+            optimizer.zero_grad()
+            results = opt.forward(sharpness=1 + 2 * step)
+            opt.plot(
+                eps_map=opt._eps_map,
+                obj=results["breakdown"]["fwd_trans"]["value"],
+                plot_filename="metacoupler_opt_step_{}_fwd.png".format(step),
+                field_key=("in_port_1", 1.55, 1),
+                field_component="Ez",
+                in_port_name="in_port_1",
+                exclude_port_names=["refl_port_2"],
+            )
+            opt.plot(
+                eps_map=opt._eps_map,
+                obj=results["breakdown"]["bwd_trans"]["value"],
+                plot_filename="metacoupler_opt_step_{}_bwd.png".format(step),
+                field_key=("out_port_1", 1.55, 1),
+                field_component="Ez",
+                in_port_name="out_port_1",
+                exclude_port_names=["refl_port_1"],
+            )
+            print(f"Step {step}:", end=" ")
+            for k, obj in results["breakdown"].items():
+                print(f"{k}: {obj['value']:.3f}", end=", ")
+            print()
+            (-results["obj"]).backward()
+            # for p in opt.parameters():
+            #     print(p.grad)
+            # if step % 5 == 0:
+            #     opt.dump_data(f"./data/fdfd/metacoupler/test2_metacoupler_opt_step_{step}.h5")
+            # print_stat(list(opt.parameters())[0], f"step {step}: grad: ")
+            optimizer.step()
+            scheduler.step()
+        print(f"Step {step} took {t.interval:.3f} s")
 
 
 def test_isolator_opt():

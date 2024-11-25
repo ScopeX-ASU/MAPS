@@ -38,7 +38,7 @@ log_criterion:
     wl_width: 0
     n_wl: 1
   grad_loss:
-    weight: 1
+    weight: 0
   s_param_loss:
     weight: 1
   err_corr_Ez:

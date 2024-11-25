@@ -169,14 +169,16 @@ def test_Axb_solver(As, b):
     print("this is the residual norm from numpy: ", residual_norm_np, flush=True)
     print("this is the b norm from numpy: ", b_norm_np, flush=True)
     print("this is the ratio of the residual to the b from numpy: ", ratio_np, flush=True)
-    noisy_x0 = e_direct_np * (np.random.normal(1, 0.1, e_direct_np.shape))
+    noisy_x0 = e_direct_np * (np.random.normal(1, 0.03, e_direct_np.shape))
     plt.figure()
     plt.imshow(np.abs(noisy_x0.reshape((600, 600))))
     plt.colorbar()
     plt.savefig("./figs/noisy_x0.png")
     plt.close()
+
     start_time = time.time()
-    e_iterate_np = _solve_iterative(regular_A_np, b_np, x0=None, iterative_method="lgmres", rtol=1e-3, atol=1e-6)
+    e_iterate_np = _solve_iterative(regular_A_np, b_np, x0=noisy_x0, iterative_method="lgmres", rtol=1e-2, atol=1e-6)
+    # e_iterate_np = _solve_iterative(regular_A_np, b_np, x0=None, iterative_method="bicgstab", rtol=1e-3, atol=1e-6)
     end_time = time.time()
     print(f"this is the time for the iterative solver {'lgmres'}: ", end_time - start_time, flush=True)
 
