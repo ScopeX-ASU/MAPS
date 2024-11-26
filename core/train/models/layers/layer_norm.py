@@ -2,7 +2,6 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from mmengine.registry import MODELS
-from core.utils import print_stat
 
 __all__ = ["MyLayerNorm", "preNorm", "postNorm"]
 

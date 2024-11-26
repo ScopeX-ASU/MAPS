@@ -3,14 +3,14 @@ import os
 from copy import deepcopy
 from functools import lru_cache
 from typing import Callable, List, Tuple
-from core.ceviche import ceviche
+from thirdparty.ceviche import ceviche
 import matplotlib.patches as patches
 import matplotlib.pylab as plt
 import numpy as np
 import torch
 from autograd import numpy as npa
-from core.ceviche.ceviche import constants, jacobian
-from core.ceviche.ceviche.modes import get_modes
+from thirdparty.ceviche.ceviche import constants, jacobian
+from thirdparty.ceviche.ceviche.modes import get_modes
 from meep.materials import Si, SiO2
 from pyutils.general import ensure_dir
 from scipy.ndimage import zoom
@@ -19,8 +19,9 @@ from torch.types import Device
 # from core.pytorch_sparse.torch_sparse import spmm
 from torch_sparse import spmm
 from pyutils.general import print_stat
-from core.ceviche.ceviche.primitives import sp_solve, sp_mult, spsp_mult
-from core.ceviche.ceviche.derivatives import compute_derivative_matrices
+from thirdparty.ceviche.ceviche.primitives import sp_solve, sp_mult, spsp_mult
+from thirdparty.ceviche.ceviche.derivatives import compute_derivative_matrices
+from core.utils import plot_level_set, get_eps, LevelSetInterp
 
 __all__ = [
     "material_fn_dict",
@@ -32,8 +33,6 @@ __all__ = [
     "AdjointGradient",
     "differentiable_boundary",
     "BinaryProjection",
-    "LevelSetInterp",
-    "get_eps",
     "ApplyLowerLimit",
     "ApplyUpperLimit",
     "ApplyBothLimit",
@@ -343,126 +342,6 @@ class BinaryProjection(torch.autograd.Function):
             )
 
         return grad, None, None
-
-
-class LevelSetInterp(object):
-    """This class implements the level set surface using Gaussian radial basis functions."""
-
-    def __init__(
-        self,
-        x0: Tensor = None,
-        y0: Tensor = None,
-        z0: Tensor = None,
-        sigma: float = None,
-        device: Device = torch.device("cuda:0"),
-    ):
-        # Input data.
-        x, y = torch.meshgrid(y0, x0, indexing="ij")
-        xy0 = torch.column_stack((x.reshape(-1), y.reshape(-1)))
-        self.xy0 = xy0
-        self.z0 = z0
-        self.sig = sigma
-        self.device = device
-
-        # Builds the level set interpolation model.
-        gauss_kernel = self.gaussian(self.xy0, self.xy0)
-        self.model = torch.matmul(
-            torch.linalg.inv(gauss_kernel), self.z0
-        )  # Solve gauss_kernel @ model = z0
-        # self.model = torch.linalg.solve(gauss_kernel, self.z0) # sees more stable
-
-    def gaussian(self, xyi, xyj):
-        dist = torch.sqrt(
-            (xyi[:, 1].reshape(-1, 1) - xyj[:, 1].reshape(1, -1)) ** 2
-            + (xyi[:, 0].reshape(-1, 1) - xyj[:, 0].reshape(1, -1)) ** 2
-        )
-        return torch.exp(-(dist**2) / (2 * self.sig**2)).to(self.device)
-
-    def get_ls(self, x1, y1):
-        xx, yy = torch.meshgrid(y1, x1, indexing="ij")
-        xy1 = torch.column_stack((xx.reshape(-1), yy.reshape(-1)))
-        ls = self.gaussian(self.xy0, xy1).T @ self.model
-        return ls
-
-
-# Function to plot the level set surface.
-def plot_level_set(x0, y0, rho, x1, y1, phi):
-    y, x = np.meshgrid(y0, x0)
-    yy, xx = np.meshgrid(y1, x1)
-
-    fig = plt.figure(figsize=(12, 6), tight_layout=True)
-    ax1 = fig.add_subplot(1, 2, 1, projection="3d")
-    ax1.view_init(elev=45, azim=-45, roll=0)
-    ax1.plot_surface(xx, yy, phi, cmap="RdBu", alpha=0.8)
-    ax1.contourf(
-        xx,
-        yy,
-        phi,
-        levels=[np.amin(phi), 0],
-        zdir="z",
-        offset=0,
-        colors=["k", "w"],
-        alpha=0.5,
-    )
-    ax1.contour3D(xx, yy, phi, 1, cmap="binary", linewidths=[2])
-    ax1.scatter(x, y, rho, color="black", linewidth=1.0)
-    ax1.set_title("Level set surface")
-    ax1.set_xlabel("x ($\mu m$)")
-    ax1.set_ylabel("y ($\mu m$)")
-    ax1.xaxis.pane.fill = False
-    ax1.yaxis.pane.fill = False
-    ax1.zaxis.pane.fill = False
-    ax1.xaxis.pane.set_edgecolor("w")
-    ax1.yaxis.pane.set_edgecolor("w")
-    ax1.zaxis.pane.set_edgecolor("w")
-
-    ax2 = fig.add_subplot(1, 2, 2)
-    ax2.contourf(xx, yy, phi, levels=[0, np.amax(phi)], colors=[[0, 0, 0]])
-    ax2.set_title("Zero level set contour")
-    ax2.set_xlabel("x ($\mu m$)")
-    ax2.set_ylabel("y ($\mu m$)")
-    ax2.set_aspect("equal")
-    plt.show()
-
-
-def get_eps(
-    design_param,
-    x_rho,
-    y_rho,
-    x_phi,
-    y_phi,
-    rho_size,
-    nx_rho,
-    ny_rho,
-    nx_phi,
-    ny_phi,
-    sharpness,
-    plot_levelset=False,
-):
-    """Returns the permittivities defined by the zero level set isocontour"""
-    phi_model = LevelSetInterp(
-        x0=x_rho, y0=y_rho, z0=design_param, sigma=rho_size, device=design_param.device
-    )
-    phi = phi_model.get_ls(x1=x_phi, y1=y_phi)
-
-    # the following is do the binarization projection, we have done it outside this function
-    # # Calculates the permittivities from the level set surface.
-    eps_phi = 0.5 * (torch.tanh(sharpness * phi) + 1)
-    # eps = eps_min + (eps_max - eps_min) * eps_phi
-    # eps = torch.maximum(eps, eps_min)
-    # eps = torch.minimum(eps, eps_max)
-
-    # Reshapes the design parameters into a 2D matrix.
-    eps = torch.reshape(eps_phi, (nx_phi, ny_phi))
-
-    # Plots the level set surface.
-    if plot_levelset:
-        rho = np.reshape(design_param, (nx_rho, ny_rho))
-        phi = np.reshape(phi, (nx_phi, ny_phi))
-        plot_level_set(x0=x_rho, y0=y_rho, rho=rho, x1=x_phi, y1=y_phi, phi=phi)
-
-    return eps
-
 
 class LevelSetInterp1D(object):
     """This class implements the level set surface using Gaussian radial basis functions in 1D."""

@@ -1,12 +1,12 @@
 import numpy as np
 import torch
-from ceviche import fdfd_ez as fdfd_ez_ceviche
-from ceviche.constants import *
-from ceviche.derivatives import create_sfactor
+from thirdparty.ceviche.ceviche import fdfd_ez as fdfd_ez_ceviche
+from thirdparty.ceviche.ceviche.constants import *
+from thirdparty.ceviche.ceviche.derivatives import create_sfactor
 from torch import Tensor, nn
 from torch_sparse import spmm
 
-from core.models.layers.utils import (
+from .utils import (
     Slice,
     get_flux,
 )

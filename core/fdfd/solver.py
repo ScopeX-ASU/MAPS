@@ -9,15 +9,14 @@ import cupy as cp
 import numpy as np
 import scipy.sparse as sp
 import torch
-from ceviche.solvers import solve_linear
-from ceviche.utils import make_sparse
+from thirdparty.ceviche.ceviche.solvers import solve_linear
+from thirdparty.ceviche.ceviche.utils import make_sparse
 from cupyx.scipy.sparse.linalg import factorized, spsolve
 from pyMKL import pardisoSolver
 from pyutils.general import print_stat, TimerCtx
 from torch import Tensor
-from ceviche.constants import *
-from core.models.fdfd.utils import torch_sparse_to_scipy_sparse
-from core.utils import print_stat
+from thirdparty.ceviche.ceviche.constants import *
+from .utils import torch_sparse_to_scipy_sparse
 from math import sqrt
 from pyutils.general import logger
 import scipy.sparse.linalg as spl

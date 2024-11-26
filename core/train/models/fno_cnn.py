@@ -22,11 +22,12 @@ from neuralop.models import FNO
 from neuralop.layers.fno_block import FNOBlocks
 from neuralop.layers.spectral_convolution import SpectralConv
 import matplotlib.pyplot as plt
-from core.models.layers.utils import (
+from .layers.utils import (
     Si_eps,
     SiO2_eps,
 )
 import copy
+from mmengine.registry import MODELS
 
 # from .layers.local_fno import FNO
 from ceviche.constants import C_0
@@ -35,13 +36,11 @@ from ceviche.constants import C_0
 import torch.nn.functional as F
 from functools import lru_cache
 from pyutils.torch_train import set_torch_deterministic
-from core.utils import resize_to_targt_size
-from core.invdes.models.fdfd.fdfd import fdfd_ez
+from core.train.utils import resize_to_targt_size
+from core.fdfd.fdfd import fdfd_ez
 from ceviche.constants import *
 from einops import rearrange
-from core.utils import print_stat
-from mmengine.registry import MODELS
-from .model_base import ModelBase
+from .model_base import ModelBase, ConvBlock
 
 __all__ = ["FNO2d"]
 
@@ -84,51 +83,51 @@ class SpatialInterpolater(nn.Module):
         return x
 
 
-class ConvBlock(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int = 1,
-        padding: int = 0,
-        stride: int = 1,
-        ln: bool = True,
-        act_func: Optional[str] = "GELU",
-        device: Device = torch.device("cuda:0"),
-        groups: int = 1,
-        skip: bool = False,
-    ) -> None:
-        super().__init__()
-        self.conv = nn.Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size,
-            padding=padding,
-            padding_mode="replicate",
-            stride=stride,
-            groups=groups,
-        )
-        if ln:
-            self.ln = LayerNorm(out_channels, eps=1e-6, data_format="channels_first")
-        else:
-            self.ln = None
-        if act_func is None:
-            self.act_func = None
-        elif act_func.lower() == "swish":
-            self.act_func = Swish()
-        else:
-            self.act_func = getattr(nn, act_func)()
-        self.skip = skip
+# class ConvBlock(nn.Module):
+#     def __init__(
+#         self,
+#         in_channels: int,
+#         out_channels: int,
+#         kernel_size: int = 1,
+#         padding: int = 0,
+#         stride: int = 1,
+#         ln: bool = True,
+#         act_func: Optional[str] = "GELU",
+#         device: Device = torch.device("cuda:0"),
+#         groups: int = 1,
+#         skip: bool = False,
+#     ) -> None:
+#         super().__init__()
+#         self.conv = nn.Conv2d(
+#             in_channels,
+#             out_channels,
+#             kernel_size,
+#             padding=padding,
+#             padding_mode="replicate",
+#             stride=stride,
+#             groups=groups,
+#         )
+#         if ln:
+#             self.ln = LayerNorm(out_channels, eps=1e-6, data_format="channels_first")
+#         else:
+#             self.ln = None
+#         if act_func is None:
+#             self.act_func = None
+#         elif act_func.lower() == "swish":
+#             self.act_func = Swish()
+#         else:
+#             self.act_func = getattr(nn, act_func)()
+#         self.skip = skip
 
-    def forward(self, x: Tensor) -> Tensor:
-        y = x = self.conv(x)
-        if self.ln is not None:
-            x = self.ln(x)
-        if self.act_func is not None:
-            x = self.act_func(x)
-        if self.skip:
-            x = x + y
-        return x
+#     def forward(self, x: Tensor) -> Tensor:
+#         y = x = self.conv(x)
+#         if self.ln is not None:
+#             x = self.ln(x)
+#         if self.act_func is not None:
+#             x = self.act_func(x)
+#         if self.skip:
+#             x = x + y
+#         return x
 
 
 class LayerNorm(nn.Module):
@@ -307,7 +306,7 @@ class FNO2d(ModelBase):
                 kernel_size=7,
                 padding=3,
                 stride=1,
-                act_func=self.act_func,
+                act_cfg=self.act_cfg,
                 device=self.device,
             ),
             ConvBlock(
@@ -316,7 +315,7 @@ class FNO2d(ModelBase):
                 kernel_size=7,
                 padding=3,
                 stride=2,
-                act_func=None,
+                act_cfg=None,
                 device=self.device,
             ),
         )
@@ -331,7 +330,7 @@ class FNO2d(ModelBase):
                         kernel_size=3,
                         padding=1,
                         stride=1,
-                        act_func=self.act_func,
+                        act_cfg=self.act_cfg,
                         device=self.device,
                     )
                     for _ in range(2)
@@ -348,7 +347,7 @@ class FNO2d(ModelBase):
                     kernel_size=5,
                     padding=2,
                     stride=2,
-                    act_func=self.act_func,
+                    act_cfg=self.act_cfg,
                     device=self.device,
                 ),
                 *[
@@ -358,7 +357,7 @@ class FNO2d(ModelBase):
                         kernel_size=3,
                         padding=1,
                         stride=1,
-                        act_func=self.act_func,
+                        act_cfg=self.act_cfg,
                         device=self.device,
                     )
                     for _ in range(2)
@@ -375,7 +374,7 @@ class FNO2d(ModelBase):
                 kernel_size=3,
                 padding=1,
                 stride=1,
-                act_func=self.act_func,
+                act_cfg=self.act_cfg,
                 device=self.device,
             ),
             ConvBlock(
@@ -384,7 +383,7 @@ class FNO2d(ModelBase):
                 kernel_size=5,
                 padding=2,
                 stride=2,
-                act_func=None,
+                act_cfg=None,
                 device=self.device,
             ),
         )
@@ -440,7 +439,7 @@ class FNO2d(ModelBase):
                     kernel_size=5,
                     padding=2,
                     stride=2,
-                    act_func=None,
+                    act_cfg=None,
                     device=self.device,
                 ),
                 FNO(
@@ -490,8 +489,8 @@ class FNO2d(ModelBase):
             self.out_channels,
             kernel_size=1,
             padding=0,
-            ln=False,
-            act_func=None,
+            norm_cfg=self.norm_cfg,
+            act_cfg=None,
             device=self.device,
         )
         if self.err_correction:
@@ -502,7 +501,7 @@ class FNO2d(ModelBase):
                     kernel_size=3,
                     padding=1,
                     stride=1,
-                    act_func=self.act_func,
+                    act_cfg=self.act_cfg,
                     device=self.device,
                 ),
                 ConvBlock(
@@ -511,7 +510,7 @@ class FNO2d(ModelBase):
                     kernel_size=5,
                     padding=2,
                     stride=2,
-                    act_func=None,
+                    act_cfg=None,
                     device=self.device,
                 ),
             )
@@ -567,7 +566,7 @@ class FNO2d(ModelBase):
                         kernel_size=2,
                         padding=1,
                         stride=2,
-                        act_func=None,
+                        act_cfg=None,
                         device=self.device,
                     ),
                     FNO(
@@ -617,8 +616,8 @@ class FNO2d(ModelBase):
                 self.out_channels,
                 kernel_size=1,
                 padding=0,
-                ln=False,
-                act_func=None,
+                norm_cfg=self.norm_cfg,
+                act_cfg=None,
                 device=self.device,
             )
 
@@ -652,7 +651,7 @@ class FNO2d(ModelBase):
                         outc,
                         kernel_size=1,
                         padding=0,
-                        act_func=self.act_func,
+                        act_cfg=self.act_cfg,
                         device=self.device,
                     ),
                     nn.Dropout2d(self.dropout_rate),
@@ -666,7 +665,7 @@ class FNO2d(ModelBase):
                     self.out_channels // 2,
                     kernel_size=1,
                     padding=0,
-                    act_func=None,
+                    act_cfg=None,
                     device=self.device,
                 )
             ]
@@ -932,28 +931,3 @@ class FNO2d(ModelBase):
             return forward_Ez_field, forward_Ez_field_err_corr
         else:
             return forward_Ez_field
-        # calculate the hx and hy from the Ez field
-        forward_Hx_field, forward_Hy_field = self.from_Ez_to_Hx_Hy(
-            eps_copy, forward_Ez_field
-        )
-        forward_field = torch.cat(
-            (forward_Hx_field, forward_Hy_field, forward_Ez_field), dim=1
-        )
-
-        if self.err_correction:
-            forward_Hx_field_err_corr, forward_Hy_field_err_corr = (
-                self.from_Ez_to_Hx_Hy(eps_copy, forward_Ez_field_err_corr)
-            )
-            forward_field_err_corr = torch.cat(
-                (
-                    forward_Hx_field_err_corr,
-                    forward_Hy_field_err_corr,
-                    forward_Ez_field_err_corr,
-                ),
-                dim=1,
-            )
-            forward_field_err_corr = (
-                self.pml_mask.unsqueeze(0).unsqueeze(0) * forward_field_err_corr
-            )
-
-        forward_field = self.pml_mask.unsqueeze(0).unsqueeze(0) * forward_field

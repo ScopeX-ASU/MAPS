@@ -22,7 +22,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from torchvision.transforms import InterpolationMode
 from core.utils import resize_to_targt_size, print_stat
 from ceviche.constants import *
-from core.models.layers.utils import (
+from core.train.models.layers.utils import (
     Si_eps,
     SiO2_eps,
 )

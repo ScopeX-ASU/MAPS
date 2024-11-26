@@ -15,7 +15,7 @@ from pyutils.general import ensure_dir
 
 # Determine the path to the directory containing device.py
 device_dir = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../../../data/fdtd")
+    os.path.join(os.path.dirname(__file__), "../../../../data/fdtd")
 )
 
 # Add the directory to sys.path

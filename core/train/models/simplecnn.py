@@ -20,8 +20,6 @@ from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torch.types import Device
 
-from core.utils import print_stat
-
 __all__ = ["simpleCNN"]
 
 class convBlock(nn.Module):

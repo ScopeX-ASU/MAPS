@@ -26,7 +26,7 @@ from pyutils.torch_train import (
 )
 from pyutils.typing import Criterion, DataLoader, Optimizer, Scheduler
 import torch.fft
-from core import builder
+from core.train import builder
 from core.utils import DeterministicCtx
 import wandb
 import datetime

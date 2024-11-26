@@ -15,15 +15,13 @@ import meep as mp
 import numpy as np
 import torch
 
-from ceviche import fdfd_ez
-from core.models.fdfd import fdfd_ez as fdfd_ez_torch
+from thirdparty.ceviche.ceviche import fdfd_ez
+from core.fdfd import fdfd_ez as fdfd_ez_torch
 
 # from ceviche.modes import insert_mode
 from ceviche.constants import C_0
 from pyutils.config import Config
 from pyutils.general import ensure_dir
-
-from core.utils import print_stat
 
 from .utils import (
     Si_eps,

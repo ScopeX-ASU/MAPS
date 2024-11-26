@@ -1,4 +1,4 @@
-from .fdfd import *
+from core.fdfd import *
 
 import importlib
 import os
@@ -7,7 +7,7 @@ import os
 for file in sorted(os.listdir(os.path.dirname(__file__))):
     if file.endswith(".py") and not file.startswith("_"):
         source = file[: file.find(".py")]
-        module = importlib.import_module("core.datasets." + source)
+        module = importlib.import_module("." + source, package=__name__)
         if "__all__" in module.__dict__:
             names = module.__dict__["__all__"]
         else:

@@ -19,7 +19,7 @@ from torch import nn
 from torch.functional import Tensor
 from torch.types import Device
 from torch.utils.checkpoint import checkpoint
-from .constant import *
+# from .constant import *
 from .layers.activation import SIREN
 from .layers.ffno_conv2d import FFNOConv2d
 from torch.types import _size

@@ -151,7 +151,7 @@ if __name__ == '__main__':
         # [0.0, "bending", "FNO3d", "fwd", True, "learnable", True, False, 33, 66, 23, "end2end_fwd_adj_ALM", 1, 50, True, 0.002, "nmse", 1, 1, 0.5, 0.0, 0.0, 0, 1, 2, 1e-4, "none", "none", 8],
         # [0.0, "bending", "FNO3d", "fwd", True, "learnable", True, False, 33, 66, 24, "end2end_fwd_adj_ALM", 2, 50, True, 0.002, "nmse", 1, 1, 0.5, 0.0, 0.0, 1, 1, 2, 1e-4, "none", "none", 8],
         # [0.0, "bending", "FNO3d", "fwd", False, "learnable", True, False, 33, 66, 25, "only_fwd_S_param_loss", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 1, 0, 1, 2, 1e-4, "none", "none", 8],
-        [0.0, "bending", "FNO3d", "fwd", False, "learnable", True, False, 33, 66, 26, "test_SBC", 0, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 1, 0, 1, 2, 1e-4, "none", "none", 8],
+        [0.0, "bending", "FNO2d", "fwd", False, "learnable", True, False, 33, 66, 26, "test_SBC", 0, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 1, 0, 1, 2, 1e-4, "none", "none", 8],
     ]   
 
     with Pool(8) as p:
