@@ -35,6 +35,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from core.utils import print_stat, plot_fields, cal_adj_src_from_fwd_field, cal_total_field_adj_src_from_fwd_field
 from ceviche.constants import *
+from core.train.models.utils import from_Ez_to_Hx_Hy
 
 def single_batch_check(
     model_fwd: nn.Module,
@@ -138,8 +139,9 @@ def single_batch_check(
                                             et_ms=et_m,
                                             monitors=monitor_slices,
                                             pml_mask=model_fwd.pml_mask,
-                                            from_Ez_to_Hx_Hy_func=model_fwd.from_Ez_to_Hx_Hy,
+                                            from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
                                             return_adj_src=False if (model_adj is None) or model_fwd.err_correction else True,
+                                            sim=model_fwd.sim,
                                         )
             if adjoint_source is not None:
                 adjoint_source = adjoint_source.detach()
@@ -151,8 +153,9 @@ def single_batch_check(
                                             et_ms=et_m,
                                             monitors=monitor_slices,
                                             pml_mask=model_fwd.pml_mask,
-                                            from_Ez_to_Hx_Hy_func=model_fwd.from_Ez_to_Hx_Hy,
+                                            from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
                                             return_adj_src=False if model_adj is None else True,
+                                            sim=model_fwd.sim,
                                         )
             # finish calculating the forward field
             if model_adj is not None:
@@ -177,8 +180,9 @@ def single_batch_check(
                                                 et_ms=et_m,
                                                 monitors=monitor_slices,
                                                 pml_mask=model_fwd.pml_mask,
-                                                from_Ez_to_Hx_Hy_func=model_adj.from_Ez_to_Hx_Hy,
+                                                from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
                                                 return_adj_src=False,
+                                                sim=model_adj.sim,
                                             )
                 if model_fwd.err_correction:
                     adjoint_field_err_corr, _ = cal_total_field_adj_src_from_fwd_field(
@@ -188,8 +192,9 @@ def single_batch_check(
                                                 et_ms=et_m,
                                                 monitors=monitor_slices,
                                                 pml_mask=model_fwd.pml_mask,
-                                                from_Ez_to_Hx_Hy_func=model_adj.from_Ez_to_Hx_Hy,
+                                                from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
                                                 return_adj_src=False,
+                                                sim=model_adj.sim,
                                             )
 
             regression_loss = criterion(
@@ -469,8 +474,9 @@ def train(
                                             et_ms=et_m,
                                             monitors=monitor_slices,
                                             pml_mask=model_fwd.pml_mask,
-                                            from_Ez_to_Hx_Hy_func=model_fwd.from_Ez_to_Hx_Hy,
+                                            from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
                                             return_adj_src=False if (model_adj is None) or model_fwd.err_correction else True,
+                                            sim=model_fwd.sim,
                                         )
             if adjoint_source is not None:
                 adjoint_source = adjoint_source.detach()
@@ -482,8 +488,9 @@ def train(
                                             et_ms=et_m,
                                             monitors=monitor_slices,
                                             pml_mask=model_fwd.pml_mask,
-                                            from_Ez_to_Hx_Hy_func=model_fwd.from_Ez_to_Hx_Hy,
+                                            from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
                                             return_adj_src=False if model_adj is None else True,
+                                            sim=model_fwd.sim,
                                         )
             # finish calculating the forward field
             if model_adj is not None:
@@ -555,8 +562,9 @@ def train(
                                                 et_ms=et_m,
                                                 monitors=monitor_slices,
                                                 pml_mask=model_fwd.pml_mask,
-                                                from_Ez_to_Hx_Hy_func=model_adj.from_Ez_to_Hx_Hy,
+                                                from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
                                                 return_adj_src=False,
+                                                sim=model_adj.sim,
                                             )
                 if model_fwd.err_correction:
                     adjoint_field_err_corr, _ = cal_total_field_adj_src_from_fwd_field(
@@ -566,8 +574,9 @@ def train(
                                                 et_ms=et_m,
                                                 monitors=monitor_slices,
                                                 pml_mask=model_fwd.pml_mask,
-                                                from_Ez_to_Hx_Hy_func=model_adj.from_Ez_to_Hx_Hy,
+                                                from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
                                                 return_adj_src=False,
+                                                sim=model_adj.sim,
                                             )
 
             regression_loss = criterion(
@@ -886,8 +895,9 @@ def validate(
                                                     et_ms=et_m,
                                                     monitors=monitor_slices,
                                                     pml_mask=model_fwd.pml_mask,
-                                                    from_Ez_to_Hx_Hy_func=model_fwd.from_Ez_to_Hx_Hy,
+                                                    from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
                                                     return_adj_src=False if (model_adj is None) or model_fwd.err_correction else True,
+                                                    sim=model_fwd.sim,
                                                 )
                     if adjoint_source is not None:
                         adjoint_source = adjoint_source.detach()
@@ -899,8 +909,9 @@ def validate(
                                                 et_ms=et_m,
                                                 monitors=monitor_slices,
                                                 pml_mask=model_fwd.pml_mask,
-                                                from_Ez_to_Hx_Hy_func=model_fwd.from_Ez_to_Hx_Hy,
+                                                from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
                                                 return_adj_src=False if model_adj is None else True,
+                                                sim=model_fwd.sim,
                                             )
 
                 if model_adj is not None:
@@ -926,8 +937,9 @@ def validate(
                                                     et_ms=et_m,
                                                     monitors=monitor_slices,
                                                     pml_mask=model_fwd.pml_mask,
-                                                    from_Ez_to_Hx_Hy_func=model_adj.from_Ez_to_Hx_Hy,
+                                                    from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
                                                     return_adj_src=False,
+                                                    sim=model_adj.sim,
                                                 )
                     if model_fwd.err_correction:
                         adjoint_field_err_corr, _ = cal_total_field_adj_src_from_fwd_field(
@@ -937,8 +949,9 @@ def validate(
                                                     et_ms=et_m,
                                                     monitors=monitor_slices,
                                                     pml_mask=model_fwd.pml_mask,
-                                                    from_Ez_to_Hx_Hy_func=model_adj.from_Ez_to_Hx_Hy,
+                                                    from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
                                                     return_adj_src=False,
+                                                    sim=model_adj.sim,
                                                 )
 
                 val_loss = criterion(
@@ -1232,8 +1245,9 @@ def test(
                                                     et_ms=et_m,
                                                     monitors=monitor_slices,
                                                     pml_mask=model_fwd.pml_mask,
-                                                    from_Ez_to_Hx_Hy_func=model_fwd.from_Ez_to_Hx_Hy,
+                                                    from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
                                                     return_adj_src=False if (model_adj is None) or model_fwd.err_correction else True,
+                                                    sim=model_fwd.sim,
                                                 )
                     if adjoint_source is not None:
                         adjoint_source = adjoint_source.detach()
@@ -1245,8 +1259,9 @@ def test(
                                                 et_ms=et_m,
                                                 monitors=monitor_slices,
                                                 pml_mask=model_fwd.pml_mask,
-                                                from_Ez_to_Hx_Hy_func=model_fwd.from_Ez_to_Hx_Hy,
+                                                from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
                                                 return_adj_src=False if model_adj is None else True,
+                                                sim=model_fwd.sim,
                                             )
 
                 if model_adj is not None:
@@ -1272,8 +1287,9 @@ def test(
                                                     et_ms=et_m,
                                                     monitors=monitor_slices,
                                                     pml_mask=model_fwd.pml_mask,
-                                                    from_Ez_to_Hx_Hy_func=model_adj.from_Ez_to_Hx_Hy,
+                                                    from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
                                                     return_adj_src=False,
+                                                    sim=model_adj.sim,
                                                 )
                     if model_fwd.err_correction:
                         adjoint_field_err_corr, _ = cal_total_field_adj_src_from_fwd_field(
@@ -1283,8 +1299,9 @@ def test(
                                                     et_ms=et_m,
                                                     monitors=monitor_slices,
                                                     pml_mask=model_fwd.pml_mask,
-                                                    from_Ez_to_Hx_Hy_func=model_adj.from_Ez_to_Hx_Hy,
+                                                    from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
                                                     return_adj_src=False,
+                                                    sim=model_adj.sim,
                                                 )
 
                 val_loss = criterion(
@@ -1648,19 +1665,19 @@ def main() -> None:
             )
             quit()
         for epoch in range(1, int(configs.run.n_epochs) + 1):
-            single_batch_check(
-                model_fwd,
-                model_adj,
-                train_loader,
-                optimizer,
-                criterion,
-                aux_criterions,
-                epoch,
-                mixup_fn,
-                device,
-                grad_scaler=grad_scaler,
-            )
-            quit()
+            # single_batch_check(
+            #     model_fwd,
+            #     model_adj,
+            #     train_loader,
+            #     optimizer,
+            #     criterion,
+            #     aux_criterions,
+            #     epoch,
+            #     mixup_fn,
+            #     device,
+            #     grad_scaler=grad_scaler,
+            # )
+            # quit()
             lambda_, mu = train(
                 model_fwd,
                 model_adj,

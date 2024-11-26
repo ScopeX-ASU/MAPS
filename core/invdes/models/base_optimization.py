@@ -373,6 +373,10 @@ class BaseOptimization(nn.Module):
                         f.create_dataset(f'port_slice-{slice_name}_y', data=slice.y)
                 for port_name, source_profile in self.norm_run_profiles.items():
                     for (wl, mode), profile in source_profile.items():
+                        if isinstance(profile[0], np.ndarray):
+                            src_mode = profile[0].astype(np.complex64)
+                            ht_m = profile[1].astype(np.complex64)
+                            et_m = profile[2].astype(np.complex64)
                         if isinstance(profile[0], Tensor):
                             if profile[0].dtype in complex_type:
                                 profile[0] = profile[0].to(torch.complex64)

@@ -18,7 +18,7 @@ from typing import Callable, List, Tuple
 from thirdparty.ceviche.ceviche.utils import get_entries_indices
 from .models.layers.utils import get_eigenmode_coefficients, Slice, get_flux, grid_average, cross, overlap
 import autograd.numpy as npa
-
+from core.fdfd import fdfd_ez
 
 if TYPE_CHECKING:
     from torch.optim.optimizer import _params_t
@@ -118,7 +118,6 @@ def cal_total_field_adj_src_from_fwd_field(
     from_Ez_to_Hx_Hy_func,
     return_adj_src,
 ) -> Tensor:
-    from core.invdes.models.fdfd.fdfd import fdfd_ez
     if not return_adj_src:
         Hx, Hy = from_Ez_to_Hx_Hy_func(
             eps, Ez # the eps_map doesn't really matter here actually

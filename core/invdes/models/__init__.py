@@ -10,7 +10,3 @@ from .metacoupler import MetaCouplerOptimization
 from .bending import BendingOptimization
 from .isolator import IsolatorOptimization
 from .layers import *
-from .simplecnn import *
-# from .neurolight_cnn import *
-from .fno_cnn import *
-from .ffno_cnn import *

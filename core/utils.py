@@ -119,10 +119,11 @@ def cal_total_field_adj_src_from_fwd_field(
     pml_mask,
     from_Ez_to_Hx_Hy_func,
     return_adj_src,
+    sim,
 ) -> Tensor:
     if not return_adj_src:
         Hx, Hy = from_Ez_to_Hx_Hy_func(
-            eps, Ez # the eps_map doesn't really matter here actually
+            sim, eps, Ez # the eps_map doesn't really matter here actually
         )
         total_field = torch.cat(
             (Hx, Hy, Ez), dim=1

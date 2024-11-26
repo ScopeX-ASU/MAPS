@@ -214,7 +214,6 @@ class N_Ports(BaseDevice):
             )
         else:
             self.cell_size = sim_cfg["cell_size"]
-        print("done adding geometries", flush=True)
         ### here we use ceil to match meep
         self.Nx, self.Ny, self.Nz = [
             int(math.ceil(i / self.grid_step)) for i in self.cell_size
@@ -228,10 +227,8 @@ class N_Ports(BaseDevice):
             self.resolution,
             self.eps_bg,
         )
-        print("done getting epsilon map", flush=True)
         self.design_region_masks = self.build_design_region_mask(design_region_cfgs)
         self.ports_regions = self.build_port_region(port_cfgs)
-        print("done building masks", flush=True)
 
         self.port_monitor_slices = {}  # {port_name: Slice or mask}
         self.port_sources_dict = {}  # {slice_name: {(wl, mode): (profile, ht_m, et_m, norm_power)}}

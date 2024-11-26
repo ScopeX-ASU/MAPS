@@ -4,22 +4,18 @@ import numpy as np
 import scipy.sparse as sp
 import torch
 import torch.nn.functional as F
-from ceviche import fdfd_ez as ceviche_fdfd_ez
-from ceviche.constants import *
+from thirdparty.ceviche.ceviche.constants import *
 from pyutils.general import print_stat
 
-from core.models import (
+from core.invdes.models import (
     IsolatorOptimization,
     MetaCouplerOptimization,
     MetaMirrorOptimization,
     BendingOptimization,
 )
-from core.models.base_optimization import BaseOptimization, DefaultSimulationConfig
-from core.models.fdfd.fdfd import fdfd_ez
-from core.models.fdfd.utils import torch_sparse_to_scipy_sparse
-from core.models.layers import Isolator, MetaCoupler, MetaMirror, Bending
-from core.models.layers.device_base import N_Ports, Si_eps
-from core.models.layers.utils import plot_eps_field
+from core.invdes.models.base_optimization import BaseOptimization, DefaultSimulationConfig
+from core.fdfd.utils import torch_sparse_to_scipy_sparse
+from core.invdes.models.layers import Isolator, MetaCoupler, MetaMirror, Bending
 from core.utils import set_torch_deterministic
 from torch_sparse import spspmm
 import argparse
@@ -49,6 +45,9 @@ def bending_opt(device_id, operation_device):
             resolution=50,
             plot_root=f"./figs/test_mfs_bending_{device_id}",
             PML=[0.5, 0.5],
+            neural_solver=None,
+            numerical_solver="solve_direct",
+            use_autodiff=False,
         )
     )
 
