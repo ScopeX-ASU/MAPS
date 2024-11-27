@@ -20,21 +20,22 @@ import torch
 from pyutils.general import ensure_dir
 from torch import Tensor
 from torch.nn.utils.rnn import pad_packed_sequence
-
+from autograd import numpy as npa
+from core.utils import Slice
 __all__ = [
     "conv_output_size",
     "get_last_n_frames",
     "plot_permittivity",
     "nparray_as_real",
     "from_Ez_to_Hx_Hy",
+    "get_grid",
+    "poynting_vector",
 ]
-
 
 def conv_output_size(in_size, kernel_size, padding=0, stride=1, dilation=1):
     return math.floor(
         (in_size + 2 * padding - dilation * (kernel_size - 1) - 1) / stride + 1
     )
-
 
 def get_last_n_frames(packed_sequence, n=100):
     # Unpack the sequence
@@ -49,7 +50,6 @@ def get_last_n_frames(packed_sequence, n=100):
         last_frames.append(last_n)
     last_frames = torch.stack(last_frames, dim=0)
     return last_frames
-
 
 def plot_permittivity(
     permittivity: Tensor, filepath: str = "./figs/permittivity_default.png"
@@ -69,10 +69,8 @@ def plot_permittivity(
     fig.tight_layout()
     fig.savefig(filepath, dpi=300)
 
-
 def nparray_as_real(data):
     return np.stack((data.real, data.imag), axis=-1)
-
 
 def from_Ez_to_Hx_Hy(sim, eps: Tensor, Ez: Tensor, channel_first: bool = True) -> None:
     # sim: Simulation solver
@@ -104,3 +102,47 @@ def from_Ez_to_Hx_Hy(sim, eps: Tensor, Ez: Tensor, channel_first: bool = True) -
         Hy = Hy.permute(0, 3, 1, 2).contiguous()
 
     return Hx, Hy
+
+def get_grid(shape, dl):
+    # dl in um
+    # computes the coordinates in the grid
+
+    (Nx, Ny) = shape
+    # if Ny % 2 == 0:
+    #     Ny -= 1
+    # coordinate vectors
+    x_coord = np.linspace(-(Nx - 1) / 2 * dl, (Nx - 1) / 2 * dl, Nx)
+    y_coord = np.linspace(-(Ny - 1) / 2 * dl, (Ny - 1) / 2 * dl, Ny)
+
+    # x and y coordinate arrays
+    xs, ys = np.meshgrid(x_coord, y_coord, indexing="ij")
+    return (xs, ys)
+
+def poynting_vector(
+    Hx, Hy, Ez, grid_step, monitor=None, direction="x+", autograd=False
+):
+    if autograd:
+        conj = npa.conj
+        real = npa.real
+        sum = npa.sum
+    else:
+        conj = np.conj
+        real = np.real
+        sum = np.sum
+    if isinstance(monitor, (Slice, np.ndarray)):
+        Hx = Hx[monitor]
+        Hy = Hy[monitor]
+        Ez_conj = conj(Ez[monitor])
+
+    if direction == "x+":
+        P = sum(real(Ez_conj * Hy)) * (-grid_step)
+    elif direction == "x-":
+        P = sum(real(Ez_conj * Hy)) * grid_step
+    elif direction == "y+":
+        P = sum(real(Ez_conj * Hx)) * grid_step
+    elif direction == "y-":
+        P = sum(real(Ez_conj * Hx)) * (-grid_step)
+    else:
+        raise ValueError("Invalid direction")
+    return P
+

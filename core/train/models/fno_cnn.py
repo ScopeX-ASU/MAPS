@@ -22,7 +22,7 @@ from neuralop.models import FNO
 from neuralop.layers.fno_block import FNOBlocks
 from neuralop.layers.spectral_convolution import SpectralConv
 import matplotlib.pyplot as plt
-from .layers.utils import (
+from core.utils import (
     Si_eps,
     SiO2_eps,
 )

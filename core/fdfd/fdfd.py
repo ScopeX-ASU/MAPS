@@ -6,7 +6,7 @@ from thirdparty.ceviche.ceviche.derivatives import create_sfactor
 from torch import Tensor, nn
 from torch_sparse import spmm
 
-from .utils import (
+from core.utils import (
     Slice,
     get_flux,
 )

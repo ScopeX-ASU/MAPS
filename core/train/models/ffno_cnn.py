@@ -70,34 +70,6 @@ class ConvBlock(nn.Module):
             x = self.act_func(x)
         return x
 
-# class ConvBlock(nn.Module):
-#     def __init__(
-#         self,
-#         in_channels: int,
-#         out_channels: int,
-#         kernel_size: int = 1,
-#         padding: int = 0,
-#         act_func: Optional[str] = "GELU",
-#         device: Device = torch.device("cuda:0"),
-#     ) -> None:
-#         super().__init__()
-#         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, padding=padding)
-#         if act_func is None:
-#             self.act_func = None
-#         elif act_func.lower() == "siren":
-#             self.act_func = SIREN()
-#         elif act_func.lower() == "swish":
-#             self.act_func = Swish()
-#         else:
-#             self.act_func = getattr(nn, act_func)()
-
-#     def forward(self, x: Tensor) -> Tensor:
-#         x = self.conv(x)
-#         if self.act_func is not None:
-#             x = self.act_func(x)
-#         return x
-
-
 class BSConv2d(nn.Module):
     def __init__(
         self,

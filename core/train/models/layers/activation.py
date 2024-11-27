@@ -35,3 +35,11 @@ class Tanh3(nn.Module):
 
     def forward(self, input):
         return torch.tanh(input) * 3
+
+# ACTIVATION_REGISTRY = {
+#     "relu": nn.ReLU(),
+#     "silu": nn.SiLU(),
+#     "gelu": nn.GELU(),
+#     "tanh": nn.Tanh(),
+#     "sigmoid": nn.Sigmoid(),
+# }

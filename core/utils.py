@@ -10,22 +10,127 @@ import torch.fft
 import torch.optim
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
-# from core.invdes.models.layers.utils import LevelSetInterp, get_eps
-from ceviche.constants import *
+from thirdparty.ceviche.ceviche.constants import *
 from torch import Tensor
 from torch_sparse import spmm
 from typing import Callable, List, Tuple
-from ceviche.utils import get_entries_indices
-from core.fdfd.utils import get_eigenmode_coefficients, Slice, get_flux, grid_average, cross, overlap
 import autograd.numpy as npa
-from core.fdfd.fdfd import fdfd_ez
 from torch.types import Device
+import collections
+from functools import lru_cache
 
 
 if TYPE_CHECKING:
     from torch.optim.optimizer import _params_t
 else:
     _params_t = Any
+
+def overlap(
+    a,
+    b,
+    dl,
+    direction: str = "x",
+) -> float:
+    """Numerically compute the overlap integral of two VectorFields.
+
+    Args:
+      a: `VectorField` specifying the first field.
+      b: `VectorField` specifying the second field.
+      normal: `Direction` specifying the direction normal to the plane (or slice)
+        where the overlap is computed.
+
+    Returns:
+      Result of the overlap integral.
+    """
+    if any(isinstance(ai, torch.Tensor) for ai in a):
+        conj = torch.conj
+        sum = torch.sum
+    else:
+        conj = npa.conj
+        sum = npa.sum
+    # ac = tuple([conj(ai) for ai in a])
+    ac = []
+    for ai in a:
+        if isinstance(ai, (torch.Tensor, np.ndarray)):
+            ac.append(conj(ai))
+        else:
+            ac.append(npa.conj(ai))
+    ac = tuple(ac)
+
+    return sum(cross(ac, b, direction=direction)) * dl
+
+
+def cross(a, b, direction="x"):
+    """Compute the cross product between two VectorFields."""
+    if direction == "x":
+        return a[1] * b[2] - a[2] * b[1]
+    elif direction == "y":
+        return a[2] * b[0] - a[0] * b[2]
+    elif direction == "z":
+        return a[0] * b[1] - a[1] * b[0]
+    else:
+        raise ValueError("Invalid direction")
+    
+def get_eigenmode_coefficients(
+    hx,
+    hy,
+    ez,
+    ht_m,
+    et_m,
+    monitor,
+    grid_step,
+    direction: str = "x",
+    autograd=False,
+    energy=False,
+):
+    if isinstance(ht_m, np.ndarray) and isinstance(hx, torch.Tensor):
+        ht_m = torch.from_numpy(ht_m).to(ez.device)
+        et_m = torch.from_numpy(et_m).to(ez.device)
+    if autograd:
+        abs = npa.abs
+        ravel = npa.ravel
+    else:
+        abs = np.abs
+        ravel = np.ravel
+    if isinstance(ez, torch.Tensor):
+        abs = torch.abs
+        ravel = torch.ravel
+
+    if direction == "x":
+        h = (0.0, ravel(hy[monitor]), 0)
+        hm = (0.0, ht_m, 0.0)
+        # The E-field is not co-located with the H-field in the Yee cell. Therefore,
+        # we must sample at two neighboring pixels in the propataion direction and
+        # then interpolate:
+        e_yee_shifted = grid_average(ez, monitor, direction, autograd=autograd)
+
+    elif direction == "y":
+        h = (ravel(hx[monitor]), 0, 0)
+        hm = (-ht_m, 0.0, 0.0)
+        # The E-field is not co-located with the H-field in the Yee cell. Therefore,
+        # we must sample at two neighboring pixels in the propataion direction and
+        # then interpolate:
+        e_yee_shifted = grid_average(ez, monitor, direction, autograd=autograd)
+
+    e = (0.0, 0.0, e_yee_shifted)
+    em = (0.0, 0.0, et_m)
+
+    # print("this is the type of em: ", type(em[2])) # ndarray
+    # print("this is the type of hy: ", type(hy[monitor])) # torch.Tensor
+
+    dl = grid_step * 1e-6
+    overlap1 = overlap(em, h, dl=dl, direction=direction)
+    overlap2 = overlap(hm, e, dl=dl, direction=direction)
+    normalization = overlap(em, hm, dl=dl, direction=direction)
+    normalization = (2 * normalization) ** 0.5
+    s_p = (overlap1 + overlap2) / 2 / normalization
+    s_m = (overlap1 - overlap2) / 2 / normalization
+
+    if energy:
+        s_p = abs(s_p) ** 2
+        s_m = abs(s_m) ** 2
+
+    return s_p, s_m
 
 def cal_fom_from_fields(
     Ez,
@@ -121,6 +226,7 @@ def cal_total_field_adj_src_from_fwd_field(
     return_adj_src,
     sim,
 ) -> Tensor:
+    from core.fdfd.fdfd import fdfd_ez # this is to avoid circular import
     if not return_adj_src:
         Hx, Hy = from_Ez_to_Hx_Hy_func(
             sim, eps, Ez # the eps_map doesn't really matter here actually
@@ -1358,3 +1464,94 @@ def plot_level_set(x0, y0, rho, x1, y1, phi):
     ax2.set_ylabel("y ($\mu m$)")
     ax2.set_aspect("equal")
     plt.show()
+
+def grid_average(e, monitor, direction: str = "x", autograd=False):
+    if autograd:
+        mean = npa.mean
+    else:
+        mean = np.mean
+    if isinstance(e, torch.Tensor):
+        mean = lambda x, axis: torch.mean(x, dim=axis)
+
+    if direction == "x":
+        if isinstance(monitor, Slice):
+            if isinstance(monitor[0], torch.Tensor):
+                e_monitor = (monitor[0] + torch.tensor([[-1], [0]], device=monitor[0].device), monitor[1])
+                
+                e_yee_shifted = torch.mean(e[e_monitor], dim=0)
+            else:
+                e_monitor = (monitor[0] + np.array([[-1], [0]]), monitor[1])
+
+                e_yee_shifted = mean(e[e_monitor], axis=0)
+        elif isinstance(monitor, np.ndarray):
+            e_monitor = monitor.nonzero()
+            e_monitor = (e_monitor[0], e_monitor[1] - 1)
+            e_yee_shifted = (e[monitor] + e[e_monitor]) / 2
+    elif direction == "y":
+        if isinstance(monitor, Slice):
+            if isinstance(monitor[0], torch.Tensor):
+                e_monitor = (monitor[0], monitor[1] + torch.tensor([[-1], [0]], device=monitor[0].device))
+                e_yee_shifted = torch.mean(e[e_monitor], dim=0)
+            else:
+                e_monitor = (monitor[0], monitor[1] + np.array([[-1], [0]]))
+                e_yee_shifted = mean(e[e_monitor], axis=0)
+        elif isinstance(monitor, np.ndarray):
+            e_monitor = monitor.nonzero()
+            e_monitor = (e_monitor[0] - 1, e_monitor[1])
+            e_yee_shifted = (e[monitor] + e[e_monitor]) / 2
+    return e_yee_shifted
+
+def get_flux(hx, hy, ez, monitor, grid_step, direction: str = "x", autograd=False):
+    if autograd:
+        ravel = npa.ravel
+        real = npa.real
+    else:
+        ravel = np.ravel
+        real = np.real
+    if isinstance(ez, torch.Tensor):
+        ravel = torch.ravel
+        real = torch.real
+
+    if direction == "x":
+        h = (0.0, ravel(hy[monitor]), 0)
+    elif direction == "y":
+        h = (ravel(hx[monitor]), 0, 0)
+    # The E-field is not co-located with the H-field in the Yee cell. Therefore,
+    # we must sample at two neighboring pixels in the propataion direction and
+    # then interpolate:
+    e_yee_shifted = grid_average(ez, monitor, direction, autograd=autograd)
+
+    e = (0.0, 0.0, e_yee_shifted)
+
+    s = 0.5 * real(overlap(e, h, dl=grid_step * 1e-6, direction=direction))
+
+    return s
+
+Slice = collections.namedtuple("Slice", "x y")
+
+@lru_cache(maxsize=64)
+def Si_eps(wavelength):
+    """Returns the permittivity of silicon at the given wavelength"""
+    return 3.48**2
+    return Si.epsilon(1 / wavelength)[0, 0].real
+
+
+@lru_cache(maxsize=64)
+def SiO2_eps(wavelength):
+    """Returns the permittivity of silicon at the given wavelength"""
+    return 1.44**2
+    return SiO2.epsilon(1 / wavelength)[0, 0].real
+
+
+@lru_cache(maxsize=64)
+def SiN_eps(wavelength):
+    """Returns the permittivity of silicon at the given wavelength"""
+    return 2.45**2
+    return SiO2.epsilon(1 / wavelength)[0, 0].real
+
+
+material_fn_dict = {
+    "Si": Si_eps,
+    "SiO2": SiO2_eps,
+    "SiN": SiN_eps,
+}

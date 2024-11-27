@@ -10,15 +10,13 @@ import torch.fft
 import torch.optim
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
-from .models.layers.utils import LevelSetInterp, get_eps
+from core.utils import LevelSetInterp, get_eps
 from thirdparty.ceviche.ceviche.constants import *
 from torch import Tensor
 from torch_sparse import spmm
 from typing import Callable, List, Tuple
-from thirdparty.ceviche.ceviche.utils import get_entries_indices
-from .models.layers.utils import get_eigenmode_coefficients, Slice, get_flux, grid_average, cross, overlap
-import autograd.numpy as npa
-from core.fdfd import fdfd_ez
+from core.utils import get_eigenmode_coefficients, Slice, get_flux
+from core.fdfd.fdfd import fdfd_ez
 
 if TYPE_CHECKING:
     from torch.optim.optimizer import _params_t
@@ -195,43 +193,6 @@ def cal_total_field_adj_src_from_fwd_field(
         adj_src = torch.conj(torch.stack(gradient_list, dim=0))
         return total_field, adj_src
 
-def plot_fourier_eps(
-    eps_map: torch.Tensor,
-    filepath: str,
-) -> None:
-    eps_map = 1 / eps_map[0]
-    eps_map0 = eps_map.cpu().numpy()
-    plt.imshow(eps_map0)
-    plt.colorbar()
-    plt.savefig(filepath.replace(".png", "_org_eps.png"))
-    eps_map = torch.fft.fft2(eps_map)           # 2D FFT
-    eps_map = torch.fft.fftshift(eps_map)       # Shift zero frequency to center
-    eps_map = torch.abs(eps_map) 
-    print_stat(eps_map)
-    eps_map = eps_map.cpu().numpy()
-    plt.imshow(eps_map)
-    plt.colorbar()
-    plt.savefig(filepath)
-    plt.close()
-
-def plot_fouier_transform(
-    field: torch.Tensor,
-    filepath: str,
-) -> None:
-    field = field.reshape(field.shape[0], -1, 2, field.shape[-2], field.shape[-1]).permute(0, 1, 3, 4, 2).contiguous()
-    field = torch.abs(torch.view_as_complex(field)).squeeze()
-    field = field[0]
-    field0 = field.cpu().numpy()
-    plt.imshow(field0)
-    plt.savefig(filepath.replace(".png", "_org_field.png"))
-    field = torch.fft.fft2(field)           # 2D FFT
-    field = torch.fft.fftshift(field)       # Shift zero frequency to center
-    field = torch.abs(field) 
-    field = field.cpu().numpy()
-    plt.imshow(field)
-    plt.savefig(filepath)
-    plt.close()
-
 def plot_fields(fields: Tensor, ground_truth: Tensor, cmap: str = "magma", filepath: str = './figs/fields.png', **kwargs):
     # the field is of shape (batch, 6, x, y)
     fields = fields.reshape(fields.shape[0], -1, 2, fields.shape[-2], fields.shape[-1]).permute(0, 1, 3, 4, 2).contiguous()
@@ -261,14 +222,6 @@ def plot_fields(fields: Tensor, ground_truth: Tensor, cmap: str = "magma", filep
     # Save the figure with high resolution
     plt.savefig(filepath, dpi=300)
     plt.close()
-    # fig, ax = plt.subplots(2, ground_truth.shape[1], figsize=(15, 10), squeeze=False)
-    # for i in range(ground_truth.shape[1]):
-    #     ax[0, i].imshow(torch.abs(fields[0, i]).cpu().numpy(), cmap=cmap)
-    #     ax[0, i].set_title(f"Field {i}")
-    #     ax[1, i].imshow(torch.abs(ground_truth[0, i]).cpu().numpy(), cmap=cmap)
-    #     ax[1, i].set_title(f"Ground Truth {i}")
-    # plt.savefig(filepath, dpi=300)
-    # plt.close()
 
 def resize_to_targt_size(image: Tensor, size: Tuple[int, int]) -> Tensor:
     if len(image.shape) == 2:
@@ -527,8 +480,6 @@ class DAdaptAdam(torch.optim.Optimizer):
             group["k"] = k + 1
 
         return loss
-
-
 class DeterministicCtx:
     def __init__(self, seed: int | None = None) -> None:
         self.seed = seed
@@ -557,7 +508,6 @@ class DeterministicCtx:
         if torch.cuda.is_available():
             torch.cuda.set_rng_state(self.torch_cuda_random_state)
 
-
 def set_torch_deterministic(seed: int = 0) -> None:
     seed = int(seed) % (2**32)
     torch.manual_seed(seed)
@@ -567,7 +517,6 @@ def set_torch_deterministic(seed: int = 0) -> None:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
         torch.cuda.manual_seed_all(seed)
-
 
 def numerical_gradient_2d(phi, d_size):
     grad_x = torch.zeros_like(phi)
@@ -595,7 +544,6 @@ def numerical_gradient_2d(phi, d_size):
 
     return grad_x, grad_y
 
-
 # Auxiliary function to calculate first and second order partial derivatives.
 def ls_derivatives(phi, d_size):
     SC = 1e-12
@@ -615,9 +563,6 @@ def ls_derivatives(phi, d_size):
 
     return phi_x, phi_y, phi_xx, phi_xy, phi_yy
 
-
-# Minimum gap size fabrication constraint integrand calculation.
-# The "beta" parameter relax the constraint near the zero plane.
 class fab_penalty_ls_gap(torch.nn.Module):
     def __init__(self, beta=1, min_feature_size=1):
         super(fab_penalty_ls_gap, self).__init__()
@@ -661,15 +606,6 @@ class fab_penalty_ls_gap(torch.nn.Module):
             * grid_size**2
         )
 
-
-# Minimum radius of curvature fabrication constraint integrand calculation.
-# The "alpha" parameter controls its relative weight to the gap penalty.
-# The "sharpness" parameter controls the smoothness of the surface near the zero-contour.
-# def fab_penalty_ls_curve(params,
-#                          alpha=1,
-#                          sharpness = 1,
-#                          min_feature_size=min_feature_size,
-#                          grid_size=ls_grid_size):
 class fab_penalty_ls_curve(torch.nn.Module):
     def __init__(self, alpha=1, min_feature_size=1):
         super(fab_penalty_ls_curve, self).__init__()
@@ -708,7 +644,6 @@ class fab_penalty_ls_curve(torch.nn.Module):
             self.alpha * torch.maximum(curve_const, torch.tensor(0)) * grid_size**2
         )
 
-
 def padding_to_tiles(x, tile_size):
     """
     Pads the input tensor to a size that is a multiple of the tile size.
@@ -724,13 +659,11 @@ def padding_to_tiles(x, tile_size):
         x = torch.nn.functional.pad(x, (pady_0, pady_1, padx_0, padx_1))
     return x, pady_0, pady_1, padx_0, padx_1
 
-
 def rip_padding(eps, pady_0, pady_1, padx_0, padx_1):
     """
     Removes the padding from the input tensor.
     """
     return eps[padx_0:-padx_1, pady_0:-pady_1]
-
 
 class ComplexL1Loss(torch.nn.MSELoss):
     def __init__(self, norm=False) -> None:
@@ -1241,9 +1174,3 @@ class GradientLoss(torch.nn.modules.loss._Loss):
         field_energy = torch.norm(y * dr_masks, p=2, dim=(-1, -2)) + 1e-6
         return (error_energy / field_energy).mean()
     
-def resize_to_targt_size(image: Tensor, size: Tuple[int, int]) -> Tensor:
-    if len(image.shape) == 2:
-        image = image.unsqueeze(0).unsqueeze(0)
-    elif len(image.shape) == 3:
-        image = image.unsqueeze(0)
-    return F.interpolate(image, size=size, mode='bilinear', align_corners=False).squeeze()

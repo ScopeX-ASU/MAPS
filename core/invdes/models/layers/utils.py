@@ -1,7 +1,6 @@
 import collections
 import os
 from copy import deepcopy
-from functools import lru_cache
 from typing import Callable, List, Tuple
 from thirdparty.ceviche import ceviche
 import matplotlib.patches as patches
@@ -16,20 +15,14 @@ from pyutils.general import ensure_dir
 from scipy.ndimage import zoom
 from torch import Tensor
 from torch.types import Device
-# from core.pytorch_sparse.torch_sparse import spmm
 from torch_sparse import spmm
-from pyutils.general import print_stat
-from thirdparty.ceviche.ceviche.primitives import sp_solve, sp_mult, spsp_mult
-from thirdparty.ceviche.ceviche.derivatives import compute_derivative_matrices
-from core.utils import plot_level_set, get_eps, LevelSetInterp
+from core.utils import get_flux, get_eigenmode_coefficients
 
 __all__ = [
     "material_fn_dict",
     "Slice",
     "get_grid",
     "apply_regions_gpu",
-    "Si_eps",
-    "SiO2_eps",
     "AdjointGradient",
     "differentiable_boundary",
     "BinaryProjection",
@@ -89,35 +82,6 @@ def apply_regions_gpu(reg_list, xs, ys, eps_r_list, eps_bg, device="cuda"):
         eps_r[material_mask] = e
 
     return eps_r.cpu().numpy()
-
-
-@lru_cache(maxsize=64)
-def Si_eps(wavelength):
-    """Returns the permittivity of silicon at the given wavelength"""
-    return 3.48**2
-    return Si.epsilon(1 / wavelength)[0, 0].real
-
-
-@lru_cache(maxsize=64)
-def SiO2_eps(wavelength):
-    """Returns the permittivity of silicon at the given wavelength"""
-    return 1.44**2
-    return SiO2.epsilon(1 / wavelength)[0, 0].real
-
-
-@lru_cache(maxsize=64)
-def SiN_eps(wavelength):
-    """Returns the permittivity of silicon at the given wavelength"""
-    return 2.45**2
-    return SiO2.epsilon(1 / wavelength)[0, 0].real
-
-
-material_fn_dict = {
-    "Si": Si_eps,
-    "SiO2": SiO2_eps,
-    "SiN": SiN_eps,
-}
-
 
 class AdjointGradient(torch.autograd.Function):
     @staticmethod
@@ -620,180 +584,6 @@ def poynting_vector(
         raise ValueError("Invalid direction")
     return P
 
-
-def cross(a, b, direction="x"):
-    """Compute the cross product between two VectorFields."""
-    if direction == "x":
-        return a[1] * b[2] - a[2] * b[1]
-    elif direction == "y":
-        return a[2] * b[0] - a[0] * b[2]
-    elif direction == "z":
-        return a[0] * b[1] - a[1] * b[0]
-    else:
-        raise ValueError("Invalid direction")
-
-
-def overlap(
-    a,
-    b,
-    dl,
-    direction: str = "x",
-) -> float:
-    """Numerically compute the overlap integral of two VectorFields.
-
-    Args:
-      a: `VectorField` specifying the first field.
-      b: `VectorField` specifying the second field.
-      normal: `Direction` specifying the direction normal to the plane (or slice)
-        where the overlap is computed.
-
-    Returns:
-      Result of the overlap integral.
-    """
-    if any(isinstance(ai, torch.Tensor) for ai in a):
-        conj = torch.conj
-        sum = torch.sum
-    else:
-        conj = npa.conj
-        sum = npa.sum
-    # ac = tuple([conj(ai) for ai in a])
-    ac = []
-    for ai in a:
-        if isinstance(ai, (torch.Tensor, np.ndarray)):
-            ac.append(conj(ai))
-        else:
-            ac.append(npa.conj(ai))
-    ac = tuple(ac)
-
-    return sum(cross(ac, b, direction=direction)) * dl
-
-
-def grid_average(e, monitor, direction: str = "x", autograd=False):
-    if autograd:
-        mean = npa.mean
-    else:
-        mean = np.mean
-    if isinstance(e, torch.Tensor):
-        mean = lambda x, axis: torch.mean(x, dim=axis)
-
-    if direction == "x":
-        if isinstance(monitor, Slice):
-            if isinstance(monitor[0], torch.Tensor):
-                e_monitor = (monitor[0] + torch.tensor([[-1], [0]], device=monitor[0].device), monitor[1])
-                
-                e_yee_shifted = torch.mean(e[e_monitor], dim=0)
-            else:
-                e_monitor = (monitor[0] + np.array([[-1], [0]]), monitor[1])
-
-                e_yee_shifted = mean(e[e_monitor], axis=0)
-        elif isinstance(monitor, np.ndarray):
-            e_monitor = monitor.nonzero()
-            e_monitor = (e_monitor[0], e_monitor[1] - 1)
-            e_yee_shifted = (e[monitor] + e[e_monitor]) / 2
-    elif direction == "y":
-        if isinstance(monitor, Slice):
-            if isinstance(monitor[0], torch.Tensor):
-                e_monitor = (monitor[0], monitor[1] + torch.tensor([[-1], [0]], device=monitor[0].device))
-                e_yee_shifted = torch.mean(e[e_monitor], dim=0)
-            else:
-                e_monitor = (monitor[0], monitor[1] + np.array([[-1], [0]]))
-                e_yee_shifted = mean(e[e_monitor], axis=0)
-        elif isinstance(monitor, np.ndarray):
-            e_monitor = monitor.nonzero()
-            e_monitor = (e_monitor[0] - 1, e_monitor[1])
-            e_yee_shifted = (e[monitor] + e[e_monitor]) / 2
-    return e_yee_shifted
-
-
-def get_eigenmode_coefficients(
-    hx,
-    hy,
-    ez,
-    ht_m,
-    et_m,
-    monitor,
-    grid_step,
-    direction: str = "x",
-    autograd=False,
-    energy=False,
-):
-    if isinstance(ht_m, np.ndarray) and isinstance(hx, torch.Tensor):
-        ht_m = torch.from_numpy(ht_m).to(ez.device)
-        et_m = torch.from_numpy(et_m).to(ez.device)
-    if autograd:
-        abs = npa.abs
-        ravel = npa.ravel
-    else:
-        abs = np.abs
-        ravel = np.ravel
-    if isinstance(ez, torch.Tensor):
-        abs = torch.abs
-        ravel = torch.ravel
-
-    if direction == "x":
-        h = (0.0, ravel(hy[monitor]), 0)
-        hm = (0.0, ht_m, 0.0)
-        # The E-field is not co-located with the H-field in the Yee cell. Therefore,
-        # we must sample at two neighboring pixels in the propataion direction and
-        # then interpolate:
-        e_yee_shifted = grid_average(ez, monitor, direction, autograd=autograd)
-
-    elif direction == "y":
-        h = (ravel(hx[monitor]), 0, 0)
-        hm = (-ht_m, 0.0, 0.0)
-        # The E-field is not co-located with the H-field in the Yee cell. Therefore,
-        # we must sample at two neighboring pixels in the propataion direction and
-        # then interpolate:
-        e_yee_shifted = grid_average(ez, monitor, direction, autograd=autograd)
-
-    e = (0.0, 0.0, e_yee_shifted)
-    em = (0.0, 0.0, et_m)
-
-    # print("this is the type of em: ", type(em[2])) # ndarray
-    # print("this is the type of hy: ", type(hy[monitor])) # torch.Tensor
-
-    dl = grid_step * 1e-6
-    overlap1 = overlap(em, h, dl=dl, direction=direction)
-    overlap2 = overlap(hm, e, dl=dl, direction=direction)
-    normalization = overlap(em, hm, dl=dl, direction=direction)
-    normalization = (2 * normalization) ** 0.5
-    s_p = (overlap1 + overlap2) / 2 / normalization
-    s_m = (overlap1 - overlap2) / 2 / normalization
-
-    if energy:
-        s_p = abs(s_p) ** 2
-        s_m = abs(s_m) ** 2
-
-    return s_p, s_m
-
-
-def get_flux(hx, hy, ez, monitor, grid_step, direction: str = "x", autograd=False):
-    if autograd:
-        ravel = npa.ravel
-        real = npa.real
-    else:
-        ravel = np.ravel
-        real = np.real
-    if isinstance(ez, torch.Tensor):
-        ravel = torch.ravel
-        real = torch.real
-
-    if direction == "x":
-        h = (0.0, ravel(hy[monitor]), 0)
-    elif direction == "y":
-        h = (ravel(hx[monitor]), 0, 0)
-    # The E-field is not co-located with the H-field in the Yee cell. Therefore,
-    # we must sample at two neighboring pixels in the propataion direction and
-    # then interpolate:
-    e_yee_shifted = grid_average(ez, monitor, direction, autograd=autograd)
-
-    e = (0.0, 0.0, e_yee_shifted)
-
-    s = 0.5 * real(overlap(e, h, dl=grid_step * 1e-6, direction=direction))
-
-    return s
-
-
 def plot_eps_field(
     Ez,
     eps,
@@ -944,86 +734,6 @@ def insert_mode(omega, dx, x, y, epsr, target=None, npml=0, m=1, filtering=False
     h = beta / omega / constants.MU_0 * e
     target[x, y] = np.atleast_2d(e)[:, m - 1].squeeze()
     return h[:, m - 1], e[:, m - 1], beta, target
-
-class sParamFromEfield(object):
-    '''
-    a callable class that calculates the s-parameters from the e_fields
-    so that we can use jacobian reverse to calculate the gradient of the s-parameters 
-    w.r.t the e-fields for adjoint source calculation
-    '''
-    def __init__(
-            self, 
-            port_profile, 
-            port_slice, 
-            grid_step, 
-            sim, 
-            direction, 
-            in_port_name,
-            out_port_name,
-            wl,
-            in_mode,
-            out_mode,
-            avg_coefficient,
-            type,
-        ):
-        self.port_profile = port_profile
-        self.port_slice = port_slice
-        self.grid_step = grid_step
-        self.sim = sim
-        self.direction = direction
-        self.monitor_slice = self.port_slice[out_port_name]
-        self.norm_power = self.port_profile[in_port_name][
-            (wl, in_mode)
-        ][3]
-        if type == "eigenmode":
-            _, self.ht_m, self.et_m, _ = self.port_profile[out_port_name][
-                (wl, out_mode)
-            ]
-        self.avg_coefficient = avg_coefficient
-        self.type = type
-        assert type in {"eigenmode", "flux", "flux_minus_src"}, f"type {type} not supported"
-    
-    def __call__(self, Efield):
-        Efield_vec = self.sim._grid_to_vec(Efield)
-        Hx_vec, Hy_vec = self.sim._Ez_to_Hx_Hy(Efield_vec)
-        hx = self.sim._vec_to_grid(Hx_vec)
-        hy = self.sim._vec_to_grid(Hy_vec)
-        if self.type == "eigenmode":
-            s_p, s_m = get_eigenmode_coefficients(
-                hx,
-                hy,
-                Efield,
-                self.ht_m,
-                self.et_m,
-                self.monitor_slice,
-                grid_step=self.grid_step,
-                direction=self.direction[0],
-                autograd=True,
-                energy=True,
-            )
-            if self.direction[1] == "+":
-                s = s_p
-            elif self.direction[1] == "-":
-                s = s_m
-            else:
-                raise ValueError("Invalid direction")
-            s = s / self.norm_power / self.avg_coefficient
-        elif self.type in {"flux", "flux_minus_src"}:
-            s = get_flux(
-                hx,
-                hy,
-                Efield,
-                self.monitor_slice,
-                grid_step=self.grid_step,
-                direction=self.direction[0],
-                autograd=True,
-            )
-            s = npa.abs(s / self.norm_power / self.avg_coefficient)  # we only need absolute flux
-            if type == "flux_minus_src":
-                s = npa.abs(
-                    s - 1
-                )  ## if it is larger than 1, then this slice must include source, we minus the power from source
-        return s
 
 class ObjectiveFunc(object):
     def __init__(
@@ -1222,58 +932,6 @@ class ObjectiveFunc(object):
             ### complete autograd graph is from permittivity (np.ndarray) to fields and to fom
             self.Js[name] = {"weight": cfg["weight"], "fn": objfn}
 
-    def add_adj_objective(
-        self,
-        cfgs: dict = dict(
-            fwd_trans=dict(
-                weight=1,
-                type="eigenmode",
-                #### objective is evaluated at this port
-                in_port_name="in_port_1",
-                out_port_name="out_port_1",
-                #### objective is evaluated at all points by sweeping the wavelength and modes
-                in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
-                out_modes=(
-                    1,
-                ),  # can evaluate on multiple output modes and get average transmission
-                direction="x+",
-            )
-        ),
-    ):
-        cfgs = deepcopy(cfgs)
-        del cfgs["_fusion_func"]
-        ### build objective functions from solved fields to fom
-        for name, cfg in cfgs.items():
-            type = cfg["type"]
-            in_port_name = cfg["in_port_name"]
-            out_port_name = cfg["out_port_name"]
-            in_mode = cfg["in_mode"]
-            out_modes = cfg["out_modes"]
-            direction = cfg["direction"]
-
-            adj_objfn = {}
-            for wl, sim in self.sims.items():
-                for out_mode in out_modes:
-                    objfn = sParamFromEfield(
-                        port_profile=self.port_profiles, 
-                        port_slice=self.port_slices, 
-                        grid_step=self.grid_step, 
-                        sim=sim, 
-                        direction=direction, 
-                        in_port_name=in_port_name,
-                        out_port_name=out_port_name,
-                        wl=wl,
-                        in_mode=in_mode,
-                        out_mode=out_mode,
-                        avg_coefficient=len(self.sims.keys()) * len(out_modes),
-                        type=type,
-                    )
-                    adj_objfn[(wl, out_mode)] = objfn
-
-            ### note that this is not the final objective! this is partial objective from fields to fom
-            ### complete autograd graph is from permittivity (np.ndarray) to fields and to fom
-            self.adj_Js[name] = {"weight": cfg["weight"], "fn": adj_objfn}
-
     def build_jacobian(self):
         ## obtain_objective is the complete forward function starts from permittivity to solved fields, then to fom
         self.dJ = jacobian(self.obtain_objective, mode="reverse")
@@ -1365,89 +1023,3 @@ class ObjectiveFunc(object):
         elif mode == "backward":
             return self.obtain_gradient(permittivity, eps_shape)
 
-
-class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
-    def __init__(
-        self,
-        sim,
-        wl_cen: float = 1.55,
-        wl_width: float = 0,
-        n_wl: int = 1,
-        size_average=None,
-        reduce=None,
-        reduction: str = "mean",
-    ):
-        super().__init__(size_average, reduce, reduction)
-        self.sim = sim  #
-        self.wl_list = torch.linspace(
-            wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl
-        )
-        self.omegas = 2 * np.pi * constants.C_0 / (self.wl_list * 1e-6)
-        self.As = (None, None)
-        self.bs = {}
-
-    def make_A(self, eps_r: torch.Tensor, wl_list: List[float]):
-        ## eps_r: [bs, h, w] real tensor
-        ## wl_list: [n_wl] list of wls in um, support spectral bundling
-        eps_vec = eps_r.flatten(1)
-        tot_entries_list = []
-        tot_indices_list = []
-        for eps_v in eps_vec:
-            entries_list = []
-            indices_list = []
-            for wl in wl_list:
-                self.sim.omega = 2 * np.pi * constants.C_0 / (wl.item() * 1e-6)
-                self.sim._setup_derivatives() # need to setup derivatives after updating the omega
-                entries_a, indices_a = self.sim._make_A(
-                    eps_v
-                )  # return scipy sparse indices and values
-                entries_list.append(torch.from_numpy(entries_a))
-                indices_list.append(torch.from_numpy(indices_a))
-            entries_list = torch.stack(entries_list, 0)
-            indices_list = torch.stack(indices_list, 0)
-            tot_entries_list.append(entries_list)
-            tot_indices_list.append(indices_list)
-        tot_entries_list = torch.stack(tot_entries_list, 0).to(
-            eps_r.device
-        )  # [bs, n_wl, 5*h*w]
-        tot_indices_list = (
-            torch.stack(tot_indices_list, 0).to(eps_r.device).long()
-        )  # [bs, n_wl, 2, 5*h*w]
-        self.As = (tot_entries_list, tot_indices_list)
-        return self.As
-
-    def forward(self, Ez: Tensor, eps_r: Tensor, source: Tensor):
-        ## Ez: [bs, n_wl, h, w] complex tensor
-        ## eps_r: [bs, h, w] real tensor
-        ## source: [bs, n_wl, h, w] complex tensor, source in sim.solve(source), not b, b = 1j * omega * source
-
-        # step 1: make A
-        self.make_A(eps_r, self.wl_list)
-
-        # step 2: calculate loss
-        entries, indices = self.As
-        lhs = []
-        if self.omegas.device != source.device:
-            self.omegas = self.omegas.to(source.device)
-        b = (
-            (source * (1j * self.omegas[None, :, None, None])).flatten(0, 1).flatten(1)
-        )  # [bs*n_wl, h*w]
-        for i in range(Ez.shape[0]):
-            for j in range(Ez.shape[1]):
-                ez = Ez[i, j].flatten()
-                omega = 2 * np.pi * constants.C_0 / (self.wl_list[j] * 1e-6)
-
-                b = source[i, j].flatten() * (1j * omega)
-                A_by_e = spmm(
-                    indices[i, j],
-                    entries[i, j],
-                    m=ez.shape[0],
-                    n=ez.shape[0],
-                    matrix=ez[:, None],
-                )[:, 0]
-                lhs.append(A_by_e)
-        lhs = torch.stack(lhs, 0)  # [bs*n_wl, h*w]
-
-        loss = torch.nn.functional.mse_loss(lhs, b, reduction=self.reduction)
-
-        return loss
