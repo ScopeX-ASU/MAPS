@@ -1031,6 +1031,7 @@ class SharpnessScheduler:
         self.final_sharp = final_sharp
         self.total_steps = total_steps
         self.current_step = 0
+        self.current_sharp = initial_sharp
 
     def step(self):
         self.current_step += 1

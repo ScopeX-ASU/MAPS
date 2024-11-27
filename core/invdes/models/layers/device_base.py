@@ -24,15 +24,17 @@ from pyutils.config import Config
 from pyutils.general import ensure_dir
 
 from .utils import (
-    Si_eps,
-    SiO2_eps,
-    Slice,
     apply_regions_gpu,
     get_eigenmode_coefficients,
     get_flux,
     get_grid,
     insert_mode,
     plot_eps_field,
+)
+from core.utils import (
+    Si_eps,
+    SiO2_eps,
+    Slice,
 )
 
 __all__ = ["BaseDevice", "N_Ports"]

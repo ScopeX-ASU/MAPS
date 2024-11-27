@@ -19,7 +19,6 @@ from torch_sparse import spmm
 from core.utils import get_flux, get_eigenmode_coefficients
 
 __all__ = [
-    "material_fn_dict",
     "Slice",
     "get_grid",
     "apply_regions_gpu",

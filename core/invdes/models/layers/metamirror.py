@@ -10,7 +10,7 @@ from typing import Tuple
 import torch
 from .device_base import N_Ports
 
-from .utils import material_fn_dict
+from core.utils import material_fn_dict
 from pyutils.general import logger
 __all__ = ["MetaMirror"]
 

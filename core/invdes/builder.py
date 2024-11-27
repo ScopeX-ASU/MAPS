@@ -3,7 +3,6 @@ from typing import Tuple
 
 import torch
 import torch.nn as nn
-from pyutils.config import configs
 from pyutils.lr_scheduler.warmup_cosine_restart import CosineAnnealingWarmupRestarts
 from pyutils.optimizer.sam import SAM
 from pyutils.typing import Optimizer, Scheduler
@@ -12,23 +11,11 @@ from torch.types import Device
 from core.models import *
 from core.datasets import *
 
-from .utils import (
-    DAdaptAdam,
-    DistanceLoss,
-    NL2NormLoss,
-    NormalizedMSELoss,
+from core.utils import (
     TemperatureScheduler,
     SharpnessScheduler,
     ResolutionScheduler,
-    maskedNL2NormLoss,
-    maskedNMSELoss,
-    fab_penalty_ls_curve,
-    fab_penalty_ls_gap,
-    AspectRatioLoss,
-    MaxwellResidualLoss,
-    GradientLoss,
-    SParamLoss,
-    ComplexL1Loss,
+    DAdaptAdam,
 )
 
 __all__ = [
@@ -40,14 +27,15 @@ __all__ = [
     "make_criterion",
 ]
 
-def make_device(device: Device):
-    device_to_opt = eval(configs.model.device_type)(
-        sim_cfg=configs.model.sim_cfg,
+def make_device(device: Device, config=None):
+    device_to_opt = eval(config.device_type)(
+        sim_cfg=config.sim_cfg,
         device=device,
     )
     return device_to_opt
 
 def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
+    raise NotImplementedError
     if (
         "repara_phc_1x1" in configs.model.name.lower()
         and "eff_vg" not in configs.model.name.lower()
@@ -123,122 +111,51 @@ def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
             device=kwargs["optDevice"],
             sim_cfg=configs.model.sim_cfg,
         ).to(device)
-    elif "simplecnn" in configs.model.name.lower():
-        model = eval(configs.model.name)().to(device)
-    elif "neurolight" in configs.model.name.lower():
-        model = eval(configs.model.name)(
-            in_channels=configs.model.in_channels,
-            out_channels=configs.model.out_channels,
-            dim=configs.model.dim,
-            kernel_list=configs.model.kernel_list,
-            kernel_size_list=configs.model.kernel_size_list,
-            padding_list=configs.model.padding_list,
-            hidden_list=configs.model.hidden_list,
-            mode_list=configs.model.mode_list,
-            act_func=configs.model.act_func,
-            domain_size=configs.model.domain_size,
-            grid_step=configs.model.grid_step,
-            dropout_rate=configs.model.dropout_rate,
-            drop_path_rate=configs.model.drop_path_rate,
-            aux_head=configs.model.aux_head,
-            aux_head_idx=configs.model.aux_head_idx,
-            device=device,
-            conv_stem=configs.model.conv_stem,
-            aug_path=configs.model.aug_path,
-            ffn=configs.model.ffn,
-            ffn_dwconv=configs.model.ffn_dwconv,
-            **kwargs,
-        ).to(device)
-    elif "fno3d" in configs.model.name.lower():
-        model = eval(configs.model.name)(
-            train_field=configs.model.train_field,
-            in_channels=configs.model.in_channels,
-            out_channels=configs.model.out_channels,
-            kernel_list=configs.model.kernel_list,
-            kernel_size_list=configs.model.kernel_size_list,
-            padding_list=configs.model.padding_list,
-            hidden_list=configs.model.hidden_list,
-            mode_list=configs.model.mode_list,
-            act_func=configs.model.act_func,
-            dropout_rate=configs.model.dropout_rate,
-            drop_path_rate=configs.model.drop_path_rate,
-            device=device,
-            aux_head=configs.model.aux_head,
-            aux_head_idx=configs.model.aux_head_idx,
-            pos_encoding=configs.model.pos_encoding,
-            with_cp=configs.model.with_cp,
-            mode1=configs.model.mode1,
-            mode2=configs.model.mode2,
-            fourier_feature=configs.model.fourier_feature,
-            mapping_size=configs.model.mapping_size,
-            err_correction=configs.model.err_correction,
-            fno_block_only=configs.model.fno_block_only,
-        ).to(device)
-    elif "ffno2d" in configs.model.name.lower():
-        model = eval(configs.model.name)(
-            in_channels=configs.model.in_channels,
-            out_channels=configs.model.out_channels,
-            dim=configs.model.dim,
-            kernel_list=configs.model.kernel_list,
-            kernel_size_list=configs.model.kernel_size_list,
-            padding_list=configs.model.padding_list,
-            hidden_list=configs.model.hidden_list,
-            mode_list=configs.model.mode_list,
-            act_func=configs.model.act_func,
-            dropout_rate=configs.model.dropout_rate,
-            drop_path_rate=configs.model.drop_path_rate,
-            device=device,
-            aux_head=configs.model.aux_head,
-            aux_head_idx=configs.model.aux_head_idx,
-            with_cp=False,
-            conv_stem=configs.model.conv_stem,
-            aug_path=configs.model.aug_path,
-            ffn=configs.model.ffn,
-            ffn_dwconv=configs.model.ffn_dwconv,
-        ).to(device)
     else:
         raise NotImplementedError(f"Not supported model name: {configs.model.name}")
     return model
 
 
-def make_optimizer(params, name: str = None, configs=None) -> Optimizer:
+def make_optimizer(params, total_config=None) -> Optimizer:
+    config = total_config.optimizer
+    name = config.name.lower()
     if name == "sgd":
         optimizer = torch.optim.SGD(
             params,
-            lr=configs.lr,
-            momentum=configs.momentum,
-            weight_decay=configs.weight_decay,
+            lr=config.lr,
+            momentum=config.momentum,
+            weight_decay=config.weight_decay,
             nesterov=True,
         )
     elif name == "adam":
         optimizer = torch.optim.Adam(
             params,
-            lr=configs.lr,
-            weight_decay=configs.weight_decay,
-            betas=getattr(configs, "betas", (0.9, 0.999)),
+            lr=config.lr,
+            weight_decay=config.weight_decay,
+            betas=getattr(config, "betas", (0.9, 0.999)),
         )
     elif name == "adamw":
         optimizer = torch.optim.AdamW(
             params,
-            lr=configs.lr,
-            weight_decay=configs.weight_decay,
+            lr=config.lr,
+            weight_decay=config.weight_decay,
         )
     elif name == "dadaptadam":
         optimizer = DAdaptAdam(
             params,
-            lr=configs.lr,
-            betas=getattr(configs, "betas", (0.9, 0.999)),
-            weight_decay=configs.weight_decay,
+            lr=config.lr,
+            betas=getattr(config, "betas", (0.9, 0.999)),
+            weight_decay=config.weight_decay,
         )
     elif name == "sam_sgd":
         base_optimizer = torch.optim.SGD
         optimizer = SAM(
             params,
             base_optimizer=base_optimizer,
-            rho=getattr(configs, "rho", 0.5),
-            adaptive=getattr(configs, "adaptive", True),
-            lr=configs.lr,
-            weight_decay=configs.weight_decay,
+            rho=getattr(config, "rho", 0.5),
+            adaptive=getattr(config, "adaptive", True),
+            lr=config.lr,
+            weight_decay=config.weight_decay,
             momenum=0.9,
         )
     elif name == "sam_adam":
@@ -246,16 +163,16 @@ def make_optimizer(params, name: str = None, configs=None) -> Optimizer:
         optimizer = SAM(
             params,
             base_optimizer=base_optimizer,
-            rho=getattr(configs, "rho", 0.001),
-            adaptive=getattr(configs, "adaptive", True),
-            lr=configs.lr,
-            weight_decay=configs.weight_decay,
+            rho=getattr(config, "rho", 0.001),
+            adaptive=getattr(config, "adaptive", True),
+            lr=config.lr,
+            weight_decay=config.weight_decay,
         )
     elif name == "lbfgs":
         optimizer = torch.optim.LBFGS(
             params,
-            lr=configs.lr,  # for now, only the lr is tunable, others arguments just use the default value
-            line_search_fn=configs.line_search_fn,
+            lr=config.lr,  # for now, only the lr is tunable, others arguments just use the default value
+            line_search_fn=config.line_search_fn,
         )
     else:
         raise NotImplementedError(name)
@@ -264,28 +181,29 @@ def make_optimizer(params, name: str = None, configs=None) -> Optimizer:
 
 
 def make_scheduler(
-    optimizer: Optimizer, name: str = None, config_file: dict = {}
+    optimizer: Optimizer, scheduler_type, config_total: dict = {}
 ) -> Scheduler:
-    name = (name or config_file.name).lower()
+    config = config_total
+    name = getattr(config, scheduler_type).name.lower()
     if (
         name == "temperature"
     ):  # this temperature scheduler is a cosine annealing scheduler
         scheduler = TemperatureScheduler(
-            initial_T=float(configs.temp_scheduler.lr),
-            final_T=float(configs.temp_scheduler.lr_min),
-            total_steps=int(configs.run.n_epochs),
+            initial_T=float(config.temp_scheduler.lr),
+            final_T=float(config.temp_scheduler.lr_min),
+            total_steps=int(config.run.n_epochs),
         )
     elif name == "resolution":
         scheduler = ResolutionScheduler(
-            initial_res=int(configs.res_scheduler.init_res),
-            final_res=int(configs.res_scheduler.final_res),
-            total_steps=int(configs.run.n_epochs),
+            initial_res=int(config.res_scheduler.init_res),
+            final_res=int(config.res_scheduler.final_res),
+            total_steps=int(config.run.n_epochs),
         )
     elif name == "sharpness":
         scheduler = SharpnessScheduler(
-            initial_sharp=float(configs.sharp_scheduler.init_sharp),
-            final_sharp=float(configs.sharp_scheduler.final_sharp),
-            total_steps=int(configs.run.n_epochs),
+            initial_sharp=float(config.sharp_scheduler.init_sharp),
+            final_sharp=float(config.sharp_scheduler.final_sharp),
+            total_steps=int(config.run.n_epochs),
         )
     elif name == "constant":
         scheduler = torch.optim.lr_scheduler.LambdaLR(
@@ -294,20 +212,20 @@ def make_scheduler(
     elif name == "cosine":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
-            T_max=int(configs.run.n_epochs),
-            eta_min=float(configs.lr_scheduler.lr_min),
+            T_max=int(config.run.n_epochs),
+            eta_min=float(config.lr_scheduler.lr_min),
         )
     elif name == "cosine_warmup":
         scheduler = CosineAnnealingWarmupRestarts(
             optimizer,
-            first_cycle_steps=configs.run.n_epochs,
-            max_lr=configs.optimizer.lr,
-            min_lr=configs.scheduler.lr_min,
-            warmup_steps=int(configs.scheduler.warmup_steps),
+            first_cycle_steps=config.run.n_epochs,
+            max_lr=config.optimizer.lr,
+            min_lr=config.scheduler.lr_min,
+            warmup_steps=int(config.scheduler.warmup_steps),
         )
     elif name == "exp":
         scheduler = torch.optim.lr_scheduler.ExponentialLR(
-            optimizer, gamma=configs.scheduler.lr_gamma
+            optimizer, gamma=config.scheduler.lr_gamma
         )
     else:
         raise NotImplementedError(name)
@@ -316,6 +234,7 @@ def make_scheduler(
 
 
 def make_criterion(name: str = None, cfg=None) -> nn.Module:
+    return NotImplementedError
     name = (name or configs.criterion.name).lower()
     cfg = cfg or configs.criterion
     if name == "mse":
