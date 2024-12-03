@@ -74,7 +74,7 @@ class InvDesign:
         self.default_cfgs.update(cfgs)
         self._cfg = self.default_cfgs
 
-    def train(
+    def optimize(
         self, 
     ):
         for i in range(self._cfg.run.n_epochs):
@@ -141,4 +141,4 @@ if __name__ == "__main__":
     invdesign = InvDesign(
         devOptimization=opt
     )
-    invdesign.train()
+    invdesign.optimize()

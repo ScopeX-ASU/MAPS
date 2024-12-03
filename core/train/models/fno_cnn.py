@@ -82,54 +82,6 @@ class SpatialInterpolater(nn.Module):
         x = F.interpolate(x, scale_factor=(2, 2), mode="bilinear", align_corners=False)
         return x
 
-
-# class ConvBlock(nn.Module):
-#     def __init__(
-#         self,
-#         in_channels: int,
-#         out_channels: int,
-#         kernel_size: int = 1,
-#         padding: int = 0,
-#         stride: int = 1,
-#         ln: bool = True,
-#         act_func: Optional[str] = "GELU",
-#         device: Device = torch.device("cuda:0"),
-#         groups: int = 1,
-#         skip: bool = False,
-#     ) -> None:
-#         super().__init__()
-#         self.conv = nn.Conv2d(
-#             in_channels,
-#             out_channels,
-#             kernel_size,
-#             padding=padding,
-#             padding_mode="replicate",
-#             stride=stride,
-#             groups=groups,
-#         )
-#         if ln:
-#             self.ln = LayerNorm(out_channels, eps=1e-6, data_format="channels_first")
-#         else:
-#             self.ln = None
-#         if act_func is None:
-#             self.act_func = None
-#         elif act_func.lower() == "swish":
-#             self.act_func = Swish()
-#         else:
-#             self.act_func = getattr(nn, act_func)()
-#         self.skip = skip
-
-#     def forward(self, x: Tensor) -> Tensor:
-#         y = x = self.conv(x)
-#         if self.ln is not None:
-#             x = self.ln(x)
-#         if self.act_func is not None:
-#             x = self.act_func(x)
-#         if self.skip:
-#             x = x + y
-#         return x
-
-
 class LayerNorm(nn.Module):
     r"""LayerNorm implementation used in ConvNeXt
     LayerNorm that supports two data formats: channels_last (default) or channels_first.

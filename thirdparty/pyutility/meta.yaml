@@ -1,0 +1,67 @@
+{% set version = "0.0.3" %}
+{% set build = 0 %}
+
+package:
+  name: torchonn-pyutils
+  version: {{ version }}
+
+source:
+  path: .
+  git_rev: master
+  git_url: https://github.com/JeremieMelo/pyutility.git
+
+build:
+  number: {{ build }}
+  noarch: python
+  script: ./setup.sh
+  # skip: True  # [win]
+  # noarch: python
+  # script_env:
+  #   - PYTHON=
+
+test:
+  imports:
+    - pyutils
+
+requirements:
+  # host:
+  #   - python # this enables conda to use PYTHON environment variable
+  build:
+    - python=3.10
+    - pip >=21.0.1
+    - setuptools >=61.0.0
+    # - numpy >=1.19.2
+    - torchvision
+    - tqdm
+    - pytorch >=2.0.0
+    - matplotlib
+    - tensorflow-gpu >=2.5.0
+    - svglib 
+    - scipy >=1.5.4
+    - scikit-learn >=0.24.1
+    - pyyaml
+    - multimethod
+    - scienceplots
+  run:
+    - python >=3.10
+    - numpy >=1.19.2
+    - torchvision
+    - tqdm
+    - pytorch >=2.0.0
+    - matplotlib
+    - tensorflow-gpu >=2.5.0
+    - svglib 
+    - scipy >=1.5.4
+    - scikit-learn >=0.24.1
+    - pyyaml
+    - multimethod
+    - scienceplots
+
+about:
+  home: https://github.com/JeremieMelo/pyutility
+  license: MIT
+  summary: A library for python/pytorch NN training
+
+extra:
+  recipe-maintainers:
+    - jiaqigu
