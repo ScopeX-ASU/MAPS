@@ -160,7 +160,6 @@ class FNO2d(ModelBase):
         mode2=20,
         fourier_feature="none",
         mapping_size=2,
-        err_correction=False,
         fno_block_only=False,
         conv_cfg=dict(type="Conv2d", padding_mode="replicate"),
         layer_cfg=dict(type="Conv2d", padding_mode="replicate"),
@@ -445,151 +444,11 @@ class FNO2d(ModelBase):
             act_cfg=None,
             device=self.device,
         )
-        if self.err_correction:
-            stem_err_corr = nn.Sequential(
-                ConvBlock(
-                    self.in_channels + 2,
-                    self.hidden_list[0] // 4,
-                    kernel_size=3,
-                    padding=1,
-                    stride=1,
-                    act_cfg=self.act_cfg,
-                    device=self.device,
-                ),
-                ConvBlock(
-                    self.hidden_list[0] // 4,
-                    self.hidden_list[0] // 2,
-                    kernel_size=5,
-                    padding=2,
-                    stride=2,
-                    act_cfg=None,
-                    device=self.device,
-                ),
-            )
-            stages_err_corr = nn.ModuleList()
-            hidden_dim = self.hidden_list[-1] // 2
-            stages_err_corr.append(
-                FNO(
-                    n_modes=(self.mode1 * 2, self.mode2 * 2),
-                    in_channels=hidden_dim,
-                    out_channels=hidden_dim,
-                    lifting_channels=hidden_dim,
-                    projection_channels=hidden_dim,
-                    hidden_channels=hidden_dim,
-                    n_layers=2,
-                    norm=None,
-                    factorization=None,
-                )
-                if not self.fno_block_only
-                else FNOBlocks(
-                    in_channels=hidden_dim,
-                    out_channels=hidden_dim,
-                    n_modes=(self.mode1 * 2, self.mode2 * 2),
-                    output_scaling_factor=None,
-                    use_mlp=False,
-                    mlp_dropout=0,
-                    mlp_expansion=0.5,
-                    non_linearity=F.gelu,
-                    stabilizer=None,
-                    norm=None,
-                    preactivation=False,
-                    fno_skip="linear",
-                    mlp_skip="soft-gating",
-                    max_n_modes=None,
-                    fno_block_precision="full",
-                    rank=1.0,
-                    fft_norm="forward",
-                    fixed_rank_modes=False,
-                    implementation="factorized",
-                    separable=False,
-                    factorization=None,
-                    decomposition_kwargs=dict(),
-                    joint_factorization=False,
-                    SpectralConv=SpectralConv,
-                    n_layers=2,
-                )
-            )
-            hidden_dim = self.hidden_list[-1]
-            stages_err_corr.append(
-                nn.Sequential(
-                    ConvBlock(
-                        hidden_dim // 2,
-                        hidden_dim,
-                        kernel_size=2,
-                        padding=1,
-                        stride=2,
-                        act_cfg=None,
-                        device=self.device,
-                    ),
-                    FNO(
-                        n_modes=(self.mode1, self.mode2),
-                        in_channels=hidden_dim,
-                        out_channels=hidden_dim,
-                        lifting_channels=hidden_dim,
-                        projection_channels=hidden_dim,
-                        hidden_channels=hidden_dim,
-                        n_layers=2,
-                        norm=None,
-                        factorization=None,
-                    )
-                    if not self.fno_block_only
-                    else FNOBlocks(
-                        in_channels=hidden_dim,
-                        out_channels=hidden_dim,
-                        n_modes=(self.mode1, self.mode2),
-                        output_scaling_factor=None,
-                        use_mlp=False,
-                        mlp_dropout=0,
-                        mlp_expansion=0.5,
-                        non_linearity=F.gelu,
-                        stabilizer=None,
-                        norm=None,
-                        preactivation=False,
-                        fno_skip="linear",
-                        mlp_skip="soft-gating",
-                        max_n_modes=None,
-                        fno_block_precision="full",
-                        rank=1.0,
-                        fft_norm="forward",
-                        fixed_rank_modes=False,
-                        implementation="factorized",
-                        separable=False,
-                        factorization=None,
-                        decomposition_kwargs=dict(),
-                        joint_factorization=False,
-                        SpectralConv=SpectralConv,
-                        n_layers=2,
-                    ),
-                )
-            )
 
-            head_err_corr = ConvBlock(
-                hidden_dim // 2 + hidden_dim,
-                self.out_channels,
-                kernel_size=1,
-                padding=0,
-                norm_cfg=self.norm_cfg,
-                act_cfg=None,
-                device=self.device,
-            )
-
-        if not self.err_correction:
-            return stem, stages, head
-        else:
-            return stem, stages, head, stem_err_corr, stages_err_corr, head_err_corr
+        return stem, stages, head
 
     def build_layers(self):
-        if self.err_correction:
-            (
-                self.stem,
-                self.stages,
-                self.head,
-                self.stem_err_corr,
-                self.stages_err_corr,
-                self.head_err_corr,
-            ) = self._build_layers()
-        else:
-            self.stem, self.stages, self.head = self._build_layers()
+        self.stem, self.stages, self.head = self._build_layers()
         
         if getattr(self, "has_eps_branch", "False"):
             self._build_eps_layers()
@@ -701,21 +560,6 @@ class FNO2d(ModelBase):
             phase_shifts = (k * distances).unsqueeze(1)
             mode = mode * torch.exp(1j * phase_shifts)
 
-            # plt.figure()
-            # plt.imshow(torch.abs(src[0]).detach().cpu().numpy())
-            # plt.savefig("./figs/src.png")
-            # plt.close()
-
-            # plt.figure()
-            # plt.imshow(mode[0].real.detach().cpu().numpy())
-            # plt.savefig("./figs/incident_field_real.png")
-            # plt.close()
-
-            # plt.figure()
-            # plt.imshow(mode[0].imag.detach().cpu().numpy())
-            # plt.savefig("./figs/incident_field_imag.png")
-            # plt.close()
-            # quit()
         elif self.train_field == "adj":
             # in the adjoint mode, there are two sources and we need to calculate the incident field for each of them
             # then added together as the incident field
@@ -754,21 +598,6 @@ class FNO2d(ModelBase):
             mode_y = mode_y * torch.exp(1j * phase_shifts)
 
             mode = mode_x + mode_y  # superposition of two sources
-            # plt.figure()
-            # plt.imshow(torch.abs(src[0]).detach().cpu().numpy())
-            # plt.savefig("./figs/src.png")
-            # plt.close()
-
-            # plt.figure()
-            # plt.imshow(mode[0].real.detach().cpu().numpy())
-            # plt.savefig("./figs/incident_field_real.png")
-            # plt.close()
-
-            # plt.figure()
-            # plt.imshow(mode[0].imag.detach().cpu().numpy())
-            # plt.savefig("./figs/incident_field_imag.png")
-            # plt.close()
-            # quit()
         return mode
 
     def forward(
@@ -776,12 +605,6 @@ class FNO2d(ModelBase):
         eps,
         src,
     ):
-        # src and adj_src are all complex numbers tensor
-        # if self.train_field == "fwd":
-        #     src = src["source_profile-wl-1.55-port-in_port_1-mode-1"]
-        # elif self.train_field == "adj":
-        #     src = src["adj_src-wl-1.55-port-in_port_1-mode-1"]
-        # the incident field should calculate in model using src
         incident_field_fwd = self.incident_field_from_src(src)
         incident_field_fwd = torch.view_as_real(incident_field_fwd).permute(
             0, 3, 1, 2
@@ -792,21 +615,6 @@ class FNO2d(ModelBase):
         src = torch.view_as_real(src).permute(0, 3, 1, 2)  # B, 2, H, W
         src = src / (torch.abs(src).amax(dim=(1, 2, 3), keepdim=True) + 1e-6)
 
-        # plt.figure()
-        # plt.imshow(incident_field[0][0].detach().cpu().numpy())
-        # plt.savefig("./figs/incident_field_real.png")
-        # plt.close()
-
-        # plt.figure()
-        # plt.imshow(incident_field[0][1].detach().cpu().numpy())
-        # plt.savefig("./figs/incident_field_imag.png")
-        # plt.close()
-        # quit()
-
-        # eps_copy = eps.clone()
-        # eps = (
-        #     1 / eps
-        # )  # take the inverse of the permittivity to easy the training difficulty
         eps = eps / 12.11
         eps = eps.unsqueeze(1)  # B, 1, H, W
 
@@ -864,22 +672,4 @@ class FNO2d(ModelBase):
         if len(forward_Ez_field.shape) == 3:
             forward_Ez_field = forward_Ez_field.unsqueeze(0)
 
-        if self.err_correction:
-            forward_Ez_field_copy = forward_Ez_field.detach()
-            x = torch.cat((eps, incident_field_fwd, forward_Ez_field_copy), dim=1)
-            x = self.stem_err_corr(x)
-            x1 = self.stages_err_corr[0](x)
-            x2 = self.stages_err_corr[1](x1)
-            x1 = resize_to_targt_size(x1, (src.shape[-2], src.shape[-1]))
-            if len(x1.shape) == 3:
-                x1 = x1.unsqueeze(0)
-            x2 = resize_to_targt_size(x2, (src.shape[-2], src.shape[-1]))
-            if len(x2.shape) == 3:
-                x2 = x2.unsqueeze(0)
-            x = torch.cat((x1, x2), dim=1)
-            forward_Ez_field_err_corr = self.head_err_corr(x) + forward_Ez_field_copy
-        # ------------------------------------------
-        if self.err_correction:
-            return forward_Ez_field, forward_Ez_field_err_corr
-        else:
-            return forward_Ez_field
+        return forward_Ez_field
