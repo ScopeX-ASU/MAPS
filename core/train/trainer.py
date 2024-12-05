@@ -24,6 +24,7 @@ import random
 from core.utils import plot_fields, cal_total_field_adj_src_from_fwd_field
 from thirdparty.ceviche.ceviche.constants import *
 from core.train.models.utils import from_Ez_to_Hx_Hy
+import math
 
 class PredTrainer(object):
     """Base class for a trainer used to train a field predictor."""
@@ -65,11 +66,12 @@ class PredTrainer(object):
         main_criterion_meter, aux_criterion_meter = self.build_meters(task)
 
         data_counter = 0
-        total_data = len(data_loader)
+        total_data = len(data_loader.dataset)  # Total samples
+        num_batches = len(data_loader)  # Number of batches
 
         iterator = iter(data_loader)
         local_step = 0
-        while local_step < total_data:
+        while local_step < num_batches:
             try:
                 data = next(iterator)
             except StopIteration:
@@ -94,10 +96,11 @@ class PredTrainer(object):
                 self.grad_scaler.unscale_(self.optimizer)
                 self.grad_scaler.step(self.optimizer)
                 self.grad_scaler.update()
+                self.optimizer.zero_grad()
 
             data_counter += data[list(data.keys())[0]].shape[0]
 
-            if local_step % int(configs.run.log_interval) == 0:
+            if local_step % int(configs.run.log_interval) == 0 and task == "train":
                 log = "{} Epoch: {} [{:7d}/{:7d} ({:3.0f}%)] Loss: {:.4e} Regression Loss: {:.4e}".format(
                     task,
                     epoch,
@@ -213,9 +216,9 @@ class PredTrainer(object):
     def build_meters(self, task):
         main_criterion_meter = AverageMeter(configs.criterion.name)
         if task.lower() == "train":
-            aux_criterion_meter = {name: AverageMeter(name) for name in self.aux_criterions}
+            aux_criterion_meter = {name: AverageMeter(name) for name in self.aux_criterion}
         else:
-            aux_criterion_meter = {name: AverageMeter(name) for name in self.log_criterions}
+            aux_criterion_meter = {name: AverageMeter(name) for name in self.log_criterion}
 
         return main_criterion_meter, aux_criterion_meter
 
@@ -344,90 +347,3 @@ class PredTrainer(object):
                 ground_truth=data['fields_adj']["fields_adj-wl-1.55-port-in_port_1-mode-1"],
                 filepath=filepath + "_adj.png",
             )
-
-    # def forward(self, data):
-
-    #     model_fwd = self.models['model_fwd']
-    #     model_adj = self.models['model_adj']
-
-    #     output_fwd = model_fwd( # now only suppose that the output is the gradient of the field
-    #         data['eps_map'], 
-    #         data['src_profiles']["source_profile-wl-1.55-port-in_port_1-mode-1"],
-    #     )
-    #     if isinstance(output_fwd, tuple):
-    #         forward_Ez_field, forward_Ez_field_err_corr = output_fwd
-    #     else:
-    #         forward_Ez_field = output_fwd
-    #         forward_field_err_corr = None
-
-    #     forward_field, adjoint_source = cal_total_field_adj_src_from_fwd_field(
-    #                                     Ez=forward_Ez_field,
-    #                                     eps=data['eps_map'],
-    #                                     ht_ms=data['ht_m'],
-    #                                     et_ms=data['et_m'],
-    #                                     monitors=data['monitor_slices'],
-    #                                     pml_mask=model_fwd.pml_mask,
-    #                                     from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
-    #                                     return_adj_src=False if model_fwd.err_correction else True,
-    #                                     sim=model_fwd.sim,
-    #                                 )
-        
-    #     if adjoint_source is not None:
-    #         adjoint_source = adjoint_source.detach()
-    #     if model_fwd.err_correction:
-    #         forward_field_err_corr, adjoint_source = cal_total_field_adj_src_from_fwd_field(
-    #                                     Ez=forward_Ez_field_err_corr,
-    #                                     eps=data['eps_map'],
-    #                                     ht_ms=data['ht_m'],
-    #                                     et_ms=data['et_m'],
-    #                                     monitors=data['monitor_slices'],
-    #                                     pml_mask=model_fwd.pml_mask,
-    #                                     from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
-    #                                     return_adj_src=True,
-    #                                     sim=model_fwd.sim,
-    #                                 )
-
-    #     adjoint_source = adjoint_source*(data['field_normalizer']["field_adj_normalizer-wl-1.55-port-in_port_1-mode-1"].unsqueeze(1))
-    #     adjoint_output = model_adj(
-    #         data['eps_map'], 
-    #         adjoint_source, # bs, H, W complex
-    #     )
-    #     if isinstance(adjoint_output, tuple):
-    #         adjoint_Ez_field, adjoint_Ez_field_err_corr = adjoint_output
-    #     else:
-    #         adjoint_Ez_field = adjoint_output
-    #         adjoint_field_err_corr = None
-
-    #     adjoint_field, _ = cal_total_field_adj_src_from_fwd_field(
-    #                                     Ez=adjoint_Ez_field,
-    #                                     eps=data['eps_map'],
-    #                                     ht_ms=data['ht_m'],
-    #                                     et_ms=data['et_m'],
-    #                                     monitors=data['monitor_slices'],
-    #                                     pml_mask=model_fwd.pml_mask,
-    #                                     from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
-    #                                     return_adj_src=False,
-    #                                     sim=model_adj.sim,
-    #                                 )
-    #     if model_fwd.err_correction:
-    #         adjoint_field_err_corr, _ = cal_total_field_adj_src_from_fwd_field(
-    #                                     Ez=adjoint_Ez_field_err_corr,
-    #                                     eps=data['eps_map'],
-    #                                     ht_ms=data['ht_m'],
-    #                                     et_ms=data['et_m'],
-    #                                     monitors=data['monitor_slices'],
-    #                                     pml_mask=model_fwd.pml_mask,
-    #                                     from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
-    #                                     return_adj_src=False,
-    #                                     sim=model_adj.sim,
-    #                                 )
-            
-    #     return_dict = {
-    #         "forward_field": forward_field,
-    #         "adjoint_field": adjoint_field,
-    #         "forward_field_err_corr": forward_field_err_corr,
-    #         "adjoint_field_err_corr": adjoint_field_err_corr,
-    #         "adjoint_source": adjoint_source,
-    #     }
-
-    #     return return_dict

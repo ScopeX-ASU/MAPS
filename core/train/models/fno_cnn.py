@@ -143,7 +143,7 @@ class FNO2d(ModelBase):
 
     default_cfgs = dict(
         train_field="fwd",
-        in_channels=1,
+        in_channels=3,
         out_channels=2,
         kernel_list=[16, 16, 16, 16],
         kernel_size_list=[1, 1, 1, 1],
@@ -234,7 +234,7 @@ class FNO2d(ModelBase):
             self.LFF = LearnableFourierFeatures(
                 pos_dim=2, f_dim=2 * self.mapping_size, h_dim=64, d_dim=64
             )
-            self.in_channels = self.in_channels + self.mapping_size
+            self.in_channels = self.in_channels + 64
         elif self.fourier_feature == "none":
             pass
         else:
@@ -440,7 +440,8 @@ class FNO2d(ModelBase):
             self.out_channels,
             kernel_size=1,
             padding=0,
-            norm_cfg=self.norm_cfg,
+            # norm_cfg=self.norm_cfg,
+            norm_cfg=None,
             act_cfg=None,
             device=self.device,
         )
@@ -612,7 +613,7 @@ class FNO2d(ModelBase):
         incident_field_fwd = incident_field_fwd / (
             torch.abs(incident_field_fwd).amax(dim=(1, 2, 3), keepdim=True) + 1e-6
         )
-        src = torch.view_as_real(src).permute(0, 3, 1, 2)  # B, 2, H, W
+        src = torch.view_as_real(src.resolve_conj()).permute(0, 3, 1, 2)  # B, 2, H, W
         src = src / (torch.abs(src).amax(dim=(1, 2, 3), keepdim=True) + 1e-6)
 
         eps = eps / 12.11
