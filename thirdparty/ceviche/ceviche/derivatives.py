@@ -179,6 +179,8 @@ def create_S_matrices(omega, shape, npml, dL):
     if Sz_f is not None:
         Sz_f = Sz_f.flatten(order="F")
         Sz_b = Sz_b.flatten(order="F")
+        Sz_f = sp.spdiags(Sz_f, 0, N, N)
+        Sz_b = sp.spdiags(Sz_b, 0, N, N)
 
     # Construct the 1D total s-vecay into a diagonal matrix
     Sx_f = sp.spdiags(Sx_f, 0, N, N)
