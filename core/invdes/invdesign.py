@@ -3,13 +3,19 @@ this is a wrapper for the invdes module
 we call use InvDesign.optimize() to optimize the inventory design
 basically, this should be like the training logic like in train_NN.py
 '''
+import sys
+import os
+
+# Add the project root to sys.path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "/home/pingchua/projects/MAPS"))
+sys.path.insert(0, project_root)
 import torch
 from pyutils.typing import Criterion, Optimizer, Scheduler
-from . import builder
+from core.invdes import builder
 from pyutils.config import Config
-from .models.base_optimization import DefaultSimulationConfig
-from .models.layers import Bending
-from .models import (
+from core.invdes.models.base_optimization import DefaultSimulationConfig
+from core.invdes.models.layers import Bending
+from core.invdes.models import (
     BendingOptimization,
 )
 from core.utils import set_torch_deterministic
