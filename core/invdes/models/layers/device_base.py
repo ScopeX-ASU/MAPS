@@ -494,9 +494,9 @@ class N_Ports(BaseDevice):
                 dl, 
                 eps, 
                 NPML, 
-                neural_solver=self.sim_cfg["neural_solver"],
-                numerical_solver=self.sim_cfg["numerical_solver"],
-                use_autodiff=self.sim_cfg["use_autodiff"],
+                neural_solver=self.sim_cfg.get("neural_solver", None),
+                numerical_solver=self.sim_cfg.get("numerical_solver", "solve_direct"),
+                use_autodiff=self.sim_cfg.get("use_autodiff", False),
             )
         else:
             raise ValueError(f"Solver {solver} not supported")
