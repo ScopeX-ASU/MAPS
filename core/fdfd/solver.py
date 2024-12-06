@@ -20,12 +20,16 @@ from .utils import torch_sparse_to_scipy_sparse
 from pyutils.general import logger
 import scipy.sparse.linalg as spl
 import time
+
 try:
     from pyMKL import pardisoSolver
+
     HAS_MKL = True
     # print('using MKL for direct solvers')
 except:
     HAS_MKL = False
+
+
 def coo_torch2cupy(A):
     A = A.data.coalesce()
     Avals_cp = cp.asarray(A.values())
@@ -33,19 +37,20 @@ def coo_torch2cupy(A):
     # return cp.sparse.csr_matrix((Avals_cp, Aidx_cp), shape=A.shape)
     return cp.sparse.coo_matrix((Avals_cp, Aidx_cp))
 
+
 # ---------------------- Sparse Solver Copied from Ceviche ----------------------
-DEFAULT_ITERATIVE_METHOD = 'bicg'
+DEFAULT_ITERATIVE_METHOD = "bicg"
 
 # dict of iterative methods supported (name: function)
 ITERATIVE_METHODS = {
-    'bicg': spl.bicg,
-    'bicgstab': spl.bicgstab,
-    'cg': spl.cg,
-    'cgs': spl.cgs,
-    'gmres': spl.gmres,
-    'lgmres': spl.lgmres,
-    'qmr': spl.qmr,
-    'gcrotmk': spl.gcrotmk
+    "bicg": spl.bicg,
+    "bicgstab": spl.bicgstab,
+    "cg": spl.cg,
+    "cgs": spl.cgs,
+    "gmres": spl.gmres,
+    "lgmres": spl.lgmres,
+    "qmr": spl.qmr,
+    "gcrotmk": spl.gcrotmk,
 }
 
 # convergence tolerance for iterative solvers.
@@ -53,22 +58,29 @@ ATOL = 1e-8
 
 """ ========================== SOLVER FUNCTIONS ========================== """
 
-def _solve_iterative_with_nn_init(A, b, neural_solver, eps, iterative_method=DEFAULT_ITERATIVE_METHOD, **kwargs):
-    """ Iterative solver with neural network initial guess """
-    
+
+def _solve_iterative_with_nn_init(
+    A, b, neural_solver, eps, iterative_method=DEFAULT_ITERATIVE_METHOD, **kwargs
+):
+    """Iterative solver with neural network initial guess"""
+
     # 1. Get initial guess from neural network
     if neural_solver is not None:
         # Convert b to a PyTorch tensor if it's a numpy array
         if isinstance(b, np.ndarray):
-            b_torch = torch.from_numpy(b).to(eps.device).to(torch.complex64)  # Ensure the tensor is on the same device as eps
+            b_torch = (
+                torch.from_numpy(b).to(eps.device).to(torch.complex64)
+            )  # Ensure the tensor is on the same device as eps
         else:
             b_torch = b
         x0 = neural_solver(
             eps.unsqueeze(0),  # Add batch dimension
-            b_torch.reshape(eps.shape).unsqueeze(0),  # Reshape source term to match eps shape
+            b_torch.reshape(eps.shape).unsqueeze(
+                0
+            ),  # Reshape source term to match eps shape
         )
         if isinstance(x0, tuple):
-            x0 = x0[-1] # Get final prediction if model has error correction
+            x0 = x0[-1]  # Get final prediction if model has error correction
         # Reshape NN output to match linear system size
         x0 = x0.permute(0, 2, 3, 1).contiguous()
         x0 = torch.view_as_complex(x0)
@@ -76,35 +88,50 @@ def _solve_iterative_with_nn_init(A, b, neural_solver, eps, iterative_method=DEF
         x0 = x0.detach().cpu().numpy()
         print("now we have the initial guess", flush=True)
     else:
-        x0 = None # Use default zero initial guess
-        
+        x0 = None  # Use default zero initial guess
+
     # 2. Get the solver function
     try:
         solver_fn = ITERATIVE_METHODS[iterative_method]
     except:
-        raise ValueError(f"iterative method {iterative_method} not found.\n supported methods are:\n {ITERATIVE_METHODS}")
+        raise ValueError(
+            f"iterative method {iterative_method} not found.\n supported methods are:\n {ITERATIVE_METHODS}"
+        )
 
     # 3. Call iterative solver with neural network initial guess
     x, info = solver_fn(A, b, x0=x0, atol=ATOL, **kwargs)
-    
+
     # 4. Check convergence
     if info != 0:
         logger.warning(f"Iterative solver did not converge! Info: {info}")
-    
+
     return x
 
+
 # Update solve_linear to include the new solver option
-def solve_linear(A, b, solver_type="direct", neural_solver=None, eps=None, iterative_method=None, symmetry=False, **kwargs):
-    """ Master function to call different solvers """
-    
+def solve_linear(
+    A,
+    b,
+    solver_type="direct",
+    neural_solver=None,
+    eps=None,
+    iterative_method=None,
+    symmetry=False,
+    **kwargs,
+):
+    """Master function to call different solvers"""
+
     if solver_type == "direct":
         return _solve_direct(A, b, symmetry=symmetry)
     elif solver_type == "iterative":
         return _solve_iterative(A, b, iterative_method=iterative_method, **kwargs)
     elif solver_type == "iterative_nn":
-        return _solve_iterative_with_nn_init(A, b, neural_solver, eps, iterative_method=iterative_method, **kwargs)
+        return _solve_iterative_with_nn_init(
+            A, b, neural_solver, eps, iterative_method=iterative_method, **kwargs
+        )
     else:
         raise ValueError(f"Solver type {solver_type} not supported")
+
 
 # def solve_linear(A, b, iterative_method=False, symmetry=False, **kwargs):
 #     """ Master function to call the others """
@@ -119,8 +146,9 @@ def solve_linear(A, b, solver_type="direct", neural_solver=None, eps=None, itera
 #         # otherwise, use a direct solver
 #         return _solve_direct(A, b, symmetry=symmetry)
 
+
 def _solve_direct(A, b, symmetry=False):
-    """ Direct solver """
+    """Direct solver"""
 
     if HAS_MKL:
         # prefered method using MKL. Much faster (on Mac at least)
@@ -137,22 +165,29 @@ def _solve_direct(A, b, symmetry=False):
         # scipy solver.
         return spl.spsolve(A, b)
 
+
 def _solve_iterative(A, b, iterative_method=DEFAULT_ITERATIVE_METHOD, **kwargs):
-    """ Iterative solver """
+    """Iterative solver"""
 
     # error checking on the method name (https://docs.scipy.org/doc/scipy/reference/sparse.linalg.html)
     try:
         solver_fn = ITERATIVE_METHODS[iterative_method]
     except:
-        raise ValueError("iterative method {} not found.\n supported methods are:\n {}".format(iterative_method, ITERATIVE_METHODS))
+        raise ValueError(
+            "iterative method {} not found.\n supported methods are:\n {}".format(
+                iterative_method, ITERATIVE_METHODS
+            )
+        )
 
     # call the solver using scipy's API
     x, info = solver_fn(A, b, atol=ATOL, **kwargs)
     return x
 
+
 def _solve_cuda(A, b, **kwargs):
-    """ You could put some other solver here if you're feeling adventurous """
+    """You could put some other solver here if you're feeling adventurous"""
     raise NotImplementedError("Please implement something fast and exciting here!")
+
 
 # ---------------------- Sparse Solver Copied from Ceviche ----------------------
 
@@ -244,13 +279,15 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         ### eps_diag: diagonal of A, e.g., -omega**2 * epr_0 * eps_r
         ctx.use_autodiff = use_autodiff
         if use_autodiff:
-            assert numerical_solver == "none", f"numerical_solver {numerical_solver} is not supported when use_autodiff is True"
+            assert (
+                numerical_solver == "none"
+            ), f"numerical_solver {numerical_solver} is not supported when use_autodiff is True"
         Jz = b / (1j * omega)
         if isinstance(Jz, np.ndarray) and neural_solver is not None:
             if neural_solver["fwd_solver"] is not None:
                 Jz = torch.from_numpy(Jz).to(neural_solver["fwd_solver"].device)
             else:
-                pass # we will not use Jz
+                pass  # we will not use Jz
         if Jz.dtype == torch.complex128:
             Jz = Jz.to(torch.complex64)
         if isinstance(b, Tensor):
@@ -264,7 +301,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         if Pl is not None and Pr is not None:
             A = Pl @ A @ Pr
             b = Pl @ b
-            symmetry = False # pardiso symmetric mode is wrong
+            symmetry = False  # pardiso symmetric mode is wrong
         else:
             symmetry = False
         # with TimerCtx() as t:
@@ -281,21 +318,22 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                 Jz.unsqueeze(0),
             )
             if isinstance(x, tuple):
-                x = x[-1] # that the model have error correction
+                x = x[-1]  # that the model have error correction
             x = x.permute(0, 2, 3, 1).contiguous()
             x = torch.view_as_complex(x)
             x = x.flatten()
         elif numerical_solver == "solve_iterative":
             fwd_solver = neural_solver["fwd_solver"]
             x = solve_linear(
-                A, b, 
+                A,
+                b,
                 solver_type="iterative_nn",
                 neural_solver=fwd_solver,
                 eps=eps,
-                iterative_method="lgmres", # or other methods
+                iterative_method="lgmres",  # or other methods
                 symmetry=symmetry,
                 maxiter=1000,
-                rtol=1e-2
+                rtol=1e-2,
             )
         else:
             raise ValueError(f"numerical_solver {numerical_solver} not supported")
@@ -311,7 +349,9 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         ctx.mode = mode
         ctx.Pl = Pl
         ctx.Pr = Pr
-        ctx.adj_solver = neural_solver["adj_solver"] if neural_solver is not None else None
+        ctx.adj_solver = (
+            neural_solver["adj_solver"] if neural_solver is not None else None
+        )
         ctx.numerical_solver = numerical_solver
         ctx.eps = eps
         return x
@@ -331,7 +371,9 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             port_name = ctx.port_name
             mode = ctx.mode
             Pl, Pr = ctx.Pl, ctx.Pr
-            A_t = make_sparse(entries_a, indices_a, (eps_diag.shape[0], eps_diag.shape[0]))
+            A_t = make_sparse(
+                entries_a, indices_a, (eps_diag.shape[0], eps_diag.shape[0])
+            )
             grad = grad.cpu().numpy().astype(np.complex128)
             adj_src = grad.conj()
             if (port_name != "Norm" and mode != "Norm") or (
@@ -344,9 +386,9 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             # print_stat(adj_src, "my adjoint source")
             # print(f"my adjoint A_t", A_t)
             if Pl is not None and Pr is not None:
-                A_t = (Pr.T @ A_t @ Pl.T)
+                A_t = Pr.T @ A_t @ Pl.T
                 adj_src = Pr.T @ adj_src
-                symmetry = False # pardiso symmetric mode is wrong
+                symmetry = False  # pardiso symmetric mode is wrong
             else:
                 symmetry = False
             if numerical_solver == "solve_direct":
@@ -355,10 +397,12 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                 assert adj_solver is not None
                 # print("we are now using pure neural solver for adjoint", flush=True)
                 if isinstance(adj_src, np.ndarray):
-                    adj_src = torch.from_numpy(adj_src).to(torch.complex64).to(eps.device)
+                    adj_src = (
+                        torch.from_numpy(adj_src).to(torch.complex64).to(eps.device)
+                    )
                 adj_src = adj_src.reshape(eps.shape)
                 adj = adj_solver(
-                    eps.unsqueeze(0), 
+                    eps.unsqueeze(0),
                     adj_src.unsqueeze(0),
                 )
                 if isinstance(adj, tuple):
@@ -368,14 +412,15 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                 adj = adj.flatten()
             elif numerical_solver == "solve_iterative":
                 adj = solve_linear(
-                    A_t, adj_src,
+                    A_t,
+                    adj_src,
                     solver_type="iterative_nn",
                     neural_solver=adj_solver,
                     eps=eps,
                     iterative_method="lgmres",  # or other methods
                     symmetry=symmetry,
                     maxiter=1000,
-                    rtol=1e-2
+                    rtol=1e-2,
                 )
             else:
                 raise ValueError(f"numerical_solver {numerical_solver} not supported")
@@ -399,8 +444,9 @@ class SparseSolveTorchFunction(torch.autograd.Function):
 
 
 class SparseSolveTorch(torch.nn.Module):
-    def __init__(self, neural_solver, numerical_solver, use_autodiff=False):
+    def __init__(self, shape, neural_solver, numerical_solver, use_autodiff=False):
         super(SparseSolveTorch, self).__init__()
+        self.shape = shape
         self.adj_src = {}  # now the adj_src is a dictionary in which the key is (port_name, mode) with same wl, different wl have different simulation objects
         self.neural_solver = neural_solver
         self.numerical_solver = numerical_solver
