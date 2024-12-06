@@ -17,7 +17,6 @@ from pyutils.general import print_stat, TimerCtx
 from torch import Tensor
 from thirdparty.ceviche.ceviche.constants import *
 from .utils import torch_sparse_to_scipy_sparse
-from math import sqrt
 from pyutils.general import logger
 import scipy.sparse.linalg as spl
 import time
@@ -237,6 +236,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         Pr,
         neural_solver,
         numerical_solver,
+        shape,
         use_autodiff=False,
     ):
         ### entries_a: values of the sparse matrix A
@@ -258,7 +258,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         A = make_sparse(entries_a, indices_a, (eps_diag.shape[0], eps_diag.shape[0]))
         # epsilon = torch.tensor([EPSILON_0,], dtype=eps_diag.dtype, device=eps_diag.device)
         # omega = torch.tensor([omega,], dtype=eps_diag.dtype, device=eps_diag.device)
-        eps = (eps_diag / (-EPSILON_0 * omega**2)).reshape(int(sqrt(eps_diag.shape[0])), -1) # here there is an assumption that the eps_vec is a square matrix
+        eps = (eps_diag / (-EPSILON_0 * omega**2)).reshape(shape) # here there is an assumption that the eps_vec is a square matrix
         Jz = Jz.reshape(eps.shape)
 
         if Pl is not None and Pr is not None:
@@ -319,7 +319,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad):
         if ctx.use_autodiff:
-            return None, None, None, None, None, None, None, None, None, None, None, None, None
+            return None, None, None, None, None, None, None, None, None, None, None, None, None, None
         else:
             adj_solver = ctx.adj_solver
             numerical_solver = ctx.numerical_solver
@@ -395,7 +395,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             # else:
 
             grad_b = None
-            return None, None, grad_epsilon, None, grad_b, None, None, None, None, None, None, None, None
+            return None, None, grad_epsilon, None, grad_b, None, None, None, None, None, None, None, None, None
 
 
 class SparseSolveTorch(torch.nn.Module):
@@ -405,6 +405,9 @@ class SparseSolveTorch(torch.nn.Module):
         self.neural_solver = neural_solver
         self.numerical_solver = numerical_solver
         self.use_autodiff = use_autodiff
+
+    def set_shape(self, shape):
+        self.shape = shape
 
     def forward(
         self,
@@ -419,7 +422,7 @@ class SparseSolveTorch(torch.nn.Module):
         Pr=None,
     ):
         x = SparseSolveTorchFunction.apply(
-            entries_a, indices_a, eps_diag, omega, b, self, port_name, mode, Pl, Pr, self.neural_solver, self.numerical_solver, self.use_autodiff
+            entries_a, indices_a, eps_diag, omega, b, self, port_name, mode, Pl, Pr, self.neural_solver, self.numerical_solver, self.shape, self.use_autodiff
         )
         return x
 

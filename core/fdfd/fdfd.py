@@ -297,15 +297,27 @@ class fdfd_ez(fdfd_ez_ceviche):
         # if run this function, will enable symmetric precondictioner
         if sym_precond:
             self._make_precond()
+    
+    def _save_shape(self, grid):
+        """ 
+        Sores the shape and size of `grid` array to the FDFD object 
+        override the parent class method
+        """
+        self.shape = grid.shape
+        self.Nx, self.Ny = self.shape
+        self.N = self.Nx * self.Ny
+        if hasattr(self.solver, "set_shape"):
+            self.solver.set_shape(self.shape)
 
     def switch_solver(self, neural_solver=None, numerical_solver="solve_direct", use_autodiff=False):
+        assert hasattr(self, "shape"), "shape must be set before switching solver"
         self.neural_solver = neural_solver
         self.numerical_solver = numerical_solver
         self.solver = SparseSolveTorch(
             neural_solver=self.neural_solver, 
             numerical_solver=self.numerical_solver,
             use_autodiff=use_autodiff,
-        )
+        ).set_shape(self.shape)
 
     def _make_precond(self):
         Nx, Ny = self.shape

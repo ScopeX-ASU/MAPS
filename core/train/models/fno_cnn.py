@@ -81,7 +81,7 @@ class SpatialInterpolater(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         x = F.interpolate(x, scale_factor=(2, 2), mode="bilinear", align_corners=False)
         return x
-
+@MODELS.register_module()
 class LayerNorm(nn.Module):
     r"""LayerNorm implementation used in ConvNeXt
     LayerNorm that supports two data formats: channels_last (default) or channels_first.
@@ -164,7 +164,8 @@ class FNO2d(ModelBase):
         conv_cfg=dict(type="Conv2d", padding_mode="replicate"),
         layer_cfg=dict(type="Conv2d", padding_mode="replicate"),
         linear_cfg=dict(type="Linear"),
-        norm_cfg=dict(type="MyLayerNorm", data_format="channels_first"),
+        # norm_cfg=dict(type="MyLayerNorm", data_format="channels_first"),
+        norm_cfg=dict(type="LayerNorm", data_format="channels_first"),
         act_cfg=dict(type="GELU"),
         device=torch.device("cuda"),
     )
@@ -250,6 +251,7 @@ class FNO2d(ModelBase):
         self.padding = 9  # pad the domain if input is non-periodic
 
     def _build_eps_layers(self):
+        print("build eps branch called!!", flush=True)
         self.eps_stem = nn.Sequential(
             ConvBlock(
                 1,
@@ -450,8 +452,8 @@ class FNO2d(ModelBase):
 
     def build_layers(self):
         self.stem, self.stages, self.head = self._build_layers()
-        
-        if getattr(self, "has_eps_branch", "False"):
+        # print("if nn have eps branch", hasattr(self, "has_eps_branch"), flush=True)
+        if getattr(self, "has_eps_branch", False):
             self._build_eps_layers()
 
         if self.aux_head:

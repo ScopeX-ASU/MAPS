@@ -45,7 +45,7 @@ def task_launcher(args):
             f"--run.batch_size={bs}",
             f"--run.use_cuda={1}",
             f"--run.gpu_id={gpu_id}",
-            f"--run.log_interval={40}",
+            f"--run.log_interval={80}",
             f"--run.random_state={59}",
             f"--run.fp16={False}",
             f"--run.include_adjoint_NN={include_adjoint_NN}",
@@ -69,7 +69,7 @@ def task_launcher(args):
             f"--scheduler.lr_min={lr*5e-3}",
 
             f"--plot.train={True}",
-            f"--plot.valid={True}",
+            f"--plot.val={True}",
             f"--plot.test={True}",
             f"--plot.interval=1",
             f"--plot.dir_name={model}_{exp_name}_id-{id}_des-{description}",
@@ -82,12 +82,12 @@ def task_launcher(args):
             f"--optimizer.ALM_constraint_tol={constraint_tol}",
 
             # f"--model.name={alg}",
-            # f"--model.hidden_list={[128]}",
-            # f"--model.mode1={mode1}",
-            # f"--model.mode2={mode2}",
+            f"--model_fwd.hidden_list={[128]}",
+            f"--model_fwd.mode1={mode1}",
+            f"--model_fwd.mode2={mode2}",
             # f"--model.fourier_feature={fourier_feature}",
-            # f"--model.mapping_size={64}",
-            # f"--model.fno_block_only={fno_block_only}",
+            f"--model_fwd.mapping_size={64}",
+            f"--model_fwd.fno_block_only={fno_block_only}",
             # f"--model.train_field={train_field}",
             # f"--model.act_func=SINREN",
             f"--model_fwd.fourier_feature={fourier_feature}",
@@ -106,7 +106,9 @@ if __name__ == '__main__':
     ensure_dir(root)
     # mlflow.set_experiment(configs.run.experiment)  # set experiments first
     tasks = [
-        [0.0, "bending", "FNO2d", "fwd", False, "learnable", True, 33, 66, 26, "test_SBC", 0, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 1, 0, 1, 2, 1e-4, "none", "none", 8],
+        # [0.0, "bending", "FNO2d", "fwd", False, "learnable", True, 33, 66, 27, "fwd_pred_w_S_loss", 0, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 1, 0.0, 1, 2, 1e-4, "none", "none", 8],
+        # [0.0, "bending", "FNO2d", "fwd", False, "learnable", True, 33, 66, 29, "fwd_pred_wo_S_loss", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
+        [0.0, "bending", "FNO2d", "fwd", False, "learnable", True, 33, 66, 30, "test_fwd_time", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
     ]   
 
     with Pool(8) as p:

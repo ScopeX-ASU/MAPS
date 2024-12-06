@@ -1,30 +1,35 @@
-'''
+"""
 this is a wrapper for the invdes module
 we call use InvDesign.optimize() to optimize the inventory design
 basically, this should be like the training logic like in train_NN.py
-'''
-import sys
+"""
+
 import os
+import sys
 
 # Add the project root to sys.path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "/home/pingchua/projects/MAPS"))
+project_root = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "/home/pingchua/projects/MAPS")
+)
 sys.path.insert(0, project_root)
 import torch
-from pyutils.typing import Criterion, Optimizer, Scheduler
-from core.invdes import builder
 from pyutils.config import Config
-from core.invdes.models.base_optimization import DefaultSimulationConfig
-from core.invdes.models.layers import Bending
+
+from core.invdes import builder
 from core.invdes.models import (
     BendingOptimization,
 )
+from core.invdes.models.base_optimization import DefaultSimulationConfig
+from core.invdes.models.layers import Bending
 from core.utils import set_torch_deterministic
 
+
 class InvDesign:
-    '''
-    default_cfgs is to set the default configurations 
+    """
+    default_cfgs is to set the default configurations
     including optimizer, lr_scheduler, sharp_scheduler etc.
-    '''
+    """
+
     default_cfgs = Config(
         devOptimization=None,
         optimizer=Config(
@@ -61,15 +66,14 @@ class InvDesign:
         )
         self.lr_scheduler = builder.make_scheduler(
             optimizer=self.optimizer,
-            scheduler_type='lr_scheduler',
+            scheduler_type="lr_scheduler",
             config_total=self._cfg,
         )
         self.sharp_scheduler = builder.make_scheduler(
             optimizer=self.optimizer,
-            scheduler_type='sharp_scheduler',
+            scheduler_type="sharp_scheduler",
             config_total=self._cfg,
         )
-
 
     def load_cfgs(self, **cfgs):
         # Start with default configurations
@@ -81,8 +85,21 @@ class InvDesign:
         self._cfg = self.default_cfgs
 
     def optimize(
-        self, 
+        self,
+        plot=False,
+        plot_filename=None,
+        objs=[],
+        field_keys=[],
+        in_port_names=[],
+        exclude_port_names=[],
     ):
+        if plot:
+            assert plot_filename is not None, "plot_filename must be provided"
+            assert len(objs) > 0, "objs must be provided"
+            assert len(field_keys) > 0, "field_keys must be provided"
+            assert len(in_port_names) > 0, "in_port_names must be provided"
+            if len(exclude_port_names) == 0:
+                exclude_port_names = [[]] * len(objs)
         for i in range(self._cfg.run.n_epochs):
             # train the model
             self.optimizer.zero_grad()
@@ -101,13 +118,31 @@ class InvDesign:
             self.lr_scheduler.step()
             # update the sharpness
             self.sharp_scheduler.step()
+            
+            if plot:
+                if plot_filename.endswith(".png"):
+                    plot_filename = plot_filename[:-4]
+                for j in range(len(objs)):
+                    self.devOptimization.plot(
+                        eps_map=self.devOptimization._eps_map,
+                        obj=results["breakdown"][objs[j]]["value"],
+                        plot_filename=plot_filename + f"_{i}" + f"_{objs[j]}.png",
+                        # field_key=("in_port_1", 1.55, 1),
+                        field_key=field_keys[j],
+                        field_component="Ez",
+                        # in_port_name="in_port_1",
+                        in_port_name=in_port_names[j],
+                        # exclude_port_names=["refl_port_2"],
+                        exclude_port_names=exclude_port_names[j],
+                    )
+
 
 if __name__ == "__main__":
     gpu_id = 1
     torch.cuda.set_device(gpu_id)
     operation_device = torch.device("cuda:" + str(gpu_id))
     torch.backends.cudnn.benchmark = True
-    set_torch_deterministic(int(41+500))
+    set_torch_deterministic(int(41 + 500))
     # first we need to instantiate the a optimization object
     sim_cfg = DefaultSimulationConfig()
 
@@ -131,20 +166,20 @@ if __name__ == "__main__":
     )
 
     device = Bending(
-        sim_cfg=sim_cfg, 
+        sim_cfg=sim_cfg,
         bending_region_size=bending_region_size,
         port_len=(port_len, port_len),
-        port_width=(
-            input_port_width,
-            output_port_width
-        ), 
-        device=operation_device
+        port_width=(input_port_width, output_port_width),
+        device=operation_device,
     )
 
     hr_device = device.copy(resolution=310)
     print(device)
-    opt = BendingOptimization(device=device, hr_device=hr_device, sim_cfg=sim_cfg, operation_device=operation_device).to(operation_device)
-    invdesign = InvDesign(
-        devOptimization=opt
-    )
+    opt = BendingOptimization(
+        device=device,
+        hr_device=hr_device,
+        sim_cfg=sim_cfg,
+        operation_device=operation_device,
+    ).to(operation_device)
+    invdesign = InvDesign(devOptimization=opt)
     invdesign.optimize()

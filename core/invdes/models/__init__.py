@@ -9,4 +9,5 @@ from .metamirror import MetaMirrorOptimization
 from .metacoupler import MetaCouplerOptimization
 from .bending import BendingOptimization
 from .isolator import IsolatorOptimization
+from .mdm import MDMOptimization
 from .layers import *

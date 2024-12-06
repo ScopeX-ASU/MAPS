@@ -101,10 +101,10 @@ class ConvBlock(nn.Module):
         padding: Union[int, _size] = 0,
         dilation: Union[int, _size] = 1,
         groups: int = 1,
-        bias: bool = False,
+        bias: bool = True,
         conv_cfg: dict = dict(type="Conv2d", padding_mode="replicate"),
         norm_cfg: dict | None = dict(
-            type="MyLayerNorm", eps=1e-6, data_format="channels_first"
+            type="LayerNorm", eps=1e-6, data_format="channels_first"
         ),
         act_cfg: dict | None = dict(type="GELU"),
         skip: bool = False,

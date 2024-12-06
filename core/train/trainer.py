@@ -117,7 +117,10 @@ class PredTrainer(object):
             local_step += 1
 
         self.scheduler.step()
-        lg.info(f"\n{task} Epoch {epoch} Regression Loss: {main_criterion_meter.avg:.4e}")
+        error_summary = f"\n{task} Epoch {epoch} Regression Loss: {main_criterion_meter.avg:.4e}"
+        for name, aux_meter in aux_criterion_meter.items():
+            error_summary += f" {name}: {aux_meter.avg:.4e}"
+        lg.info(error_summary)
 
         if task.lower() == "val":
             self.lossv.append(loss.data.item())
@@ -129,7 +132,68 @@ class PredTrainer(object):
             os.makedirs(dir_path, exist_ok=True)
             filepath = os.path.join(dir_path, f"epoch_{epoch}_{task}")
             self.result_visualization(data, output, filepath)
-    
+
+    def single_batch_check(self):
+        task = "train"
+        data_loader = self.data_loaders[task]
+        self.set_model_status(task)
+        main_criterion_meter, aux_criterion_meter = self.build_meters(task)
+
+        num_batches = 100000
+
+        iterator = iter(data_loader)
+        data = next(iterator)
+        data = self.data_preprocess(data)
+        local_step = 0
+        while local_step < num_batches:
+
+            if task.lower() != "train":
+                with torch.no_grad():
+                    output = self.forward(data)
+            else:
+                output = self.forward(data)
+            loss = self.loss_calculation(
+                output, 
+                data, 
+                task, 
+                main_criterion_meter, 
+                aux_criterion_meter,
+            )
+            if task.lower() == "train":
+                self.grad_scaler.scale(loss).backward()
+                self.grad_scaler.unscale_(self.optimizer)
+                self.grad_scaler.step(self.optimizer)
+                self.grad_scaler.update()
+                self.optimizer.zero_grad()
+
+
+            if local_step % int(configs.run.log_interval) == 0 and task == "train":
+                log = "{} Epoch: {} Loss: {:.4e} Regression Loss: {:.4e}".format(
+                    "single_batch_check",
+                    0,
+                    loss.data.item(),
+                    main_criterion_meter.avg,
+                )
+                for name, aux_meter in aux_criterion_meter.items():
+                    log += f" {name}: {aux_meter.val:.4e}"
+                lg.info(log)
+
+            local_step += 1
+
+        self.scheduler.step()
+        lg.info(f"\nsingle batch check Epoch 0 Regression Loss: {main_criterion_meter.avg:.4e}")
+
+        # if task.lower() == "val":
+        #     self.lossv.append(loss.data.item())
+
+        # if getattr(configs.plot, task, False) and (
+        #     epoch % configs.plot.interval == 0 or epoch == configs.run.n_epochs - 1
+        # ):
+        #     dir_path = os.path.join(configs.plot.root, configs.plot.dir_name)
+        #     os.makedirs(dir_path, exist_ok=True)
+        #     filepath = os.path.join(dir_path, f"epoch_{epoch}_{task}")
+        #     self.result_visualization(data, output, filepath)
+
     def save_model(self, epoch, checkpoint_path):
         self.saver.save_model(
             self.model,
@@ -222,8 +286,6 @@ class PredTrainer(object):
 
         return main_criterion_meter, aux_criterion_meter
 
-    def single_batch_check(self):
-        pass
 
     def forward(self, data):
         output = self.model(data)

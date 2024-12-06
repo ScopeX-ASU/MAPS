@@ -88,19 +88,19 @@ class DefaultOptimizationConfig(Config):
                     "plot_root": "./figs/default",
                 },
                 obj_cfgs=dict(
-                    fwd_trans=dict(
-                        weight=1,
-                        #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="out_port_1",
-                        #### objective is evaluated at all points by sweeping the wavelength and modes
-                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
-                        out_modes=(
-                            1,
-                        ),  # can evaluate on multiple output modes and get average transmission
-                        type="eigenmode",
-                        direction="y+",
-                    ),
+                    # fwd_trans=dict(
+                    #     weight=1,
+                    #     #### objective is evaluated at this port
+                    #     in_port_name="in_port_1",
+                    #     out_port_name="out_port_1",
+                    #     #### objective is evaluated at all points by sweeping the wavelength and modes
+                    #     in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                    #     out_modes=(
+                    #         1,
+                    #     ),  # can evaluate on multiple output modes and get average transmission
+                    #     type="eigenmode",
+                    #     direction="y+",
+                    # ), # should not be taken as default, the obj functions should be all customized
                     #### objective fusion function can be customized here in obj_cfgs
                     #### the default fusion function is _sum_objectives
                     #### customized fusion function should take breakdown as input

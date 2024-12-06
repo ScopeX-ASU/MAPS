@@ -218,8 +218,8 @@ class N_Ports(BaseDevice):
             self.cell_size = sim_cfg["cell_size"]
         ### here we use ceil to match meep
         self.Nx, self.Ny, self.Nz = [
-            int(math.ceil(i / self.grid_step)) for i in self.cell_size
-        ]
+            int(round(i * self.resolution)) for i in self.cell_size
+        ] # change math.ceil to round since sometimes we will have like 10.200000000000001 in the cell_size which will cause a size mismatch
         self.NPML = [int(round(i * self.resolution)) for i in sim_cfg["PML"]]
         self.xs, self.ys = get_grid((self.Nx, self.Ny), self.grid_step)
         self.epsilon_map = self.get_epsilon_map(
