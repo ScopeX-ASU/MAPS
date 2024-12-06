@@ -988,7 +988,7 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
         Ez = Ez[:, -2:, :, :]
         Ez = Ez.permute(0, 2, 3, 1).contiguous()
         Ez = torch.view_as_complex(Ez) # convert Ez to the required complex format
-        source = torch.view_as_real(source).permute(0, 3, 1, 2) # B, 2, H, W
+        source = torch.view_as_real(source.resolve_conj()).permute(0, 3, 1, 2) # B, 2, H, W
         source = source.permute(0, 2, 3, 1).contiguous()
         source = torch.view_as_complex(source) # convert source to the required complex format
         

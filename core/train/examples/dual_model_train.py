@@ -1,3 +1,10 @@
+import sys
+import os
+
+# Add the project root to sys.path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "/home/pingchua/projects/MAPS"))
+sys.path.insert(0, project_root)
+
 from thirdparty.pyutility.pyutils.config import train_configs as configs
 import torch
 import torch.nn as nn
@@ -29,17 +36,18 @@ class dual_predictor(nn.Module):
         eps = data["eps_map"]
         src = data['src_profiles']["source_profile-wl-1.55-port-in_port_1-mode-1"]
         x_fwd = self.model_fwd(eps, src)
-        forward_field, adjoint_source = cal_total_field_adj_src_from_fwd_field(
-                                        Ez=x_fwd,
-                                        eps=eps,
-                                        ht_ms=data['ht_m'],
-                                        et_ms=data['et_m'],
-                                        monitors=data['monitor_slices'],
-                                        pml_mask=self.model_fwd.pml_mask,
-                                        from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
-                                        return_adj_src=True,
-                                        sim=self.model_fwd.sim,
-                                    )
+        with torch.enable_grad():
+            forward_field, adjoint_source = cal_total_field_adj_src_from_fwd_field(
+                                            Ez=x_fwd,
+                                            eps=eps,
+                                            ht_ms=data['ht_m'],
+                                            et_ms=data['et_m'],
+                                            monitors=data['monitor_slices'],
+                                            pml_mask=self.model_fwd.pml_mask,
+                                            from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
+                                            return_adj_src=True,
+                                            sim=self.model_fwd.sim,
+                                        )
         adjoint_source = adjoint_source.detach()
         x_adj = self.model_adj(eps, adjoint_source)
         adjoint_field, _ = cal_total_field_adj_src_from_fwd_field(
@@ -56,6 +64,7 @@ class dual_predictor(nn.Module):
         return {
             "forward_field": forward_field,
             "adjoint_field": adjoint_field,
+            "adjoint_source": adjoint_source,
         }
 
 def main():
@@ -73,12 +82,17 @@ def main():
     else:
         device = torch.device("cpu")
         torch.backends.cudnn.benchmark = False
-
+    print("this is the config: \n", configs, flush=True)
     if int(configs.run.deterministic) == True:
         set_torch_deterministic(int(configs.run.random_state))
-
-    model_fwd = builder.build_model(configs.model_fwd)
-    model_adj = builder.build_model(configs.model_adj)
+    model_fwd = builder.make_model(
+        device=device,
+        **configs.model_fwd
+    )
+    model_adj = builder.make_model(
+        device=device,
+        **configs.model_adj
+    )
 
     model = dual_predictor(model_fwd, model_adj)
 
@@ -104,7 +118,7 @@ def main():
         for name, config in configs.log_criterion.items()
         if float(config.weight) > 0
     }
-    print("criterions to be printed: ", log_criterions, flush=True)
+    print("log criterions used to monitor performance: ", log_criterions, flush=True)
 
     saver = BestKModelSaver(
         k=int(configs.checkpoint.save_best_model_k),

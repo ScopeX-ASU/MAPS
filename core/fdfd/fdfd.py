@@ -285,6 +285,7 @@ class fdfd_ez(fdfd_ez_ceviche):
                 self.neural_solver is None
             ), "neural_solver is useless if numerical_solver is solve_direct"
         self.solver = SparseSolveTorch(
+            shape=eps_r.shape,
             neural_solver=self.neural_solver, 
             numerical_solver=self.numerical_solver,
             use_autodiff=use_autodiff,
@@ -302,6 +303,7 @@ class fdfd_ez(fdfd_ez_ceviche):
         self.neural_solver = neural_solver
         self.numerical_solver = numerical_solver
         self.solver = SparseSolveTorch(
+            shape=self.shape,
             neural_solver=self.neural_solver, 
             numerical_solver=self.numerical_solver,
             use_autodiff=use_autodiff,

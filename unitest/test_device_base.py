@@ -20,17 +20,20 @@ from ceviche import fdfd_ez as ceviche_fdfd_ez
 from ceviche.constants import *
 from pyutils.general import print_stat
 from pyutils.general import TimerCtx
-from core.models import (
+from core.invdes.models import (
     IsolatorOptimization,
     MetaCouplerOptimization,
     MetaMirrorOptimization,
 )
-from core.models.base_optimization import BaseOptimization, DefaultSimulationConfig
-from core.models.fdfd.fdfd import fdfd_ez
-from core.models.fdfd.utils import torch_sparse_to_scipy_sparse
-from core.models.layers import Isolator, MetaCoupler, MetaMirror
-from core.models.layers.device_base import N_Ports, Si_eps
-from core.models.layers.utils import plot_eps_field
+from core.invdes.models.base_optimization import (
+    BaseOptimization,
+    DefaultSimulationConfig,
+)
+from core.fdfd.fdfd import fdfd_ez
+from core.fdfd.utils import torch_sparse_to_scipy_sparse
+from core.invdes.models.layers import Isolator, MetaCoupler, MetaMirror
+from core.invdes.models.layers.device_base import N_Ports, Si_eps
+from core.invdes.models.layers.utils import plot_eps_field
 from core.utils import set_torch_deterministic
 from torch_sparse import spspmm
 
@@ -171,17 +174,24 @@ def test_metacoupler_opt():
         dict(
             # solver="ceviche",
             solver="ceviche_torch",
+            numerical_solver="solve_direct",
+            use_autodiff=False,
+            neural_solver=None,
             border_width=[0, 0, 6, 6],
-            resolution=50,
+            resolution=20,
             plot_root="./figs/metacoupler_subpixel",
             # plot_root="./figs/metacoupler_periodic",
         )
     )
 
     device = MetaCoupler(sim_cfg=sim_cfg, device="cuda:0")
-    hr_device = device.copy(resolution=310)
+    hr_device = device.copy(resolution=100)
     print(device)
-    opt = MetaCouplerOptimization(device=device, hr_device=hr_device, sim_cfg=sim_cfg,)
+    opt = MetaCouplerOptimization(
+        device=device,
+        hr_device=hr_device,
+        sim_cfg=sim_cfg,
+    )
     print(opt)
 
     optimizer = torch.optim.Adam(opt.parameters(), lr=0.02)
@@ -294,7 +304,6 @@ def test_isolator_opt():
         print()
         (-results["obj"]).backward()
 
-
         # print_stat(list(opt.parameters())[0].grad, f"solver={sim_cfg['solver']}, step {step}: grad: ")
         # print(list(opt.parameters())[0].grad)
         optimizer.step()
@@ -351,10 +360,10 @@ def test_fdtd_ez_torch():
     # c_sim = ceviche_fdfd_ez(omega, dl, device.epsilon_map[:2,:2], npml=[1,1])
     # c_hx, c_hy, c_ez = c_sim.solve(source.cpu().numpy()[:2,:2])
 
-    sim = fdfd_ez(omega, dl, eps_r, npml=[1,1])
+    sim = fdfd_ez(omega, dl, eps_r, npml=[1, 1])
     hx, hy, ez = sim.solve(source)
 
-    c_sim = ceviche_fdfd_ez(omega, dl, device.epsilon_map, npml=[1,1])
+    c_sim = ceviche_fdfd_ez(omega, dl, device.epsilon_map, npml=[1, 1])
     c_hx, c_hy, c_ez = c_sim.solve(source.cpu().numpy())
     print(ez)
     print(c_ez)
