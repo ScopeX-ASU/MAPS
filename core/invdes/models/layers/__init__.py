@@ -16,3 +16,4 @@ from .bending import *
 from .etchmmi import *
 from .mdm import *
 from .wdm import *
+from .tdm import *

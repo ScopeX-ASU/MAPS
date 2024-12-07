@@ -16,7 +16,8 @@ from scipy.ndimage import zoom
 from torch import Tensor
 from torch.types import Device
 from torch_sparse import spmm
-from core.utils import get_flux, get_eigenmode_coefficients
+from core.utils import get_flux, get_eigenmode_coefficients, Si_eps, SiO2_eps
+import math
 
 __all__ = [
     "Slice",
@@ -41,6 +42,18 @@ __all__ = [
 
 Slice = collections.namedtuple("Slice", "x y")
 
+def get_temp_related_eps(eps, temp, wl):
+    # no matter what the eps is, this will work
+    # but here is an assumption that it can only handle the Si and Air
+    # and we also treat the air as it is independent of the temperature
+    eps_max = eps.max()
+    eps_min = eps.min()
+    eps = (eps - eps_min) / (eps_max - eps_min)
+    std_eps = Si_eps(wl)
+    n_si = math.sqrt(std_eps) + (temp - 300) * 1.8e-4
+    eps = eps*(n_si**2/std_eps)
+    eps = eps * (eps_max - eps_min) + eps_min
+    return eps
 
 def get_grid(shape, dl):
     # dl in um
@@ -800,6 +813,7 @@ class ObjectiveFunc(object):
             out_modes = cfg["out_modes"]
             direction = cfg["direction"]
             target_wls = cfg["wl"]
+            target_temps = cfg["temp"]
 
             if type == "eigenmode":
 
@@ -812,6 +826,7 @@ class ObjectiveFunc(object):
                     direction=direction,
                     name=name,
                     target_wls=target_wls,
+                    target_temps=target_temps,
                 ):
                     s_list = []
                     ## for each wavelength, we evaluate the objective
@@ -820,61 +835,62 @@ class ObjectiveFunc(object):
                         if wl not in target_wls:
                             continue
                         for out_mode in out_modes:
-                            src, ht_m, et_m, norm_p = self.port_profiles[out_port_name][
-                                (wl, out_mode)
-                            ]
-                            norm_power = self.port_profiles[in_port_name][
-                                (wl, in_mode)
-                            ][3]
-                            monitor_slice = self.port_slices[out_port_name]
-                            field = fields[(in_port_name, wl, in_mode)]
-                            hx, hy, ez = (
-                                field["Hx"],
-                                field["Hy"],
-                                field["Ez"],
-                            )  # fetch fields
-                            if isinstance(ht_m, Tensor) and ht_m.device != ez.device:
-                                ht_m = ht_m.to(ez.device)
-                                et_m = et_m.to(ez.device)
-                                self.port_profiles[out_port_name][(wl, out_mode)] = [
-                                    src.to(ez.device),
+                            for temp in target_temps:
+                                src, ht_m, et_m, norm_p = self.port_profiles[out_port_name][
+                                    (wl, out_mode, temp)
+                                ]
+                                norm_power = self.port_profiles[in_port_name][
+                                    (wl, in_mode, temp)
+                                ][3]
+                                monitor_slice = self.port_slices[out_port_name]
+                                field = fields[(in_port_name, wl, in_mode, temp)]
+                                hx, hy, ez = (
+                                    field["Hx"],
+                                    field["Hy"],
+                                    field["Ez"],
+                                )  # fetch fields
+                                if isinstance(ht_m, Tensor) and ht_m.device != ez.device:
+                                    ht_m = ht_m.to(ez.device)
+                                    et_m = et_m.to(ez.device)
+                                    self.port_profiles[out_port_name][(wl, out_mode, temp)] = [
+                                        src.to(ez.device),
+                                        ht_m,
+                                        et_m,
+                                        norm_p,
+                                    ]
+                                # if isinstance(ht_m, np.ndarray) and isinstance(ez, Tensor):
+                                #     ht_m = torch.from_numpy(ht_m).to(ez.device)
+                                #     et_m = torch.from_numpy(et_m).to(ez.device)
+                                #     self.port_profiles[out_port_name][(wl, out_mode)] = [
+                                #         torch.from_numpy(src).to(ez.device),
+                                #         ht_m,
+                                #         et_m,
+                                #         norm_p,
+                                #     ]
+
+                                s_p, s_m = get_eigenmode_coefficients(
+                                    hx,
+                                    hy,
+                                    ez,
                                     ht_m,
                                     et_m,
-                                    norm_p,
-                                ]
-                            # if isinstance(ht_m, np.ndarray) and isinstance(ez, Tensor):
-                            #     ht_m = torch.from_numpy(ht_m).to(ez.device)
-                            #     et_m = torch.from_numpy(et_m).to(ez.device)
-                            #     self.port_profiles[out_port_name][(wl, out_mode)] = [
-                            #         torch.from_numpy(src).to(ez.device),
-                            #         ht_m,
-                            #         et_m,
-                            #         norm_p,
-                            #     ]
-
-                            s_p, s_m = get_eigenmode_coefficients(
-                                hx,
-                                hy,
-                                ez,
-                                ht_m,
-                                et_m,
-                                monitor_slice,
-                                grid_step=self.grid_step,
-                                direction=direction[0],
-                                autograd=True,
-                                energy=True,
-                            )
-                            if direction[1] == "+":
-                                s = s_p
-                            elif direction[1] == "-":
-                                s = s_m
-                            else:
-                                raise ValueError("Invalid direction")
-                            s_list.append(s / norm_power)
-                            self.s_params[(name, wl, out_mode)] = {
-                                "s_p": s_p,
-                                "s_m": s_m,
-                            }
+                                    monitor_slice,
+                                    grid_step=self.grid_step,
+                                    direction=direction[0],
+                                    autograd=True,
+                                    energy=True,
+                                )
+                                if direction[1] == "+":
+                                    s = s_p
+                                elif direction[1] == "-":
+                                    s = s_m
+                                else:
+                                    raise ValueError("Invalid direction")
+                                s_list.append(s / norm_power)
+                                self.s_params[(name, wl, out_mode, temp)] = {
+                                    "s_p": s_p,
+                                    "s_m": s_m,
+                                }
                     if isinstance(s_list[0], Tensor):
                         return torch.mean(torch.stack(s_list))
                     else:
@@ -889,41 +905,43 @@ class ObjectiveFunc(object):
                     direction=direction,
                     type=type,
                     name = name,
+                    target_temps=target_temps,
                 ):
                     s_list = []
                     ## for each wavelength, we evaluate the objective
-                    for wl, sim in self.sims.items():
-                        monitor_slice = self.port_slices[out_port_name]
-                        norm_power = self.port_profiles[in_port_name][(wl, in_mode)][3]
-                        field = fields[(in_port_name, wl, in_mode)]
-                        hx, hy, ez = (
-                            field["Hx"],
-                            field["Hy"],
-                            field["Ez"],
-                        )  # fetch fields
-                        s = get_flux(
-                            hx,
-                            hy,
-                            ez,
-                            monitor_slice,
-                            grid_step=self.grid_step,
-                            direction=direction[0],
-                            autograd=True,
-                        )
-                        if isinstance(s, Tensor):
-                            abs = torch.abs
-                        else:
-                            abs = npa.abs
-                        s = abs(s / norm_power)  # we only need absolute flux
-                        if type == "flux_minus_src":
-                            s = abs(
-                                s - 1
-                            )  ## if it is larger than 1, then this slice must include source, we minus the power from source
+                    for wl, _ in self.sims.items():
+                        for temp in target_temps:
+                            monitor_slice = self.port_slices[out_port_name]
+                            norm_power = self.port_profiles[in_port_name][(wl, in_mode, temp)][3]
+                            field = fields[(in_port_name, wl, in_mode, temp)]
+                            hx, hy, ez = (
+                                field["Hx"],
+                                field["Hy"],
+                                field["Ez"],
+                            )  # fetch fields
+                            s = get_flux(
+                                hx,
+                                hy,
+                                ez,
+                                monitor_slice,
+                                grid_step=self.grid_step,
+                                direction=direction[0],
+                                autograd=True,
+                            )
+                            if isinstance(s, Tensor):
+                                abs = torch.abs
+                            else:
+                                abs = npa.abs
+                            s = abs(s / norm_power)  # we only need absolute flux
+                            if type == "flux_minus_src":
+                                s = abs(
+                                    s - 1
+                                )  ## if it is larger than 1, then this slice must include source, we minus the power from source
 
-                        s_list.append(s)
-                        self.s_params[(name, wl, type)] = {
-                            "s": s,
-                        }
+                            s_list.append(s)
+                            self.s_params[(name, wl, type, temp)] = {
+                                "s": s,
+                            }
                     if isinstance(s_list[0], Tensor):
                         return torch.mean(torch.stack(s_list))
                     else:
@@ -973,18 +991,18 @@ class ObjectiveFunc(object):
         self.solutions = {}
         self.As = {}
         for port_name, port_profile in self.port_profiles.items():
-            for (wl, mode), (source, _, _, norm_power) in port_profile.items():
+            for (wl, mode, temp), (source, _, _, norm_power) in port_profile.items():
                 ## here the source is already normalized during norm_run to make sure it has target power
                 ## here is the key part that build the common "eps to field" autograd graph
                 ## later on, multiple "field to fom" autograd graph(s) will be built inside of multiple obj_fn's
-                self.sims[wl].eps_r = permittivity
+                self.sims[wl].eps_r = get_temp_related_eps(eps=permittivity, temp=temp, wl=wl)
                 Hx, Hy, Ez = self.sims[wl].solve(source, port_name=port_name, mode=mode)
-                self.solutions[(port_name, wl, mode)] = {
+                self.solutions[(port_name, wl, mode, temp)] = {
                     "Hx": Hx,
                     "Hy": Hy,
                     "Ez": Ez,
                 }
-                self.As[wl] = self.sims[wl].A
+                self.As[(wl, temp)] = self.sims[wl].A
 
         self.breakdown = {}
         for name, obj in self.Js.items():
@@ -1025,4 +1043,3 @@ class ObjectiveFunc(object):
             return objective
         elif mode == "backward":
             return self.obtain_gradient(permittivity, eps_shape)
-

@@ -11,4 +11,5 @@ from .bending import BendingOptimization
 from .isolator import IsolatorOptimization
 from .mdm import MDMOptimization
 from .wdm import WDMOptimization
+from .tdm import TDMOptimization
 from .layers import *

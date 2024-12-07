@@ -30,6 +30,7 @@ from .utils import (
     get_grid,
     insert_mode,
     plot_eps_field,
+    get_temp_related_eps,
 )
 from core.utils import (
     Si_eps,
@@ -462,6 +463,7 @@ class N_Ports(BaseDevice):
         wl_cen: float = 1.55,
         wl_width: float = 0,
         n_wl: int = 1,
+        temp: float = 300,
         grid_step=None,
         power_scales: dict = None,
         source_modes: Tuple[int] = (1,),
@@ -471,9 +473,10 @@ class N_Ports(BaseDevice):
         mode_profiles = {}
         for wl in np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl):
             for source_mode in source_modes:
+                current_eps = get_temp_related_eps(eps, wl, temp)
                 omega = 2 * np.pi * C_0 / (wl * 1e-6)
                 ht_m, et_m, _, mode = insert_mode(
-                    omega, dl, slice.x, slice.y, eps, m=source_mode
+                    omega, dl, slice.x, slice.y, current_eps, m=source_mode
                 )
                 if power_scales is not None:
                     power_scale = power_scales[(wl, source_mode)]
@@ -482,7 +485,7 @@ class N_Ports(BaseDevice):
                     mode = mode * power_scale
                 else:
                     power_scale = 1
-                mode_profiles[(wl, source_mode)] = [mode, ht_m, et_m, power_scale]
+                mode_profiles[(wl, source_mode, temp)] = [mode, ht_m, et_m, power_scale]
         return mode_profiles
 
     def create_simulation(self, omega, dl, eps, NPML, solver="ceviche"):
@@ -545,9 +548,10 @@ class N_Ports(BaseDevice):
         grid_step = grid_step or self.grid_step
         fields = {}
         if solver in {"ceviche", "ceviche_torch"}:
-            for (wl, mode), (source, _, _, _) in source_profiles.items():
-                Hx, Hy, Ez = self.solve_ceviche(eps, source, wl=wl, grid_step=grid_step, solver=solver)
-                fields[(wl, mode)] = {"Hx": Hx, "Hy": Hy, "Ez": Ez}
+            for (wl, mode, temp), (source, _, _, _) in source_profiles.items():
+                current_eps = get_temp_related_eps(eps, wl, temp)
+                Hx, Hy, Ez = self.solve_ceviche(current_eps, source, wl=wl, grid_step=grid_step, solver=solver)
+                fields[(wl, mode, temp)] = {"Hx": Hx, "Hy": Hy, "Ez": Ez}
             return fields
         else:
             raise ValueError(f"Solver {solver} not supported")
@@ -561,6 +565,7 @@ class N_Ports(BaseDevice):
         wl_cen=1.55,
         wl_width=0,
         n_wl=1,
+        temp=300,
         solver="ceviche",
         power: float = 1e-8,
         plot=False,
@@ -582,6 +587,7 @@ class N_Ports(BaseDevice):
                 wl_cen=wl_cen,
                 wl_width=wl_width,
                 n_wl=n_wl,
+                temp=temp,
                 power_scales=power_scales,
                 source_modes=source_modes,
             )  # {(wl, mode): [source, ht_m, et_m, scale], ...}
@@ -592,6 +598,7 @@ class N_Ports(BaseDevice):
                 wl_cen=wl_cen,
                 wl_width=wl_width,
                 n_wl=n_wl,
+                temp=temp,
                 power_scales=power_scales,
                 source_modes=source_modes,
             )  # {(wl, mode): [monitor, ht_m, et_m, scale], ...}
@@ -671,8 +678,10 @@ class N_Ports(BaseDevice):
                 monitors=[(input_slice, "r"), (output_slice, "b")],
                 title=f"|Ez|^2, Norm run at {input_slice_name}",
             )
-
-        self.port_sources_dict[input_slice_name] = source_profiles
+        if self.port_sources_dict.get(input_slice_name) is not None:
+            self.port_sources_dict[input_slice_name].update(source_profiles)
+        else:
+            self.port_sources_dict[input_slice_name] = source_profiles
         # print(source_profiles)
         # exit(0)
         return source_profiles  # {(wl, mode): [profile, ht_m, et_m, SCALE], ...}

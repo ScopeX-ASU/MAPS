@@ -321,6 +321,7 @@ class BaseOptimization(nn.Module):
         in_port_name: str = "in_port_1",
         exclude_port_names: List[str] = [],
     ):
+        # print("this is the kyes of self.objective.solutions", list(self.objective.solutions.keys()), flush=True)
         Ez = self.objective.solutions[field_key][field_component]
         monitors = []
         for name, m in self.device.port_monitor_slices.items():
