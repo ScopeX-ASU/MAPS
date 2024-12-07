@@ -10,4 +10,5 @@ from .metacoupler import MetaCouplerOptimization
 from .bending import BendingOptimization
 from .isolator import IsolatorOptimization
 from .mdm import MDMOptimization
+from .wdm import WDMOptimization
 from .layers import *

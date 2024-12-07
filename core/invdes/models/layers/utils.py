@@ -799,6 +799,7 @@ class ObjectiveFunc(object):
             in_mode = cfg["in_mode"]
             out_modes = cfg["out_modes"]
             direction = cfg["direction"]
+            target_wls = cfg["wl"]
 
             if type == "eigenmode":
 
@@ -810,11 +811,14 @@ class ObjectiveFunc(object):
                     out_modes=out_modes,
                     direction=direction,
                     name=name,
+                    target_wls=target_wls,
                 ):
                     s_list = []
                     ## for each wavelength, we evaluate the objective
                     for wl, sim in self.sims.items():
                         ## we calculate the average eigen energy for all output modes
+                        if wl not in target_wls:
+                            continue
                         for out_mode in out_modes:
                             src, ht_m, et_m, norm_p = self.port_profiles[out_port_name][
                                 (wl, out_mode)
