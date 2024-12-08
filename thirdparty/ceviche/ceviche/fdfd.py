@@ -1,7 +1,7 @@
 import autograd.numpy as npa
 from numpy import indices
 import scipy.sparse as sp
-import nupmy as np
+import numpy as np
 from .constants import *
 from .primitives import sp_solve, sp_mult, spsp_mult
 from .derivatives import compute_derivative_matrices

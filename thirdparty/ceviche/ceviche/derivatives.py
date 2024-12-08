@@ -1,5 +1,5 @@
-import numpy as np
 import autograd.numpy as npa
+import numpy as np
 import scipy.sparse as sp
 
 from .constants import *
@@ -64,26 +64,28 @@ def compute_derivative_matrices(omega, shape, npml, dL, bloch_x=0.0, bloch_y=0.0
         shape = shape + (1,)
 
     # Construct derivate matrices without PML
-    Dxf = createDws("x", "f", shape, dx)
-    Dxb = createDws("x", "b", shape, dx)
-    Dyf = createDws("y", "f", shape, dy)
-    Dyb = createDws("y", "b", shape, dy)
+    Dxf = createDws_new("x", "f", shape, dx)
+    Dxb = createDws_new("x", "b", shape, dx)
+    Dyf = createDws_new("y", "f", shape, dy)
+    Dyb = createDws_new("y", "b", shape, dy)
 
     if shape[-1] > 1:  # have z dimension for 3D simulation
-        Dzf = createDws("z", "f", shape, dz)
-        Dzb = createDws("z", "b", shape, dz)
+        Dzf = createDws_new("z", "f", shape, dz)
+        Dzb = createDws_new("z", "b", shape, dz)
     else:
         Dzf = Dzb = None
 
-
     # make the S-matrices for PML
-    (Sxf, Sxb, Syf, Syb, Szf, Szb) = create_S_matrices(omega, shape, npml, dL)
+    (Sxf, Sxb, Syf, Syb, Szf, Szb) = create_S_matrices_new(omega, shape, npml, dL)
+    # (Sxf, Sxb, Syf, Syb) = create_S_matrices(omega, shape[:2], npml, dL[0])
 
     # apply PML to derivative matrices
     Dxf = Sxf.dot(Dxf)
     Dxb = Sxb.dot(Dxb)
     Dyf = Syf.dot(Dyf)
     Dyb = Syb.dot(Dyb)
+
+    Dzf = Szf = None
 
     if Dzf is not None and Szf is not None:
         Dzf = Szf.dot(Dzf)
@@ -95,7 +97,7 @@ def compute_derivative_matrices(omega, shape, npml, dL, bloch_x=0.0, bloch_y=0.0
 """ Derivative Matrices (no PML) """
 
 
-def createDws(component: str, dir: str, shape, dL: float):
+def createDws_new(component: str, dir: str, shape, dL: float):
     """
     s = 'x' or 'y': x derivative or y derivative
     f = 'b' or 'f'
@@ -105,7 +107,7 @@ def createDws(component: str, dir: str, shape, dL: float):
 
     sign = 1 if dir == "f" else -1
 
-    indices = np.reshape(np.arange(M), shape, order="F")
+    indices = np.reshape(np.arange(M), shape, order="C")
 
     if component == "x":
         ind_adj = np.roll(indices, -sign, axis=0)
@@ -125,13 +127,14 @@ def createDws(component: str, dir: str, shape, dL: float):
     data_1 = sign / dL * np.ones((M))
     data = np.concatenate((-data_1, data_1), axis=0)
     Dws = sp.csc_matrix((data, (all_inds[:, 0], all_inds[:, 1])), shape=(M, M))
+
     return Dws
 
 
 """ PML Functions """
 
 
-def create_S_matrices(omega, shape, npml, dL):
+def create_S_matrices_new(omega, shape, npml, dL):
     """Makes the 'S-matrices'.  When dotted with derivative matrices, they add PML"""
 
     # strip out some information needed
@@ -140,9 +143,9 @@ def create_S_matrices(omega, shape, npml, dL):
 
     dx, dy, dz = dL
     if len(shape) == 2:
-        shape = shape + (1,)
+        shape = tuple(shape) + (1,)
     if len(npml) == 2:
-        npml = npml + (0,)
+        npml = tuple(npml) + (0,)
 
     Nx, Ny, Nz = shape
     N = np.prod(shape)
@@ -171,14 +174,14 @@ def create_S_matrices(omega, shape, npml, dL):
         Sz_f = Sz_b = None
 
     # Reshape the 2D s-factors into a 1D s-vecay
-    Sx_f = Sx_f.flatten(order="F")
-    Sx_b = Sx_b.flatten(order="F")
-    Sy_f = Sy_f.flatten(order="F")
-    Sy_b = Sy_b.flatten(order="F")
+    Sx_f = Sx_f.flatten(order="C")
+    Sx_b = Sx_b.flatten(order="C")
+    Sy_f = Sy_f.flatten(order="C")
+    Sy_b = Sy_b.flatten(order="C")
 
     if Sz_f is not None:
-        Sz_f = Sz_f.flatten(order="F")
-        Sz_b = Sz_b.flatten(order="F")
+        Sz_f = Sz_f.flatten(order="C")
+        Sz_b = Sz_b.flatten(order="C")
         Sz_f = sp.spdiags(Sz_f, 0, N, N)
         Sz_b = sp.spdiags(Sz_b, 0, N, N)
 
@@ -188,9 +191,7 @@ def create_S_matrices(omega, shape, npml, dL):
     Sy_f = sp.spdiags(Sy_f, 0, N, N)
     Sy_b = sp.spdiags(Sy_b, 0, N, N)
 
-
     return Sx_f, Sx_b, Sy_f, Sy_b, Sz_f, Sz_b
-
 
 
 def create_sfactor(dir, omega, dL, N, N_pml):
