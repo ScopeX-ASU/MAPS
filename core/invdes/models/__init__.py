@@ -1,10 +1,11 @@
 '''
 Date: 2024-08-24 21:37:48
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-10-07 17:05:25
-FilePath: /Metasurface-Opt/core/models/__init__.py
+LastEditTime: 2024-12-08 14:05:36
+FilePath: /MAPS/core/invdes/models/__init__.py
 '''
-from .metalens import Metalens
+from .metalens_fdtd import Metalens
+from .metalens import MetaLensOptimization
 from .metamirror import MetaMirrorOptimization
 from .metacoupler import MetaCouplerOptimization
 from .bending import BendingOptimization

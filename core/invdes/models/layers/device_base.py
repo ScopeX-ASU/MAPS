@@ -34,6 +34,7 @@ from .utils import (
 from core.utils import (
     Si_eps,
     SiO2_eps,
+    Air_eps,
     Slice,
 )
 
@@ -233,6 +234,7 @@ class N_Ports(BaseDevice):
         self.ports_regions = self.build_port_region(port_cfgs)
 
         self.port_monitor_slices = {}  # {port_name: Slice or mask}
+        self.port_monitor_slices_info = {}  # {port_name: dict of slice info}
         self.port_sources_dict = {}  # {slice_name: {(wl, mode): (profile, ht_m, et_m, norm_power)}}
 
     def add_geometries(self, cfgs):
@@ -365,12 +367,15 @@ class N_Ports(BaseDevice):
         size: Tuple[int, int],
         direction: str | None = None,
     ):
-        assert size[0] == 1 or size[1] == 1, "Only 1D slice is supported"
+        assert size[0] == 0 or size[1] == 0, "Only 1D slice is supported"
         if direction is None:
-            direction = "x" if size[0] == 1 else "y"
+            direction = "x" if size[0] == 0 else "y"
 
         if direction == "x":
-            monitor_center = [int(round(c / self.grid_step)) for c in center]
+            monitor_center = [
+                int(round((c + offset / 2) / self.grid_step))
+                for c, offset in zip(center, self.cell_size)
+            ]
             monitor_half_width = int(round(size[1] / 2 / self.grid_step))
             monitor_slice = Slice(
                 x=np.array(monitor_center[0]),
@@ -380,7 +385,10 @@ class N_Ports(BaseDevice):
                 ),
             )
         elif direction == "y":
-            monitor_center = [int(round(c / self.grid_step)) for c in center]
+            monitor_center = [
+                int(round((c + offset / 2) / self.grid_step))
+                for c, offset in zip(center, self.cell_size)
+            ]
             monitor_half_width = int(round(size[0] / 2 / self.grid_step))
             monitor_slice = Slice(
                 x=np.arange(
@@ -391,7 +399,18 @@ class N_Ports(BaseDevice):
             )
         else:
             raise ValueError(f"Direction {direction} not supported")
+        # center of pixel's physical locations (um)
+        xs = (-(self.Nx - 1) / 2 + monitor_slice.x) * self.grid_step
+        ys = (-(self.Ny - 1) / 2 + monitor_slice.y) * self.grid_step
         self.port_monitor_slices[slice_name] = monitor_slice
+        self.port_monitor_slices_info[slice_name] = dict(
+            center=center,
+            size=size,
+            xs=xs,
+            ys=ys,
+            direction=direction,
+        )
+
         return monitor_slice
 
     def build_port_monitor_slice(
@@ -407,16 +426,16 @@ class N_Ports(BaseDevice):
         size = port_cfg["size"]
         if direction == "x":
             monitor_center = [
-                center[0] - size[0] / 2 + rel_loc * size[0] + self.cell_size[0] / 2,
-                center[1] + self.cell_size[1] / 2,
+                center[0] - size[0] / 2 + rel_loc * size[0],
+                center[1],
             ]
-            monitor_size = [1, size[1] * rel_width]
+            monitor_size = [0, size[1] * rel_width]
         elif direction == "y":
             monitor_center = [
-                center[0] + self.cell_size[0] / 2,
-                center[1] - size[1] / 2 + rel_loc * size[1] + self.cell_size[1] / 2,
+                center[0],
+                center[1] - size[1] / 2 + rel_loc * size[1],
             ]
-            monitor_size = [size[0] * rel_width, 1]
+            monitor_size = [size[0] * rel_width, 0]
         else:
             raise ValueError(f"Direction {direction} not supported")
         return self.add_monitor_slice(
@@ -475,6 +494,9 @@ class N_Ports(BaseDevice):
                 ht_m, et_m, _, mode = insert_mode(
                     omega, dl, slice.x, slice.y, eps, m=source_mode
                 )
+                # mode *= 0
+                # mode[40,35:-35] = 1
+                # mode[39,35:-35] = np.exp(-1j * 2 * np.pi / wl_cen * grid_step - 1j * np.pi)
                 if power_scales is not None:
                     power_scale = power_scales[(wl, source_mode)]
                     ht_m = ht_m * power_scale
@@ -490,10 +512,10 @@ class N_Ports(BaseDevice):
             return fdfd_ez(omega, dl, eps, NPML)
         elif solver == "ceviche_torch":
             return fdfd_ez_torch(
-                omega, 
-                dl, 
-                eps, 
-                NPML, 
+                omega,
+                dl,
+                eps,
+                NPML,
                 neural_solver=self.sim_cfg.get("neural_solver", None),
                 numerical_solver=self.sim_cfg.get("numerical_solver", "solve_direct"),
                 use_autodiff=self.sim_cfg.get("use_autodiff", False),
@@ -501,10 +523,12 @@ class N_Ports(BaseDevice):
         else:
             raise ValueError(f"Solver {solver} not supported")
 
-    def solve_ceviche(self, eps, source, wl: float = 1.55, grid_step=None, solver: str="ceviche"):
+    def solve_ceviche(
+        self, eps, source, wl: float = 1.55, grid_step=None, solver: str = "ceviche"
+    ):
         """
         _summary_
-        
+
         this is only called in the norm run through solve() in _norm_run(), so we can pass port_name and the mode to be 'Norm' directly
         and there is no need to run the backward to store the adjoint source and adjoint fields, so we enable torch.no_grad() environment
         """
@@ -513,7 +537,7 @@ class N_Ports(BaseDevice):
         dl = grid_step * 1e-6
         # simulation = fdfd_ez(omega, dl, eps, [self.NPML[0], self.NPML[1]])
         simulation = self.create_simulation(omega, dl, eps, self.NPML, solver=solver)
-        if hasattr(simulation, "solver"): # which means that it is a torch simulation
+        if hasattr(simulation, "solver"):  # which means that it is a torch simulation
             with torch.no_grad():
                 Hx, Hy, Ez = simulation.solve(source, port_name="Norm", mode="Norm")
         else:
@@ -546,7 +570,9 @@ class N_Ports(BaseDevice):
         fields = {}
         if solver in {"ceviche", "ceviche_torch"}:
             for (wl, mode), (source, _, _, _) in source_profiles.items():
-                Hx, Hy, Ez = self.solve_ceviche(eps, source, wl=wl, grid_step=grid_step, solver=solver)
+                Hx, Hy, Ez = self.solve_ceviche(
+                    eps, source, wl=wl, grid_step=grid_step, solver=solver
+                )
                 fields[(wl, mode)] = {"Hx": Hx, "Hy": Hy, "Ez": Ez}
             return fields
         else:

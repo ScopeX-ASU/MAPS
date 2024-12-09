@@ -16,10 +16,9 @@ from scipy.ndimage import zoom
 from torch import Tensor
 from torch.types import Device
 from torch_sparse import spmm
-from core.utils import get_flux, get_eigenmode_coefficients
+from core.utils import get_flux, get_eigenmode_coefficients, Slice
 
 __all__ = [
-    "Slice",
     "get_grid",
     "apply_regions_gpu",
     "AdjointGradient",
@@ -38,8 +37,6 @@ __all__ = [
     "ObjectiveFunc",
 ]
 
-
-Slice = collections.namedtuple("Slice", "x y")
 
 
 def get_grid(shape, dl):
