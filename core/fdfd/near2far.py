@@ -42,8 +42,8 @@ def RayleighSommerfieldPropagation(
     farfield = einsum(
         freqs.mul(eps**0.5 * (-1j) * dL), fz, H * factor, "f, b s f, n s f -> b n f"
     )
-
-    return farfield
+     # this 2x is just a fix to match fdfd results.
+    return farfield * 2
 
 
 def get_farfields_Rayleigh_Sommerfeld(

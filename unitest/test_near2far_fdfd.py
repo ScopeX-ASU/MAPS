@@ -46,7 +46,7 @@ def test_near2far():
         substrate_depth=0.75,
         ridge_height_max=0.75,
         nearfield_dx=0.2,
-        farfield_dxs=(3,),
+        farfield_dxs=(8,),
         farfield_sizes=(4,),
     )
     hr_device = device.copy(resolution=50)
