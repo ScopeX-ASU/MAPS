@@ -20,7 +20,7 @@ from torch.types import Device, _size
 from torch.utils.checkpoint import checkpoint
 from pyutils.torch_train import set_torch_deterministic
 from mmengine.registry import MODELS
-from .constant import *
+from thirdparty.ceviche.ceviche.constant import *
 from .layers.neurolight_conv2d import NeurOLightConv2d
 from .pde_base import PDE_NN_BASE
 from .layers.layer_norm import MyLayerNorm

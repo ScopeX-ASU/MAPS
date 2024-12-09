@@ -1,11 +1,3 @@
-"""
-Description:
-Author: Jiaqi Gu (jqgu@utexas.edu)
-Date: 2022-03-03 01:17:52
-LastEditors: Jiaqi Gu (jqgu@utexas.edu)
-LastEditTime: 2022-03-05 03:25:43
-"""
-
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -25,50 +17,19 @@ from .layers.ffno_conv2d import FFNOConv2d
 from torch.types import _size
 from .layers.layer_norm import MyLayerNorm
 from core.utils import resize_to_targt_size
+from mmengine.registry import MODELS
+from .model_base import ModelBase, ConvBlock, LinearBlock
+from .fno_cnn import LearnableFourierFeatures
+from core.fdfd.fdfd import fdfd_ez
+from thirdparty.ceviche.ceviche.constants import C_0
+from core.utils import (
+    Si_eps,
+    SiO2_eps,
+)
+from einops import rearrange
+from mmcv.cnn.bricks import build_activation_layer, build_conv_layer, build_norm_layer
 
 __all__ = ["FFNO2d"]
-
-class ConvBlock(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int = 1,
-        padding: int = 0,
-        stride: int = 1,
-        ln: bool = True,
-        act_func: Optional[str] = "GELU",
-        device: Device = torch.device("cuda:0"),
-        groups: int = 1,
-    ) -> None:
-        super().__init__()
-        self.conv = nn.Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size,
-            padding=padding,
-            padding_mode="replicate",
-            stride=stride,
-            groups=groups,
-        )
-        if ln:
-            self.ln = LayerNorm(out_channels, eps=1e-6, data_format="channels_first")
-        else:
-            self.ln = None
-        if act_func is None:
-            self.act_func = None
-        elif act_func.lower() == "swish":
-            self.act_func = Swish()
-        else:
-            self.act_func = getattr(nn, act_func)()
-
-    def forward(self, x: Tensor) -> Tensor:
-        x = self.conv(x)
-        if self.ln is not None:
-            x = self.ln(x)
-        if self.act_func is not None:
-            x = self.act_func(x)
-        return x
 
 class BSConv2d(nn.Module):
     def __init__(
@@ -111,83 +72,6 @@ class BSConv2d(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         return self.conv(x)
-
-
-class ResStem(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: _size = 3,
-        stride: _size = 1,
-        dilation: _size = 1,
-        norm: str = "ln",
-        groups: int = 1,
-        bias: bool = True,
-    ) -> None:
-        super().__init__()
-        kernel_size = to_2tuple(kernel_size)
-        stride = to_2tuple(stride)
-        dilation = to_2tuple(dilation)
-        # same padding
-        padding = [(dilation[i] * (kernel_size[i] - 1) + 1) // 2 for i in range(len(kernel_size))]
-
-        # self.conv1 = nn.Conv2d(
-        #     in_channels,
-        #     out_channels // 2,
-        #     kernel_size,
-        #     stride=stride,
-        #     padding=padding,
-        #     dilation=dilation,
-        #     groups=groups,
-        #     bias=bias,
-        # )
-        self.conv1 = BSConv2d(
-            in_channels,
-            out_channels // 2,
-            kernel_size,
-            stride=stride,
-            dilation=dilation,
-            bias=bias,
-        )
-        if norm == "bn":
-            self.norm1 = nn.BatchNorm2d(out_channels // 2)
-        elif norm == "ln":
-            self.norm1 = MyLayerNorm(out_channels // 2, data_format="channels_first")
-        else:
-            raise ValueError(f"Norm type {norm} not supported")
-        self.act1 = nn.ReLU(inplace=True)
-
-        # self.conv2 = nn.Conv2d(
-        #     out_channels // 2,
-        #     out_channels,
-        #     kernel_size,
-        #     stride=stride,
-        #     padding=padding,
-        #     dilation=dilation,
-        #     groups=groups,
-        #     bias=bias,
-        # )
-        self.conv2 = BSConv2d(
-            out_channels // 2,
-            out_channels,
-            kernel_size,
-            stride=stride,
-            dilation=dilation,
-            bias=bias,
-        )
-        if self.norm == "bn":
-            self.norm2 = nn.BatchNorm2d(out_channels)
-        elif self.norm == "ln":
-            self.norm2 = MyLayerNorm(out_channels, data_format="channels_first")
-        else:
-            raise ValueError(f"Norm type {norm} not supported")
-        self.act2 = nn.ReLU(inplace=True)
-
-    def forward(self, x: Tensor) -> Tensor:
-        x = self.act1(self.norm1(self.conv1(x)))
-        x = self.act2(self.norm2(self.conv2(x)))
-        return x
 
 class LayerNorm(nn.Module):
     r"""LayerNorm implementation used in ConvNeXt
@@ -241,26 +125,31 @@ class FFNO2dBlock(nn.Module):
         n_modes: Tuple[int],
         kernel_size: int = 1,
         padding: int = 0,
-        act_func: Optional[str] = "GELU",
+        act_cfg: dict | None = dict(type="GELU"),
         drop_path_rate: float = 0.0,
         device: Device = torch.device("cuda:0"),
         with_cp=False,
         ffn: bool = True,
         ffn_dwconv: bool = True,
         aug_path: bool = True,
-        norm: str = "ln",
+        norm_cfg: dict | None = None,
     ) -> None:
         super().__init__()
         self.drop_path_rate = drop_path_rate
         self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0 else nn.Identity()
         # self.drop_path2 = DropPath(drop_path_rate) if drop_path_rate > 0 else nn.Identity()
         self.f_conv = FFNOConv2d(in_channels, out_channels, n_modes, device=device)
-        if norm == "bn":
-            self.norm = nn.BatchNorm2d(out_channels)
-            self.pre_norm = nn.BatchNorm2d(in_channels)
-        elif norm == "ln":
-            self.norm = MyLayerNorm(out_channels, data_format="channels_first")
-            self.pre_norm = MyLayerNorm(in_channels, data_format="channels_first")
+        if norm_cfg is not None:
+            _, self.norm = build_norm_layer(norm_cfg, out_channels)
+            _, self.pre_norm = build_norm_layer(norm_cfg, in_channels)
+        else:
+            self.pre_norm = self.norm = None
+        # if norm == "bn":
+        #     self.norm = nn.BatchNorm2d(out_channels)
+        #     self.pre_norm = nn.BatchNorm2d(in_channels)
+        # elif norm == "ln":
+        #     self.norm = MyLayerNorm(out_channels, data_format="channels_first")
+        #     self.pre_norm = MyLayerNorm(in_channels, data_format="channels_first")
         self.with_cp = with_cp
         # self.norm.weight.data.zero_()
         if ffn:
@@ -274,14 +163,16 @@ class FFNO2dBlock(nn.Module):
                         groups=out_channels * self.expansion,
                         padding=1,
                     ),
-                    nn.BatchNorm2d(out_channels * self.expansion) if norm == "bn" else MyLayerNorm(out_channels * self.expansion, data_format="channels_first"),
+                    # nn.BatchNorm2d(out_channels * self.expansion) if norm == "bn" else MyLayerNorm(out_channels * self.expansion, data_format="channels_first"),
+                    LayerNorm(out_channels * self.expansion, data_format="channels_first"),
                     nn.GELU(),
                     nn.Conv2d(out_channels * self.expansion, out_channels, 1),
                 )
             else:
                 self.ff = nn.Sequential(
                     nn.Conv2d(out_channels, out_channels * self.expansion, 1),
-                    nn.BatchNorm2d(out_channels * self.expansion) if norm == "bn" else MyLayerNorm(out_channels * self.expansion, data_format="channels_first"),
+                    # nn.BatchNorm2d(out_channels * self.expansion) if norm == "bn" else MyLayerNorm(out_channels * self.expansion, data_format="channels_first"),
+                    LayerNorm(out_channels * self.expansion, data_format="channels_first"),
                     nn.GELU(),
                     nn.Conv2d(out_channels * self.expansion, out_channels, 1),
                 )
@@ -291,14 +182,10 @@ class FFNO2dBlock(nn.Module):
             self.aug_path = nn.Sequential(BSConv2d(in_channels, out_channels, 3), nn.GELU())
         else:
             self.aug_path = None
-        if act_func is None:
-            self.act_func = None
-        elif act_func.lower() == "siren":
-            self.act_func = SIREN()
-        elif act_func.lower() == "swish":
-            self.act_func = Swish()
+        if act_cfg is not None:
+            self.activation = build_activation_layer(act_cfg)
         else:
-            self.act_func = getattr(nn, act_func)()
+            self.activation = None
 
     def forward(self, x: Tensor) -> Tensor:
         def _inner_forward(x):
@@ -327,8 +214,8 @@ class FFNO2dBlock(nn.Module):
         else:
             return _inner_forward(x)
 
-
-class FFNO2d(nn.Module):
+@MODELS.register_module()
+class FFNO2d(ModelBase):
     """
     Frequency-domain scattered electric field envelop predictor
     Assumption:
@@ -340,30 +227,38 @@ class FFNO2d(nn.Module):
         PDE_NN_BASE ([type]): [description]
     """
 
+    default_cfgs = dict(
+        train_field="fwd",
+        in_channels=3,
+        out_channels=2,
+        dim=32,
+        kernel_list=[32, 32, 32, 32, 32, 32, 32, 32],
+        kernel_size_list=[1, 1, 1, 1, 1, 1, 1, 1],
+        padding_list=[0, 0, 0, 0, 0, 0, 0, 0],
+        hidden_list=[32],
+        mode_list=[(33, 33), (33, 33), (33, 33), (33, 33), (33, 33), (33, 33), (33, 33), (33, 33)],
+        norm_cfg=dict(type="LayerNorm", data_format="channels_first"),
+        act_cfg=dict(type="GELU"),
+        dropout_rate=0.0,
+        drop_path_rate=0.0,
+        aux_head=False,
+        aux_head_idx=1,
+        with_cp=False,
+        aug_path=True,
+        ffn=True,
+        ffn_dwconv=True,
+        fourier_feature="learnable",
+        pos_encoding="none",
+        mapping_size=2,
+        device=torch.device("cuda"),
+    )
+
     def __init__(
         self,
-        in_channels: int = 1,
-        out_channels: int = 2,
-        dim: int = 16,
-        kernel_list: List[int] = [72, 72, 72, 72],
-        kernel_size_list: List[int] = [1, 1, 1, 1],
-        padding_list: List[int] = [0, 0, 0, 0],
-        hidden_list: List[int] = [512],
-        mode_list: List[Tuple[int]] = [(128, 129), (128, 129), (128, 129), (128, 129)],
-        act_func: Optional[str] = "GELU",
-        dropout_rate: float = 0.0,
-        drop_path_rate: float = 0.0,
-        device: Device = torch.device("cuda:0"),
-        aux_head: bool = False,
-        aux_head_idx: int = 1,
-        with_cp=False,
-        conv_stem: bool = False,
-        aug_path: bool = True,
-        ffn: bool = True,
-        ffn_dwconv: bool = True,
-        **kwargs,
+        **cfgs,
     ):
         super().__init__()
+        self.load_cfgs(**cfgs)
 
         """
         The overall network. It contains 4 layers of the Fourier layer.
@@ -377,60 +272,185 @@ class FFNO2d(nn.Module):
         output: the solution
         output shape: (batchsize, x=s, y=s, c=1)
         """
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        assert (
-            out_channels % 2 == 0
-        ), f"The output channels must be even number larger than 2, but got {out_channels}"
-        self.dim = dim
-        self.kernel_list = kernel_list
-        self.kernel_size_list = kernel_size_list
-        self.padding_list = padding_list
-        self.hidden_list = hidden_list
-        self.mode_list = mode_list
-        self.act_func = act_func
-        self.dropout_rate = dropout_rate
-        self.drop_path_rate = drop_path_rate
-        self.aux_head = aux_head
-        self.aux_head_idx = aux_head_idx
-        self.with_cp = with_cp
-        self.conv_stem = conv_stem
-        self.aug_path = aug_path
-        self.ffn = ffn
-        self.ffn_dwconv = ffn_dwconv
-
-        self.device = device
-        self.pos_encoding = "none"
-        self.padding = 9  # pad the domain if input is non-periodic
         self.build_layers()
 
-        self.permittivity_encoder = None
-        self.set_trainable_permittivity(False)
+    def load_cfgs(
+        self,
+        **cfgs,
+    ) -> None:
+        super().load_cfgs(**self.default_cfgs)
+        super().load_cfgs(**cfgs)
+
+        assert self.train_field in {
+            "fwd",
+            "adj",
+        }, f"train_field must be fwd or adj, but got {self.train_field}"
+
+        assert (
+            self.out_channels % 2 == 0
+        ), f"The output channels must be even number larger than 2, but got {self.out_channels}"
+
+        match self.pos_encoding:
+            case "none":
+                pass
+            case "linear":
+                self.in_channels += 2
+            case "exp":
+                self.in_channels += 4
+            case "exp3":
+                self.in_channels += 6
+            case "exp4":
+                self.in_channels += 8
+            case "exp_full", "exp_full_r":
+                self.in_channels += 7
+            case _:
+                raise ValueError(
+                    f"pos_encoding only supports linear and exp, but got {self.pos_encoding}"
+                )
+
+        if self.fourier_feature == "basic":
+            self.B = torch.eye(2, device=self.device)
+        elif self.fourier_feature.startswith("gauss"):  # guass_10
+            scale = eval(self.fourier_feature.split("_")[-1])
+            self.B = torch.randn((self.mapping_size, 1), device=self.device) * scale
+            self.in_channels = self.in_channels - 1 + 2 * self.mapping_size
+        elif self.fourier_feature == "learnable":
+            self.LFF = LearnableFourierFeatures(
+                pos_dim=2, f_dim=2 * self.mapping_size, h_dim=64, d_dim=64
+            )
+            self.in_channels = self.in_channels + 64
+        elif self.fourier_feature == "none":
+            pass
+        else:
+            raise ValueError("fourier_feature only supports basic and gauss")
+
+        omega = 2 * np.pi * C_0 / (1.55 * 1e-6)
+        self.sim = fdfd_ez(
+            omega=omega,
+            dL=2e-8,
+            eps_r=torch.randn((260, 260), device=self.device),  # random permittivity
+            npml=(25, 25),
+        )
+        self.padding = 9  # pad the domain if input is non-periodic
+
+    def _build_s_param_head(self):
+        s_param_head = nn.Sequential(
+            ConvBlock(
+                32,
+                64,
+                kernel_size=5,
+                padding=2,
+                stride=2,
+                act_cfg=self.act_cfg,
+                norm_cfg=self.norm_cfg,
+                device=self.device,
+            ),
+            ConvBlock(
+                64,
+                64,
+                kernel_size=5,
+                padding=2,
+                stride=2,
+                act_cfg=self.act_cfg,
+                norm_cfg=self.norm_cfg,
+                device=self.device,
+            ),
+            ConvBlock(
+                64,
+                64,
+                kernel_size=5,
+                padding=2,
+                stride=2,
+                act_cfg=self.act_cfg,
+                norm_cfg=self.norm_cfg,
+                device=self.device,
+            ),
+            ConvBlock(
+                64,
+                64*2,
+                kernel_size=5,
+                padding=2,
+                stride=2,
+                act_cfg=self.act_cfg,
+                norm_cfg=self.norm_cfg,
+                device=self.device,
+            ),
+            ConvBlock(
+                64*2,
+                64*2,
+                kernel_size=5,
+                padding=2,
+                stride=2,
+                act_cfg=self.act_cfg,
+                norm_cfg=self.norm_cfg,
+                device=self.device,
+            ),
+            ConvBlock(
+                64*2,
+                64*2,
+                kernel_size=5,
+                padding=2,
+                stride=2,
+                act_cfg=self.act_cfg,
+                norm_cfg=self.norm_cfg,
+                device=self.device,
+            ),
+            nn.Flatten(),
+            LinearBlock(
+                512,
+                192,
+                bias=True,
+                norm_cfg=self.norm_cfg,
+                act_cfg=self.act_cfg,
+                dropout=0.3,
+                device=self.device,
+            ),
+            LinearBlock(
+                192,
+                64,
+                bias=True,
+                norm_cfg=self.norm_cfg,
+                act_cfg=self.act_cfg,
+                dropout=0.3,
+                device=self.device,
+            ),
+            LinearBlock(
+                64,
+                2,
+                bias=True,
+                norm_cfg=None,
+                act_cfg=None,
+                dropout=0.3,
+                device=self.device,
+            ),
+        )
+
+        self.s_param_head = s_param_head 
 
     def build_layers(self):
-        if self.conv_stem:
-            self.stem = nn.Sequential(
-                ConvBlock(
-                    self.in_channels,
-                    self.dim,
-                    kernel_size=5,
-                    padding=2,
-                    stride=2,
-                    act_func=self.act_func,
-                    device=self.device,
-                ),
-                ConvBlock(
-                    self.dim,
-                    self.dim,
-                    kernel_size=5,
-                    padding=2,
-                    stride=2,
-                    act_func=None,
-                    device=self.device,
-                ),
-            )
-        else:
-            self.stem = nn.Conv2d(self.in_channels, self.dim, 1)
+        if getattr(self, "s_param_only", False):
+            self._build_s_param_head()
+
+        self.stem = nn.Sequential(
+            ConvBlock(
+                self.in_channels,
+                self.dim,
+                kernel_size=5,
+                padding=2,
+                stride=2,
+                act_cfg=self.act_cfg,
+                device=self.device,
+            ),
+            ConvBlock(
+                self.dim,
+                self.dim,
+                kernel_size=5,
+                padding=2,
+                stride=2,
+                act_cfg=None,
+                device=self.device,
+            ),
+        )
         kernel_list = [self.dim] + self.kernel_list
         drop_path_rates = np.linspace(0, self.drop_path_rate, len(kernel_list[:-1]))
         print("this is the mode list: ", self.mode_list, flush=True)
@@ -441,13 +461,14 @@ class FFNO2d(nn.Module):
                 n_modes,
                 kernel_size,
                 padding,
-                act_func=self.act_func,
+                act_cfg=self.act_cfg,
                 drop_path_rate=drop,
                 device=self.device,
                 with_cp=self.with_cp,
                 aug_path=self.aug_path,
                 ffn=self.ffn,
                 ffn_dwconv=self.ffn_dwconv,
+                norm_cfg=self.norm_cfg,
             )
             for inc, outc, n_modes, kernel_size, padding, drop in zip(
                 kernel_list[:-1],
@@ -462,7 +483,7 @@ class FFNO2d(nn.Module):
         hidden_list = [self.kernel_list[-1]] + self.hidden_list
         head = [
             nn.Sequential(
-                ConvBlock(inc, outc, kernel_size=1, padding=0, act_func=self.act_func, device=self.device),
+                ConvBlock(inc, outc, kernel_size=1, padding=0, act_cfg=self.act_cfg, device=self.device),
                 nn.Dropout2d(self.dropout_rate),
             )
             for inc, outc in zip(hidden_list[:-1], hidden_list[1:])
@@ -471,10 +492,24 @@ class FFNO2d(nn.Module):
         head += [
             ConvBlock(
                 hidden_list[-1],
+                2*self.out_channels,
+                kernel_size=4,
+                padding=1,
+                stride=2,
+                conv_cfg=dict(type="ConvTranspose2d", padding_mode="zeros"),
+                act_cfg=self.act_cfg,
+                norm_cfg=self.norm_cfg,
+                device=self.device,
+            ), 
+            ConvBlock(
+                2*self.out_channels,
                 self.out_channels,
-                kernel_size=1,
-                padding=0,
-                act_func=None,
+                kernel_size=4,
+                padding=1,
+                stride=2,
+                conv_cfg=dict(type="ConvTranspose2d", padding_mode="zeros"),
+                act_cfg=None,
+                norm_cfg=None,
                 device=self.device,
             )
         ]
@@ -508,57 +543,150 @@ class FFNO2d(nn.Module):
         else:
             self.aux_head = None
 
+        # Simulation grid size
+        grid_size = (260, 260)  # Adjust to your simulation grid size
+        pml_thickness = 25
+
+        self.pml_mask = torch.ones(grid_size).to(self.device)
+
+        # Define the damping factor for exponential decay
+        damping_factor = torch.tensor(
+            [
+                0.05,
+            ],
+            device=self.device,
+        )  # adjust this to control decay rate
+
+        # Apply exponential decay in the PML regions
+        for i in range(grid_size[0]):
+            for j in range(grid_size[1]):
+                # Calculate distance from each edge
+                dist_to_left = max(0, pml_thickness - i)
+                dist_to_right = max(0, pml_thickness - (grid_size[0] - i - 1))
+                dist_to_top = max(0, pml_thickness - j)
+                dist_to_bottom = max(0, pml_thickness - (grid_size[1] - j - 1))
+
+                # Calculate the damping factor based on the distance to the nearest edge
+                dist = max(dist_to_left, dist_to_right, dist_to_top, dist_to_bottom)
+                if dist > 0:
+                    self.pml_mask[i, j] = torch.exp(-damping_factor * dist)
+
     def set_trainable_permittivity(self, mode: bool = True) -> None:
         self.trainable_permittivity = mode
+
+    def incident_field_from_src(self, src: Tensor) -> Tensor:
+        if self.train_field == "fwd":
+            mode = src[:, int(0.4 * src.shape[-2] / 2), :]
+            mode = mode.unsqueeze(1).repeat(1, src.shape[-2], 1)
+            source_index = int(0.4 * src.shape[-2] / 2)
+            resolution = (
+                2e-8  # hardcode here since the we are now using resolution of 50px/um
+            )
+            epsilon = Si_eps(1.55)
+            lambda_0 = (
+                1.55e-6  # wavelength is hardcode here since we are now using 1.55um
+            )
+            k = (2 * torch.pi / lambda_0) * torch.sqrt(torch.tensor(epsilon)).to(
+                src.device
+            )
+            x_coords = torch.arange(src.shape[-2]).float().to(src.device)
+            distances = torch.abs(x_coords - source_index) * resolution
+            phase_shifts = (k * distances).unsqueeze(1)
+            mode = mode * torch.exp(1j * phase_shifts)
+
+        elif self.train_field == "adj":
+            # in the adjoint mode, there are two sources and we need to calculate the incident field for each of them
+            # then added together as the incident field
+            mode_x = src[:, int(0.41 * src.shape[-2] / 2), :]
+            mode_x = mode_x.unsqueeze(1).repeat(1, src.shape[-2], 1)
+            source_index = int(0.41 * src.shape[-2] / 2)
+            resolution = (
+                2e-8  # hardcode here since the we are now using resolution of 50px/um
+            )
+            epsilon = Si_eps(1.55)
+            lambda_0 = (
+                1.55e-6  # wavelength is hardcode here since we are now using 1.55um
+            )
+            k = (2 * torch.pi / lambda_0) * torch.sqrt(torch.tensor(epsilon)).to(
+                src.device
+            )
+            x_coords = torch.arange(src.shape[-2]).float().to(src.device)
+            distances = torch.abs(x_coords - source_index) * resolution
+            phase_shifts = (k * distances).unsqueeze(1)
+            mode_x = mode_x * torch.exp(1j * phase_shifts)
+
+            mode_y = src[
+                :, :, -int(0.4 * src.shape[-1] / 2)
+            ]  # not quite sure with this index, need to plot it out to check
+            mode_y = mode_y.unsqueeze(-1).repeat(1, 1, src.shape[-1])
+            source_index = src.shape[-1] - int(0.4 * src.shape[-1] / 2)
+            resolution = 2e-8
+            epsilon = Si_eps(1.55)
+            lambda_0 = 1.55e-6
+            k = (2 * torch.pi / lambda_0) * torch.sqrt(torch.tensor(epsilon)).to(
+                src.device
+            )
+            y_coords = torch.arange(src.shape[-1]).float().to(src.device)
+            distances = torch.abs(y_coords - source_index) * resolution
+            phase_shifts = (k * distances).unsqueeze(0)
+            mode_y = mode_y * torch.exp(1j * phase_shifts)
+
+            mode = mode_x + mode_y  # superposition of two sources
+        return mode
 
     def forward(
         self,
         eps,
         src,
-        adj_src,
-        incident_field, 
     ):
-        # src and adj_src are all complex numbers tensor
-        src = src["source_profile-wl-1.55-port-in_port_1-mode-1"]
-        adj_src = adj_src["adj_src-wl-1.55-port-in_port_1-mode-1"]
-        incident_field = incident_field["incident_field-wl-1.55-port-in_port_1-mode-1"]
-        src = torch.view_as_real(src).permute(0, 3, 1, 2) # B, 2, H, W
+        incident_field_fwd = self.incident_field_from_src(src)
+        incident_field_fwd = torch.view_as_real(incident_field_fwd).permute(
+            0, 3, 1, 2
+        )  # B, 2, H, W
+        incident_field_fwd = incident_field_fwd / (
+            torch.abs(incident_field_fwd).amax(dim=(1, 2, 3), keepdim=True) + 1e-6
+        )
+        src = torch.view_as_real(src.resolve_conj()).permute(0, 3, 1, 2)  # B, 2, H, W
         src = src / (torch.abs(src).amax(dim=(1, 2, 3), keepdim=True) + 1e-6)
-        adj_src = torch.view_as_real(adj_src).permute(0, 3, 1, 2) # B, 2, H, W
-        adj_src = adj_src / (torch.abs(adj_src).amax(dim=(1, 2, 3), keepdim=True) + 1e-6)
-        incident_field = torch.view_as_real(incident_field).permute(0, 3, 1, 2) # B, 2, H, W
-        incident_field = incident_field / (torch.abs(incident_field).amax(dim=(1, 2, 3), keepdim=True) + 1e-6)
 
-        eps_copy = eps.clone()
-        eps = 1 / eps # take the inverse of the permittivity to easy the training difficulty
-        eps = eps.unsqueeze(1) # B, 1, H, W
+        eps = eps / 12.11
+        eps = eps.unsqueeze(1)  # B, 1, H, W
 
-        # -----------this is before ----------------
-        # eps = torch.cat((eps, eps), dim=0)
-        # sources = torch.cat((src, adj_src), dim=0)
-        # x = torch.cat((eps, sources), dim=1) # 2B, 3, H, W
-        # x = self.stem(x)
-        # feature = self.features(x)
-        # forward_Ez_field = self.head(feature)[:feature.size(0) // 2]
-        # adjoint_Ez_field = self.head(feature)[feature.size(0) // 2:]
-        # ------------------------------------------
+        eps_1 = eps_2 = eps_0 = None
 
-        # -----------this is after ----------------
-        x = torch.cat((eps, incident_field), dim=1)
-        x = self.stem(x)
-        x = self.features(x)
-        forward_Ez_field = self.head(x)
-        forward_Ez_field = resize_to_targt_size(forward_Ez_field, (src.shape[-2], src.shape[-1]))
+        if self.fourier_feature == "learnable":
+            H = eps.shape[-2]
+            W = eps.shape[-1]
+            bs = eps.shape[0]
+            y = torch.linspace(-1, 1, H, device=eps.device)
+            x = torch.linspace(-1, 1, W, device=eps.device)
+            grid_y, grid_x = torch.meshgrid(y, x, indexing="ij")
+            grid = torch.stack((grid_x, grid_y), dim=-1)  # Shape (H, W, 2)
+            grid_flat = rearrange(
+                grid, "h w d -> (h w) d"
+            )  # Flatten spatial to shape (H*W, 2)
+            pos = grid_flat.unsqueeze(0).unsqueeze(2).expand(bs, H * W, 1, 2)
+            enc_fwd = self.LFF(pos).permute(0, 2, 1).reshape(bs, -1, H, W)
+            eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1)
+        else:
+            enc_fwd = self.fourier_feature_mapping(eps)
+            eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1)
+
+        x_fwd = torch.cat((eps_enc_fwd, incident_field_fwd), dim=1)
+
+        x_fwd = self.stem(x_fwd)  # conv2d downsample
+
+        if eps_0 is not None:
+            x_fwd = x_fwd * eps_0
+
+        x1_fwd = self.features(x_fwd)  # ffno block
+        if hasattr(self, "s_param_head"):
+            s_param = self.s_param_head(x1_fwd) * 1e-8
+            return s_param
+        forward_Ez_field = self.head(x1_fwd)  # 1x1 conv
+        # print("this is the forward_Ez_field shape: ", forward_Ez_field.shape, flush=True)
+        # quit()
         if len(forward_Ez_field.shape) == 3:
             forward_Ez_field = forward_Ez_field.unsqueeze(0)
-        # feature = self.features(x)
-        # forward_Ez_field = self.head(feature)
-        # ------------------------------------------
 
-        # calculate the hx and hy from the Ez field
-        # forward_Hx_field, forward_Hy_field = self.from_Ez_to_Hx_Hy(eps_copy, forward_Ez_field)
-
-        # forward_field = torch.cat((forward_Hx_field, forward_Hy_field, forward_Ez_field), dim=1)
-        adjoint_field = None
-
-        return forward_Ez_field, adjoint_field
+        return forward_Ez_field

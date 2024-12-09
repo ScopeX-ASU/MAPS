@@ -108,7 +108,9 @@ if __name__ == '__main__':
     tasks = [
         # [0.0, "bending", "FNO2d", "fwd", False, "learnable", True, 33, 66, 27, "fwd_pred_w_S_loss", 0, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 1, 0.0, 1, 2, 1e-4, "none", "none", 8],
         # [0.0, "bending", "FNO2d", "fwd", False, "learnable", True, 33, 66, 29, "fwd_pred_wo_S_loss", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
-        [0.0, "bending", "FNO2d", "fwd", False, "learnable", True, 33, 66, 30, "test_fwd_time", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
+        # [0.0, "bending", "FNO2d", "fwd", False, "learnable", True, 33, 66, 30, "test_fwd_time", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
+        # [0.0, "bending", "FNO2d", "fwd", False, "learnable", True, 33, 66, 31, "fwd_pred_S_loss_only", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
+        [0.0, "bending", "FNO2d", "fwd", False, "learnable", True, 33, 66, 32, "pure_fno", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
     ]   
 
     with Pool(8) as p:

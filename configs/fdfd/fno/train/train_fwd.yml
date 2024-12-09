@@ -1,5 +1,6 @@
 criterion:
-  name: distanceLoss
+  weight: 1.0
+  name: nmse
   min_distance: 0.12
 
 aux_criterion:

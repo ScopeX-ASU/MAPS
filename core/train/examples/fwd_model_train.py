@@ -26,14 +26,6 @@ from core.utils import cal_total_field_adj_src_from_fwd_field
 from thirdparty.pyutility.pyutils.config import train_configs as configs
 import numpy as np
 import time
-class TimerCtx:
-    def __enter__(self):
-        self.start = time.time()
-        return self
-
-    def __exit__(self, *args):
-        self.end = time.time()
-        self.interval = self.end - self.start
 
 class fwd_predictor(nn.Module):
     def __init__(self, model_fwd):
@@ -44,23 +36,6 @@ class fwd_predictor(nn.Module):
         eps = data["eps_map"]
         src = data["src_profiles"]["source_profile-wl-1.55-port-in_port_1-mode-1"]
         x_fwd = self.model_fwd(eps, src)
-        with torch.no_grad():
-            for _ in range(10):
-                with torch.no_grad():
-                    _ = self.model_fwd(eps, src)
-        torch.cuda.synchronize()
-        time_per_run = []
-        for _ in range(10):
-            with torch.no_grad():
-                with TimerCtx() as t:
-                    for _ in range(3):
-                        x_fwd = self.model_fwd(eps, src).detach()
-                    torch.cuda.synchronize()
-            inference_time = t.interval / 3
-            time_per_run.append(inference_time)
-        time_per_run = np.array(time_per_run)
-        print(f"Average inference time: {time_per_run.mean()}s")
-        quit()
 
         forward_field, _ = cal_total_field_adj_src_from_fwd_field(
             Ez=x_fwd,

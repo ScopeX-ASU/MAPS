@@ -322,6 +322,7 @@ class PredTrainer(object):
                 torch.ones_like(adjoint_field[:, -2:, ...]).to(self.device)
             ))/2
         crietrion_meter.update(regression_loss.item())
+        regression_loss = regression_loss * float(configs.criterion.weight)
         loss = regression_loss
         for name, config in aux_criterions.items():
             aux_criterion, weight = config

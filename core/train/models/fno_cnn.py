@@ -1,11 +1,3 @@
-"""
-Description:
-Author: Jiaqi Gu (jqgu@utexas.edu)
-Date: 2021-12-25 22:47:23
-LastEditors: Jiaqi Gu (jqgu@utexas.edu)
-LastEditTime: 2021-12-25 22:55:39
-"""
-
 from turtle import pos
 from typing import List, Optional, Tuple
 
@@ -19,6 +11,7 @@ from torch import nn
 from torch.functional import Tensor
 from torch.types import Device
 from neuralop.models import FNO
+from neuralop.layers.mlp import MLP
 from neuralop.layers.fno_block import FNOBlocks
 from neuralop.layers.spectral_convolution import SpectralConv
 import matplotlib.pyplot as plt
@@ -29,18 +22,14 @@ from core.utils import (
 import copy
 from mmengine.registry import MODELS
 
-# from .layers.local_fno import FNO
-from ceviche.constants import C_0
-
-# from .layers.fno_conv2d import FNOConv2d
 import torch.nn.functional as F
 from functools import lru_cache
 from pyutils.torch_train import set_torch_deterministic
 from core.train.utils import resize_to_targt_size
 from core.fdfd.fdfd import fdfd_ez
-from ceviche.constants import *
+from thirdparty.ceviche.ceviche.constants import *
 from einops import rearrange
-from .model_base import ModelBase, ConvBlock
+from .model_base import ModelBase, ConvBlock, LinearBlock
 
 __all__ = ["FNO2d"]
 
@@ -72,7 +61,6 @@ class LearnableFourierFeatures(nn.Module):
         pos_enc = rearrange(Y, "b l g d -> b l (g d)")
 
         return pos_enc
-
 
 class SpatialInterpolater(nn.Module):
     def __init__(self) -> None:
@@ -125,6 +113,10 @@ class LayerNorm(nn.Module):
                 )  # add one extra dimension to match conv2d but not 2d
             elif self.dim == 2:
                 x = self.weight[:, None, None] * x + self.bias[:, None, None]
+            elif self.dim == 1:
+                # print("this is the shape of x", x.shape)
+                # print("this is the shape of weight", self.weight.shape)
+                x = self.weight[None, :] * x + self.bias[None, :]
             return x
 
 
@@ -250,112 +242,112 @@ class FNO2d(ModelBase):
         )
         self.padding = 9  # pad the domain if input is non-periodic
 
-    def _build_eps_layers(self):
-        print("build eps branch called!!", flush=True)
-        self.eps_stem = nn.Sequential(
+    def _build_s_param_head(self):
+        s_param_head = nn.Sequential(
             ConvBlock(
-                1,
-                self.hidden_list[0] // 4,
-                kernel_size=7,
-                padding=3,
-                stride=1,
-                act_cfg=self.act_cfg,
-                device=self.device,
-            ),
-            ConvBlock(
-                self.hidden_list[0] // 4,
-                self.hidden_list[0] // 2,
-                kernel_size=7,
-                padding=3,
-                stride=2,
-                act_cfg=None,
-                device=self.device,
-            ),
-        )
-        stages = nn.ModuleList()
-        hidden_dim = self.hidden_list[-1] // 2
-        stages.append(
-            nn.Sequential(
-                *[
-                    ConvBlock(
-                        hidden_dim,
-                        hidden_dim,
-                        kernel_size=3,
-                        padding=1,
-                        stride=1,
-                        act_cfg=self.act_cfg,
-                        device=self.device,
-                    )
-                    for _ in range(2)
-                ]
-            )
-        )
-
-        hidden_dim = self.hidden_list[-1]
-        stages.append(
-            nn.Sequential(
-                ConvBlock(
-                    hidden_dim // 2,
-                    hidden_dim,
-                    kernel_size=5,
-                    padding=2,
-                    stride=2,
-                    act_cfg=self.act_cfg,
-                    device=self.device,
-                ),
-                *[
-                    ConvBlock(
-                        hidden_dim,
-                        hidden_dim,
-                        kernel_size=3,
-                        padding=1,
-                        stride=1,
-                        act_cfg=self.act_cfg,
-                        device=self.device,
-                    )
-                    for _ in range(2)
-                ],
-            )
-        )
-        self.eps_stages = stages
-
-    def _build_layers(self):
-        stem = nn.Sequential(
-            ConvBlock(
-                self.in_channels,
-                self.hidden_list[0] // 4,
-                kernel_size=3,
-                padding=1,
-                stride=1,
-                act_cfg=self.act_cfg,
-                device=self.device,
-            ),
-            ConvBlock(
-                self.hidden_list[0] // 4,
-                self.hidden_list[0] // 2,
+                128,
+                256,
                 kernel_size=5,
                 padding=2,
                 stride=2,
+                act_cfg=self.act_cfg,
+                norm_cfg=self.norm_cfg,
+                device=self.device,
+            ),
+            ConvBlock(
+                256,
+                256,
+                kernel_size=5,
+                padding=2,
+                stride=2,
+                act_cfg=self.act_cfg,
+                norm_cfg=self.norm_cfg,
+                device=self.device,
+            ),
+            ConvBlock(
+                256,
+                256,
+                kernel_size=5,
+                padding=2,
+                stride=2,
+                act_cfg=self.act_cfg,
+                norm_cfg=self.norm_cfg,
+                device=self.device,
+            ),
+            ConvBlock(
+                256,
+                256*2,
+                kernel_size=5,
+                padding=2,
+                stride=2,
+                act_cfg=self.act_cfg,
+                norm_cfg=self.norm_cfg,
+                device=self.device,
+            ),
+            ConvBlock(
+                256*2,
+                256*2,
+                kernel_size=5,
+                padding=2,
+                stride=2,
+                act_cfg=self.act_cfg,
+                norm_cfg=self.norm_cfg,
+                device=self.device,
+            ),
+            ConvBlock(
+                256*2,
+                256*2,
+                kernel_size=5,
+                padding=2,
+                stride=2,
+                act_cfg=self.act_cfg,
+                norm_cfg=self.norm_cfg,
+                device=self.device,
+            ),
+            nn.Flatten(),
+            LinearBlock(
+                12800,
+                128,
+                bias=True,
+                norm_cfg=self.norm_cfg,
+                act_cfg=self.act_cfg,
+                dropout=0.3,
+                device=self.device,
+            ),
+            LinearBlock(
+                128,
+                64,
+                bias=True,
+                norm_cfg=self.norm_cfg,
+                act_cfg=self.act_cfg,
+                dropout=0.3,
+                device=self.device,
+            ),
+            LinearBlock(
+                64,
+                2,
+                bias=True,
+                norm_cfg=None,
                 act_cfg=None,
+                dropout=0.3,
                 device=self.device,
             ),
         )
-        stages = nn.ModuleList()
-        hidden_dim = self.hidden_list[-1] // 2
-        stages.append(
-            FNO(
-                n_modes=(self.mode1 * 2, self.mode2 * 2),
-                in_channels=hidden_dim,
-                out_channels=hidden_dim,
-                lifting_channels=hidden_dim,
-                projection_channels=hidden_dim,
-                hidden_channels=hidden_dim,
-                n_layers=2,
-                norm=None,
-                factorization=None,
-            )
-            if not self.fno_block_only
-            else FNOBlocks(
+
+        self.s_param_head = s_param_head
+
+    def _build_layers(self):
+        hidden_dim = self.hidden_list[-1]
+        lifting = MLP(
+            in_channels=self.in_channels,
+            out_channels=hidden_dim,
+            hidden_channels=hidden_dim,
+            n_layers=1,
+            n_dim=2,
+        )
+        fno_blocks = nn.ModuleList()
+        fno_blocks.append(
+            FNOBlocks(
                 in_channels=hidden_dim,
                 out_channels=hidden_dim,
                 n_modes=(self.mode1 * 2, self.mode2 * 2),
@@ -380,81 +372,37 @@ class FNO2d(ModelBase):
                 decomposition_kwargs=dict(),
                 joint_factorization=False,
                 SpectralConv=SpectralConv,
-                n_layers=2,
-            )
-        )
-        hidden_dim = self.hidden_list[-1]
-        stages.append(
-            nn.Sequential(
-                ConvBlock(
-                    hidden_dim // 2,
-                    hidden_dim,
-                    kernel_size=5,
-                    padding=2,
-                    stride=2,
-                    act_cfg=None,
-                    device=self.device,
-                ),
-                FNO(
-                    n_modes=(self.mode1, self.mode2),
-                    in_channels=hidden_dim,
-                    out_channels=hidden_dim,
-                    lifting_channels=hidden_dim,
-                    projection_channels=hidden_dim,
-                    hidden_channels=hidden_dim,
-                    n_layers=2,
-                    norm=None,
-                    factorization=None,
-                )
-                if not self.fno_block_only
-                else FNOBlocks(
-                    in_channels=hidden_dim,
-                    out_channels=hidden_dim,
-                    n_modes=(self.mode1, self.mode2),
-                    output_scaling_factor=None,
-                    use_mlp=False,
-                    mlp_dropout=0,
-                    mlp_expansion=0.5,
-                    non_linearity=F.gelu,
-                    stabilizer=None,
-                    norm=None,
-                    preactivation=False,
-                    fno_skip="linear",
-                    mlp_skip="soft-gating",
-                    max_n_modes=None,
-                    fno_block_precision="full",
-                    rank=1.0,
-                    fft_norm="forward",
-                    fixed_rank_modes=False,
-                    implementation="factorized",
-                    separable=False,
-                    factorization=None,
-                    decomposition_kwargs=dict(),
-                    joint_factorization=False,
-                    SpectralConv=SpectralConv,
-                    n_layers=2,
-                ),
+                n_layers=4,
             )
         )
 
-        head = ConvBlock(
-            hidden_dim // 2 + hidden_dim,
-            self.out_channels,
-            kernel_size=1,
-            padding=0,
-            # norm_cfg=self.norm_cfg,
-            norm_cfg=None,
-            act_cfg=None,
-            device=self.device,
+        head = MLP(
+            in_channels=hidden_dim,
+            out_channels=self.out_channels,
+            hidden_channels=hidden_dim,
+            n_layers=2,
+            n_dim=2,
         )
 
-        return stem, stages, head
+        # head = ConvBlock(
+        #     hidden_dim // 2 + hidden_dim,
+        #     self.out_channels,
+        #     kernel_size=1,
+        #     padding=0,
+        #     # norm_cfg=self.norm_cfg,
+        #     norm_cfg=None,
+        #     act_cfg=None,
+        #     device=self.device,
+        # )
+
+        return lifting, fno_blocks, head
 
     def build_layers(self):
-        self.stem, self.stages, self.head = self._build_layers()
+        self.lifting, self.fno_blocks, self.head = self._build_layers()
         # print("if nn have eps branch", hasattr(self, "has_eps_branch"), flush=True)
-        if getattr(self, "has_eps_branch", False):
-            self._build_eps_layers()
+
+        if getattr(self, "s_param_only", False):
+            self._build_s_param_head()
 
         if self.aux_head:
             hidden_list = [self.kernel_list[self.aux_head_idx]] + self.hidden_list
@@ -622,12 +570,7 @@ class FNO2d(ModelBase):
         eps = eps.unsqueeze(1)  # B, 1, H, W
 
         ## eps_branch
-        if hasattr(self, "eps_stem"):
-            eps_0 = self.eps_stem(eps)
-            eps_1 = self.eps_stages[0](eps_0)
-            eps_2 = self.eps_stages[1](eps_1)
-        else:
-            eps_1 = eps_2 = eps_0 = None
+        eps_1 = eps_2 = eps_0 = None
 
         if self.fourier_feature == "learnable":
             H = eps.shape[-2]
@@ -649,29 +592,17 @@ class FNO2d(ModelBase):
 
         x_fwd = torch.cat((eps_enc_fwd, incident_field_fwd), dim=1)
 
-        x_fwd = self.stem(x_fwd)  # conv2d downsample
+        x_fwd = self.lifting(x_fwd)  # conv2d downsample
 
         if eps_0 is not None:
             x_fwd = x_fwd * eps_0
 
-        x1_fwd = self.stages[0](x_fwd)  # fno block
+        x1_fwd = self.fno_blocks[0](x_fwd)  # fno block
 
-        if eps_1 is not None:
-            x1_fwd = x1_fwd * eps_1
-
-        x2_fwd = self.stages[1](x1_fwd)  # sequential conv2d downsample + fno block
-
-        if eps_2 is not None:
-            x2_fwd = x2_fwd * eps_2
-
-        x1_fwd = resize_to_targt_size(x1_fwd, (src.shape[-2], src.shape[-1]))
-        if len(x1_fwd.shape) == 3:
-            x1_fwd = x1_fwd.unsqueeze(0)
-        x2_fwd = resize_to_targt_size(x2_fwd, (src.shape[-2], src.shape[-1]))
-        if len(x2_fwd.shape) == 3:
-            x2_fwd = x2_fwd.unsqueeze(0)
-        x_fwd = torch.cat((x1_fwd, x2_fwd), dim=1)
-        forward_Ez_field = self.head(x_fwd)  # 1x1 conv
+        if hasattr(self, "s_param_head"):
+            s_param = self.s_param_head(x1_fwd) * 1e-8
+            return s_param
+        forward_Ez_field = self.head(x1_fwd)  # 1x1 conv
         if len(forward_Ez_field.shape) == 3:
             forward_Ez_field = forward_Ez_field.unsqueeze(0)
 

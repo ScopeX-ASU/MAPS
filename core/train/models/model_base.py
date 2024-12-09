@@ -9,7 +9,7 @@ from torch import Tensor
 from torch.types import Device, _size
 from pyutils.torch_train import set_torch_deterministic
 from traitlets import default
-
+import copy
 __all__ = [
     "LinearBlock",
     "ConvBlock",
@@ -71,7 +71,9 @@ class LinearBlock(nn.Module):
             bias=bias,
         )
         if norm_cfg is not None:
-            self.norm = build_norm_layer(norm_cfg, out_features)
+            normalization_cfg = copy.deepcopy(norm_cfg)
+            normalization_cfg["dim"] = 1
+            _, self.norm = build_norm_layer(normalization_cfg, out_features)
         else:
             self.norm = None
 
