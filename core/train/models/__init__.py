@@ -10,7 +10,7 @@ only support fno_cnn for now
 '''
 from .layers import *
 # from .simplecnn import *
-# from .neurolight_cnn import *
+from .neurolight_cnn import *
 from .fno_cnn import *
 from .ffno_cnn import *
 from .unet import *

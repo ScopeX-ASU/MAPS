@@ -226,7 +226,7 @@ class LeveSetParameterization(BaseParametrization):
     ):
         if init_method == "random":
             nn.init.normal_(weight_dict["ls_knots"], mean=0, std=0.01)
-            weight_dict["ls_knots"].data += 0.05 # don't really understand why add 0.05 here, if that is the case, the init will become ones instead of random
+            # weight_dict["ls_knots"].data += 0.05 # don't really understand why add 0.05 here, if that is the case, the init will become ones instead of random
         elif init_method == "rectangle":
             weight = weight_dict["ls_knots"]
             weight.data.fill_(-0.2)

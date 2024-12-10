@@ -16,11 +16,10 @@ from scipy.ndimage import zoom
 from torch import Tensor
 from torch.types import Device
 from torch_sparse import spmm
-from core.utils import get_flux, get_eigenmode_coefficients, Si_eps, SiO2_eps
+from core.utils import get_flux, get_eigenmode_coefficients, Si_eps, SiO2_eps, Slice
 import math
 
 __all__ = [
-    "Slice",
     "get_grid",
     "apply_regions_gpu",
     "AdjointGradient",
@@ -38,9 +37,6 @@ __all__ = [
     "insert_mode",
     "ObjectiveFunc",
 ]
-
-
-Slice = collections.namedtuple("Slice", "x y")
 
 def get_temp_related_eps(eps, temp, wl):
     # no matter what the eps is, this will work

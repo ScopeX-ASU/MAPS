@@ -18,24 +18,25 @@ import scipy.sparse as sp
 import torch
 from ceviche import fdfd_ez as ceviche_fdfd_ez
 from ceviche.constants import *
-from pyutils.general import print_stat
-from pyutils.general import TimerCtx
+from pyutils.general import TimerCtx, print_stat
+from torch_sparse import spspmm
+
+from core.fdfd.fdfd import fdfd_ez
+from core.fdfd.utils import torch_sparse_to_scipy_sparse
 from core.invdes.models import (
     IsolatorOptimization,
     MetaCouplerOptimization,
+    MetaLensOptimization,
     MetaMirrorOptimization,
 )
 from core.invdes.models.base_optimization import (
     BaseOptimization,
     DefaultSimulationConfig,
 )
-from core.fdfd.fdfd import fdfd_ez
-from core.fdfd.utils import torch_sparse_to_scipy_sparse
-from core.invdes.models.layers import Isolator, MetaCoupler, MetaMirror
+from core.invdes.models.layers import Isolator, MetaCoupler, MetaLens, MetaMirror
 from core.invdes.models.layers.device_base import N_Ports, Si_eps
 from core.invdes.models.layers.utils import plot_eps_field
 from core.utils import set_torch_deterministic
-from torch_sparse import spspmm
 
 
 def test_device_base():
@@ -178,7 +179,8 @@ def test_metacoupler_opt():
             use_autodiff=False,
             neural_solver=None,
             border_width=[0, 0, 6, 6],
-            resolution=20,
+            PML=[1, 1],
+            resolution=30,
             plot_root="./figs/metacoupler_subpixel",
             # plot_root="./figs/metacoupler_periodic",
         )
@@ -419,10 +421,77 @@ def test_fdtd_ez_torch():
     print("C error", C - c_C)
 
 
+def test_metalens_opt():
+    set_torch_deterministic(seed=59)
+    sim_cfg = DefaultSimulationConfig()
+    sim_cfg.update(
+        dict(
+            # solver="ceviche",
+            solver="ceviche_torch",
+            numerical_solver="solve_direct",
+            use_autodiff=False,
+            neural_solver=None,
+            border_width=[0, 0, 1.5, 1.5],
+            PML=[0.8, 0.8],
+            resolution=100,
+            wl_cen=0.832,
+            plot_root="./figs/metalens",
+        )
+    )
+
+    device = MetaLens(
+        sim_cfg=sim_cfg,
+        device="cuda:0",
+        port_len=(1.5, 4),
+        substrate_depth=0.75,
+        ridge_height_max=0.75
+    )
+    hr_device = device.copy(resolution=50)
+    print(device)
+    opt = MetaLensOptimization(
+        device=device,
+        hr_device=hr_device,
+        sim_cfg=sim_cfg,
+    )
+    print(opt)
+
+    optimizer = torch.optim.Adam(opt.parameters(), lr=0.02)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=70, eta_min=0.0002
+    )
+
+    for step in range(100):
+        with TimerCtx() as t:
+            optimizer.zero_grad()
+            results = opt.forward(sharpness=1 + 2 * step)
+            opt.plot(
+                eps_map=opt._eps_map,
+                obj=results["breakdown"]["fwd_trans"]["value"],
+                plot_filename="metalens_opt_step_{}_fwd.png".format(step),
+                field_key=("in_port_1", 0.832, 1),
+                field_component="Ez",
+                in_port_name="in_port_1",
+            )
+            print(f"Step {step}:", end=" ")
+            for k, obj in results["breakdown"].items():
+                print(f"{k}: {obj['value']:.3f}", end=", ")
+            print()
+            (-results["obj"]).backward()
+            # for p in opt.parameters():
+            #     print(p.grad)
+            # if step % 5 == 0:
+            #     opt.dump_data(f"./data/fdfd/metacoupler/test2_metacoupler_opt_step_{step}.h5")
+            # print_stat(list(opt.parameters())[0], f"step {step}: grad: ")
+            optimizer.step()
+            scheduler.step()
+        print(f"Step {step} took {t.interval:.3f} s")
+
+
 if __name__ == "__main__":
     # test_device_base()
     # test_metamirror()
     # test_metamirror_opt()
-    test_metacoupler_opt()
+    # test_metacoupler_opt()
+    test_metalens_opt()
     # test_isolator_opt()
     # test_fdtd_ez_torch()

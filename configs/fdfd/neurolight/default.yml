@@ -4,6 +4,7 @@ dataset:
   test_ratio: 0.1
   train_valid_split_ratio: [0.9, 0.1]
   num_workers: 4
+  shuffle: True
 
 criterion:
   name: distanceLoss
@@ -15,6 +16,18 @@ aux_criterion:
   tv_loss:
     weight: 0.0
     norm: False
+  maxwell_residual_loss:
+    weight: 0.0
+    using_ALM: False
+
+log_criterion:
+  curl_loss:
+    weight: 0.0
+  tv_loss:
+    weight: 0.0
+    norm: False
+  maxwell_residual_loss:
+    using_ALM: False
 
 optimizer:
   name: adam
@@ -48,7 +61,7 @@ checkpoint:
   no_linear: 0
 
 model:
-  name: "simpleCNN"
+  type: "NeurOLight2d"
 
 debug:
   verbose: 1
@@ -60,4 +73,5 @@ plot:
   interval: 10
   root: plot
   dir_name: default
+
 

@@ -1,8 +1,5 @@
 import numpy as np
 import torch
-from thirdparty.ceviche.ceviche import fdfd_ez as fdfd_ez_ceviche
-from thirdparty.ceviche.ceviche.constants import *
-from thirdparty.ceviche.ceviche.derivatives import create_sfactor
 from torch import Tensor, nn
 from torch_sparse import spmm
 
@@ -10,6 +7,9 @@ from core.utils import (
     Slice,
     get_flux,
 )
+from thirdparty.ceviche.ceviche import fdfd_ez as fdfd_ez_ceviche
+from thirdparty.ceviche.ceviche.constants import *
+from thirdparty.ceviche.ceviche.derivatives import create_sfactor
 
 from .derivatives import compute_derivative_matrices
 from .preconditioner import create_symmetrizer
@@ -286,7 +286,7 @@ class fdfd_ez(fdfd_ez_ceviche):
             ), "neural_solver is useless if numerical_solver is solve_direct"
         self.solver = SparseSolveTorch(
             shape=eps_r.shape,
-            neural_solver=self.neural_solver, 
+            neural_solver=self.neural_solver,
             numerical_solver=self.numerical_solver,
             use_autodiff=use_autodiff,
         )
@@ -316,7 +316,7 @@ class fdfd_ez(fdfd_ez_ceviche):
         self.numerical_solver = numerical_solver
         self.solver = SparseSolveTorch(
             shape=self.shape,
-            neural_solver=self.neural_solver, 
+            neural_solver=self.neural_solver,
             numerical_solver=self.numerical_solver,
             use_autodiff=use_autodiff,
         ).set_shape(self.shape)
@@ -328,7 +328,7 @@ class fdfd_ez(fdfd_ez_ceviche):
         # Create the sfactor in each direction and for 'f' and 'b'
         sxb = create_sfactor("b", self.omega, self.dL, Nx, Nx_pml)
         syb = create_sfactor("b", self.omega, self.dL, Ny, Ny_pml)
-   
+
         [Sxb, Syb] = np.meshgrid(sxb, syb, indexing="ij")
         self.Pl, self.Pr = create_symmetrizer(Sxb, Syb)
 
@@ -347,9 +347,13 @@ class fdfd_ez(fdfd_ez_ceviche):
 
         # print(self.indices_Dyb)
         if not hasattr(self, "indices_Dyb_torch"):
-            self.indices_Dyb_torch = torch.from_numpy(self.indices_Dyb).to(Ez_vec.device).long()
-            self.entries_Dyb_torch = torch.from_numpy(self.entries_Dyb).to(Ez_vec.device)
-        
+            self.indices_Dyb_torch = (
+                torch.from_numpy(self.indices_Dyb).to(Ez_vec.device).long()
+            )
+            self.entries_Dyb_torch = torch.from_numpy(self.entries_Dyb).to(
+                Ez_vec.device
+            )
+
         if len(Ez_vec.shape) == 1:
             Ez = Ez_vec[:, None]
         else:
@@ -370,8 +374,6 @@ class fdfd_ez(fdfd_ez_ceviche):
         )
 
         return Hx.t().reshape(Ez_vec.shape)
-        
-
 
     def _Ez_to_Hy(self, Ez_vec: Tensor) -> Tensor:
         # device = Ez_vec.device
@@ -383,8 +385,12 @@ class fdfd_ez(fdfd_ez_ceviche):
         #     * self.sp_mult_Dxb(Ez_vec.data.cpu().numpy())
         # ).to(device)
         if not hasattr(self, "indices_Dxb_torch"):
-            self.indices_Dxb_torch = torch.from_numpy(self.indices_Dxb).to(Ez_vec.device).long()
-            self.entries_Dxb_torch = torch.from_numpy(self.entries_Dxb).to(Ez_vec.device)
+            self.indices_Dxb_torch = (
+                torch.from_numpy(self.indices_Dxb).to(Ez_vec.device).long()
+            )
+            self.entries_Dxb_torch = torch.from_numpy(self.entries_Dxb).to(
+                Ez_vec.device
+            )
 
         if len(Ez_vec.shape) == 1:
             Ez = Ez_vec[:, None]
@@ -515,7 +521,15 @@ class fdfd_ez(fdfd_ez_ceviche):
         eps_diag = -EPSILON_0 * self.omega**2 * eps_vec
         # Ez_vec = sparse_solve_torch(entries_a, indices_a, eps_diag, b_vec)
         Ez_vec = self.solver(
-            entries_a, indices_a, eps_diag, self.omega, b_vec, port_name, mode, self.Pl, self.Pr
+            entries_a,
+            indices_a,
+            eps_diag,
+            self.omega,
+            b_vec,
+            port_name,
+            mode,
+            self.Pl,
+            self.Pr,
         )
         Hx_vec, Hy_vec = self._Ez_to_Hx_Hy(Ez_vec)
         return Hx_vec, Hy_vec, Ez_vec
