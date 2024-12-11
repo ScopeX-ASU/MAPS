@@ -371,7 +371,7 @@ class N_Ports(BaseDevice):
         if direction is None:
             direction = "x" if size[0] == 0 else "y"
 
-        if direction == "x":
+        if direction[0] == "x":
             monitor_center = [
                 int(round((c + offset / 2) / self.grid_step))
                 for c, offset in zip(center, self.cell_size)
@@ -384,7 +384,7 @@ class N_Ports(BaseDevice):
                     monitor_center[1] + monitor_half_width,
                 ),
             )
-        elif direction == "y":
+        elif direction[0] == "y":
             monitor_center = [
                 int(round((c + offset / 2) / self.grid_step))
                 for c, offset in zip(center, self.cell_size)
@@ -442,6 +442,80 @@ class N_Ports(BaseDevice):
             slice_name, monitor_center, monitor_size, direction
         )
 
+    def build_farfield_region(
+        self,
+        region_name: str = "farfield",
+        direction: str = "x",
+        extension_range: Tuple[float] = (3, 10),
+    ):
+        ## extend the farfield from range[0] to range[1] um along the direction
+        if direction == "x":
+            center = (sum(extension_range) / 2, 0)
+            size = (
+                extension_range[1] - extension_range[0],
+                (self.Ny - 0.5) * self.grid_step,
+            )
+            region_center = [
+                int(round((c + offset / 2) / self.grid_step))
+                for c, offset in zip(center, self.cell_size)
+            ]
+            half_width_x = int(round(size[0] / 2 / self.grid_step))
+            half_width_y = int(round(size[1] / 2 / self.grid_step))
+            xs = np.arange(
+                region_center[0] - half_width_x, region_center[0] + half_width_x
+            )
+            ys = np.arange(self.Ny)
+
+        elif direction == "y":
+            center = (0, sum(extension_range) / 2)
+            size = (
+                (self.Nx - 0.5) * self.grid_step,
+                extension_range[1] - extension_range[0],
+            )
+            region_center = [
+                int(round((c + offset / 2) / self.grid_step))
+                for c, offset in zip(center, self.cell_size)
+            ]
+
+            half_width_x = int(round(size[0] / 2 / self.grid_step))
+            half_width_y = int(round(size[1] / 2 / self.grid_step))
+            xs = np.arange(self.Nx)
+            ys = np.arange(
+                region_center[1] - half_width_y,
+                region_center[1] + half_width_y,
+            )
+        else:
+            raise ValueError(f"Direction {direction} not supported")
+
+        region = Slice(
+            x=xs[:, None],
+            y=ys[None, :],
+        )
+
+        # center of pixel's physical locations (um)
+        xs = (-(self.Nx - 1) / 2 + region.x) * self.grid_step
+        ys = (-(self.Ny - 1) / 2 + region.y) * self.grid_step
+        xs, ys = np.meshgrid(xs, ys, indexing="ij")
+        self.port_monitor_slices[region_name] = region
+        self.port_monitor_slices_info[region_name] = dict(
+            center=center,
+            size=size,
+            xs=xs,
+            ys=ys,
+            direction=direction,
+        )
+
+        return region
+
+    def build_near2far_slice(
+        self,
+        slice_name: str = "nearfield_1",
+        center: Tuple[float, float] = (0, 0),
+        size: Tuple[float, float] = (0, 1),
+        direction="x+",
+    ):
+        return self.add_monitor_slice(slice_name, center, size, direction)
+
     def build_radiation_monitor(
         self, monitor_name: str = "rad_monitor", distance_to_PML=[0.2, 0.2]
     ):
@@ -495,6 +569,7 @@ class N_Ports(BaseDevice):
                     omega, dl, slice.x, slice.y, eps, m=source_mode
                 )
                 # mode *= 0
+                # mode[100,150:250]=1
                 # mode[40,35:-35] = 1
                 # mode[39,35:-35] = np.exp(-1j * 2 * np.pi / wl_cen * grid_step - 1j * np.pi)
                 if power_scales is not None:

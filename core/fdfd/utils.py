@@ -155,7 +155,7 @@ def sparse_mv(A, x):
     return values.squeeze(-1)
 
 
-def hankel(n: int, x: Tensor):
+def hankel(n: int, x: Tensor, kind=1):
     ## hankel function J + iY
     # dtype = x.dtype
     # x = x.to(torch.float32)
@@ -170,6 +170,8 @@ def hankel(n: int, x: Tensor):
         ).to(x.device)
     else:
         raise ValueError("n must be a non-negative integer")
+    if kind == 2:
+        res = res.conj()
     return res
 
 
@@ -190,6 +192,7 @@ def green2d(
     # x0: [s, 2] source near-field points, s near-field source points, 2 dimension, x and y
     # c0: field component direction X,Y,Z -> 0,1,2
     # f0: [bs, s, nf] a batch of DFT fields on near-field monitors, e.g., typically f0 is Ez fields
+    # norm_surf: [2] normal surface vector of near field monitor
 
     # [n, 1, 2] - [1, s, 2] = [n, s, 2]
     rhat = x[..., None, :] - x0[None, ...]  # distance vector # [n, s, 2]
@@ -313,6 +316,7 @@ def get_farfields(
     far_fields = {"Ex": 0, "Ey": 0, "Ez": 0, "Hx": 0, "Hy": 0, "Hz": 0}
     for name, nearfield_region in nearfield_regions.items():
         nearfield_slice = nearfield_region["slice"]
+        direction = nearfield_region["weight"] # +1 or -1, similar to meep NearRegion
         f0 = fields[..., *nearfield_slice, :]  # [bs, s, nf]
         center = nearfield_region["center"]
         size = nearfield_region["size"]
@@ -320,7 +324,7 @@ def get_farfields(
             n_src_points = nearfield_slice[1].shape[0]
 
             xs_y = torch.linspace(
-                center[1] - size[1] / 2, center[1] + size[1] / 2, n_src_points
+                center[1] - size[1] / 2, center[1] + size[1] / 2, n_src_points, device=fields.device
             )
             xs_x = torch.empty_like(xs_y).fill_(center[0])
         else:
