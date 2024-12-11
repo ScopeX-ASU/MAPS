@@ -116,7 +116,7 @@ def test_near2far():
             mu=MU_0,
             dL=device.grid_step,
             component="Ez",
-            sign="+",
+            decimation_factor=10,
         )["Ez"][0, ..., 0]
 
     print(Ez_farfield_2.abs())
@@ -171,7 +171,7 @@ def test_near2far():
             mu=MU_0,
             dL=device.grid_step,
             component="Ez",
-            sign="+",
+            decimation_factor=4,
         )["Ez"][0, ..., 0]
 
     farfield_region = device.port_monitor_slices["farfield_region"]

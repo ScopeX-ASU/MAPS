@@ -142,7 +142,7 @@ def get_farfields_GreenFunction(
     dL: float,  # grid size , um
     component: str = "Ez",
     farfield_slice_info: dict = None,
-    sign: str = "+",  # sign of the nearfield monitor direction, "+" or "-"
+    decimation_factor: int = 1,  # subsampling rate on near field source
 ):
     """
     https://github.com/demroz/pinn-ms/blob/main/edofOpt/computeFarfields.py
@@ -161,8 +161,8 @@ def get_farfields_GreenFunction(
             far_xs = np.array(far_xs.item())
         if not isinstance(far_ys, np.ndarray):
             far_ys = np.array(far_ys.item())
-        far_xs = torch.from_numpy(far_xs).to(Ez.device)
-        far_ys = torch.from_numpy(far_ys).to(Ez.device)
+        far_xs = torch.from_numpy(far_xs).to(Ez.device).float()
+        far_ys = torch.from_numpy(far_ys).to(Ez.device).float()
         if len(far_xs.shape) == 0:  # vertical farfield slice
             far_xs = far_xs.reshape([1]).repeat(len(far_ys))
             # print(far_xs, far_ys)
@@ -189,9 +189,9 @@ def get_farfields_GreenFunction(
         if not isinstance(near_ys, np.ndarray):
             near_ys = np.array(near_ys.item())
 
-        xs = torch.from_numpy(near_xs).to(Ez.device)
-        ys = torch.from_numpy(near_ys).to(Ez.device)
-        direction = nearfield_slice_info["direction"] + sign  # e.g., x+, x-, y+, y-
+        xs = torch.from_numpy(near_xs).to(Ez.device).float()
+        ys = torch.from_numpy(near_ys).to(Ez.device).float()
+        direction = nearfield_slice_info["direction"]  # e.g., x+, x-, y+, y-
         if len(xs.shape) == 0:  # vertical monitor
             xs = xs.reshape([1]).expand_as(ys)
             xs = torch.stack((xs, ys), dim=-1)  # [num_src_points, 2]
@@ -210,6 +210,7 @@ def get_farfields_GreenFunction(
             Hy=hy,
             dL=dL,
             near_monitor_direction=direction,
+            decimation_factor=decimation_factor,
         )
         far_fields["Ez"] += ez.reshape(-1, *farfield_shape, len(freqs))  # [bs, n, nf]
         far_fields["Hx"] += hx.reshape(-1, *farfield_shape, len(freqs))  # [bs, n, nf]
@@ -229,7 +230,15 @@ def GreenFunctionProjection(
     Hy: Tensor,  # nearfield fields, [bs, s, nf] complex
     dL: float,  # grid size, um, used in nearfield integral
     near_monitor_direction: str = "x+",
+    decimation_factor: int = 1,  # subsampling rate on near field source
 ):
+    if decimation_factor > 1:
+        Ez = Ez[:, decimation_factor // 2 :: decimation_factor, :]
+        Hx = Hx[:, decimation_factor // 2 :: decimation_factor, :]
+        Hy = Hy[:, decimation_factor // 2 :: decimation_factor, :]
+        x0 = x0[decimation_factor // 2 :: decimation_factor, :]
+        dL = dL * decimation_factor
+
     dtype = Ez.dtype
     freqs = freqs.float()
     x0 = x0.float()
@@ -285,7 +294,6 @@ def GreenFunctionProjection(
     r_obs, phi_obs, theta_obs = car_2_sph(
         x=r[..., 0:1], y=r[..., 1:2], z=None
     )  # [n, s, 1]
-    # r_obs = r_obs.clamp(min=0.2) # to avoid too close to the source point
 
     # angle terms
     sin_theta = 1  # sin(theta_obs), theta = 90
@@ -398,9 +406,9 @@ def GreenFunctionProjection(
         slice1[dim] = slice(1, None)
         slice2[dim] = slice(None, -1)
         return torch.sum(integrand, dim=dim) * dx  # more efficient for uniform grid
-        return torch.sum(
-            (integrand[tuple(slice1)] + integrand[tuple(slice2)]), dim=dim
-        ) * (dx / 2)
+        # return torch.sum(
+        #     (integrand[tuple(slice1)] + integrand[tuple(slice2)]), dim=dim
+        # ) * (dx / 2)
 
     e_z = trapezoid_1d(e_z_integrand, dx=dL, dim=-2).to(dtype)
     h_x = trapezoid_1d(h_x_integrand, dx=dL, dim=-2).to(dtype)
