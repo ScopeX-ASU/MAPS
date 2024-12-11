@@ -187,21 +187,83 @@ def etching(xs, sharpness, eta, binary_projection):
     outs += [_etching(x, sharpness, eta, binary_projection) for x in xs[1:]]
     return outs
 
-def _blur(x, mfs, res):
-    # in this case, we only consider the nominal corner for etching
-    mfs_px = int(mfs * res) + 1 # ceiling the mfs to the nearest pixel
+
+def _blur(x, mfs, res, dim="xy"):
+    """
+    Apply MFS-based blur to a 2D tensor along specified dimension(s).
+
+    Parameters:
+    - x: 2D tensor to blur.
+    - mfs: Minimum feature size in physical units.
+    - res: Resolution to convert mfs into pixels.
+    - dim: Dimension to blur ("x", "y", or "xy").
+
+    Returns:
+    - Blurred 2D tensor.
+    """
+    mfs_px = int(mfs * res) + 1  # Convert mfs to pixels and round up
     if mfs_px % 2 == 0:
-        mfs_px += 1 # ensure mfs is odd
-    # build the kernel
-    mfs_kernel = 1 - torch.abs(torch.linspace(-1, 1, steps=mfs_px, device=x.device))
-    mfs_kernel = mfs_kernel / mfs_kernel.sum() # normalize the kernel
-    # x is a 2D tensor
-    # convolve the kernel with the x along the second dimension
-    x = F.conv1d(x.unsqueeze(1), mfs_kernel.unsqueeze(0).unsqueeze(0), padding=mfs_px//2).squeeze(1)
+        mfs_px += 1  # Ensure kernel size is odd
+
+    # Build the 1D blur kernel
+    mfs_kernel_1d = 1 - torch.abs(torch.linspace(-1, 1, steps=mfs_px, device=x.device))
+    mfs_kernel_1d = mfs_kernel_1d / mfs_kernel_1d.sum()  # Normalize the kernel
+
+    if dim == "x":
+        # Blur along the "x" (columns)
+        x = F.conv1d(
+            x.unsqueeze(1),  # Add a channel dimension for conv1d
+            mfs_kernel_1d.unsqueeze(0).unsqueeze(0),  # Shape (1, 1, kernel_size)
+            padding=mfs_px // 2,
+        ).squeeze(1)  # Remove the channel dimension
+    elif dim == "y":
+        # Blur along the "y" (rows)
+        x = (
+            F.conv1d(
+                x.t().unsqueeze(1),  # Transpose to blur rows as columns
+                mfs_kernel_1d.unsqueeze(0).unsqueeze(0),  # Shape (1, 1, kernel_size)
+                padding=mfs_px // 2,
+            )
+            .squeeze(1)
+            .t()
+        )  # Undo the transpose
+    elif dim == "xy":
+        # Build the 2D blur kernel from the 1D kernel
+        mfs_kernel_2d = torch.outer(mfs_kernel_1d, mfs_kernel_1d)
+        mfs_kernel_2d = mfs_kernel_2d / mfs_kernel_2d.sum()  # Normalize the 2D kernel
+
+        # Blur using 2D convolution
+        x = (
+            F.conv2d(
+                x.unsqueeze(0).unsqueeze(0),  # Add batch and channel dimensions
+                mfs_kernel_2d.unsqueeze(0).unsqueeze(
+                    0
+                ),  # Shape (1, 1, kernel_size, kernel_size)
+                padding=mfs_px // 2,
+            )
+            .squeeze(0)
+            .squeeze(0)
+        )  # Remove batch and channel dimensions
+    else:
+        raise ValueError(f"Invalid dim argument: {dim}. Must be 'x', 'y', or 'xy'.")
+
     return x
 
-def blur(xs, mfs, resolutions):
-    xs = [_blur(x, mfs, res) for x, res in zip(xs, resolutions)]
+
+def blur(xs, mfs, resolutions, dim="xy"):
+    """
+    Apply MFS-based blur to a list of 2D tensors along specified dimension(s).
+
+    Parameters:
+    - xs: List of 2D tensors to blur.
+    - mfs: Minimum feature size in physical units.
+    - resolutions: Resolutions to convert mfs into pixels.
+    - dim: Dimension to blur ("x", "y", or "xy").
+
+    Returns:
+    - List of blurred 2D tensors.
+    """
+    xs = [_blur(x, mfs, res, dim) for x, res in zip(xs, resolutions)]
     return xs
 
 
@@ -280,11 +342,17 @@ class BaseParametrization(nn.Module):
         ### return: permittivity that you would like to dumpout as final solution, typically should be high resolution
         raise NotImplementedError
 
-    def permittivity_transform(self, hr_permittivity, permittivity, cfgs):
+    def permittivity_transform(self, hr_permittivity, permittivity, cfgs, sharpness):
         transform_cfg_list = cfgs["transform"]
 
         for transform_cfg in transform_cfg_list:
             transform_type = transform_cfg["type"]
+            if transform_type == "binarize":
+                hr_permittivity = self.binary_projection(
+                    hr_permittivity, sharpness, self.eta
+                )
+                permittivity = self.binary_projection(permittivity, sharpness, self.eta)
+                continue
             cfg = deepcopy(transform_cfg)
             del cfg["type"]
             if "device" in cfg.keys():
@@ -357,7 +425,7 @@ class BaseParametrization(nn.Module):
         ## after this, permittivity will be downsampled to match the sim_cfg resolution, e.g., res=50 or 100
         ## hr_permittivity will maintain the high resolution
         hr_permittivity, permittivity = self.permittivity_transform(
-            hr_permittivity, permittivity, self.cfgs
+            hr_permittivity, permittivity, self.cfgs, sharpness
         )
 
         ## we need to denormalize the permittivity to the real permittivity values

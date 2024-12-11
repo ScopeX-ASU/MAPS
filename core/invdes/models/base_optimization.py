@@ -8,24 +8,23 @@ FilePath: /Metasurface-Opt/core/models/base_optimization.py
 import copy
 import os
 from typing import List, Tuple
-import matplotlib.pyplot as plt
+
+import gdsfactory as gf
+import h5py
 import numpy as np
 import torch
+import yaml
+from autograd.numpy.numpy_boxes import ArrayBox
 from ceviche.constants import C_0
 from pyutils.config import Config
 from pyutils.general import logger
 from torch import Tensor, nn
 from torch.types import Device
-from autograd.numpy.numpy_boxes import ArrayBox
+
 from .layers.device_base import N_Ports
 from .layers.fom_layer import SimulatedFoM
 from .layers.parametrization import parametrization_builder
 from .layers.utils import ObjectiveFunc, plot_eps_field
-from .utils import nparray_as_real
-import h5py
-import yaml
-from copy import deepcopy
-from core.utils import print_stat
 
 __all__ = [
     "DefaultSimulationConfig",
@@ -153,7 +152,9 @@ class BaseOptimization(nn.Module):
 
         ### need to run normalization run
         device.norm_run()
-        self.norm_run_profiles = device.port_sources_dict # {input_slice_name: source_profiles 2d array, ...}
+        self.norm_run_profiles = (
+            device.port_sources_dict
+        )  # {input_slice_name: source_profiles 2d array, ...}
 
         ### pre-build objectives
         self.build_objective(
@@ -295,9 +296,7 @@ class BaseOptimization(nn.Module):
         permittivity = permittivity_list[0]
 
         if need_item == "need_value":
-            total_value = self.objective(
-                permittivity, mode="forward"
-            ) 
+            total_value = self.objective(permittivity, mode="forward")
         elif need_item == "need_gradient":
             ### this is explicitly called for autograd, not needed for torch autodiff
             total_value = self.objective(
@@ -316,7 +315,7 @@ class BaseOptimization(nn.Module):
         plot_filename,
         eps_map=None,
         obj=None,
-        field_key: Tuple = ("in_port_1", 1.55, 1),
+        field_key: Tuple = ("in_port_1", 1.55, 1, 300),
         field_component: str = "Ez",
         in_port_name: str = "in_port_1",
         exclude_port_names: List[str] = [],
@@ -352,27 +351,51 @@ class BaseOptimization(nn.Module):
             zoom_eps_factor=2,
         )
 
+    def dump_gds_files(self, filename):
+        if isinstance(self._eps_map, Tensor) or isinstance(self._eps_map, np.ndarray):
+            max_permittivity = self._eps_map.max().item()
+            min_permittivity = self._eps_map.min().item()
+        elif isinstance(self._eps_map, ArrayBox):
+            max_permittivity = self._eps_map._value.max()
+            min_permittivity = self._eps_map._value.min()
+        else:
+            raise ValueError(f"Unknown type of eps_map: {type(self._eps_map)}")
+        final_design_eps = self._eps_map.detach().cpu().numpy()
+
+        eps_conponent = gf.read.from_np(
+            final_design_eps,
+            nm_per_pixel=10,
+            threshold=(max_permittivity + min_permittivity) / 2,
+        )
+
+        # Write the GDS file
+        eps_conponent.write_gds(
+            gdspath=os.path.join(self.sim_cfg["plot_root"], filename)
+        )
+
     def dump_data(self, filename_h5, filename_yml, step):
-        '''
+        """
         data needed to be dumped:
             1. eps_map (denormalized), downsample to different resolution
             2. E field, H field, corrresponding to different resolution eps_map
             3. Source_profile
             4. Scattering matrix
-            5. gradient 
-        '''
+            5. gradient
+        """
         # print("grad fn of self._eps_map", self._eps_map.grad_fn)
         # print("grad of self._eps_map", self._eps_map.grad)
         complex_type = [torch.complex64, torch.complex32, torch.complex128]
         with torch.no_grad():
-            with h5py.File(filename_h5, 'w') as f:
-                f.create_dataset('eps_map', data=self._eps_map.detach().cpu().numpy()) # 2d numpy array
+            with h5py.File(filename_h5, "w") as f:
+                f.create_dataset(
+                    "eps_map", data=self._eps_map.detach().cpu().numpy()
+                )  # 2d numpy array
                 for slice_name, slice in self.device.port_monitor_slices.items():
                     if isinstance(slice, np.ndarray):
-                        f.create_dataset(f'port_slice-{slice_name}', data=slice)
+                        f.create_dataset(f"port_slice-{slice_name}", data=slice)
                     else:
-                        f.create_dataset(f'port_slice-{slice_name}_x', data=slice.x)
-                        f.create_dataset(f'port_slice-{slice_name}_y', data=slice.y)
+                        f.create_dataset(f"port_slice-{slice_name}_x", data=slice.x)
+                        f.create_dataset(f"port_slice-{slice_name}_y", data=slice.y)
                 for port_name, source_profile in self.norm_run_profiles.items():
                     for (wl, mode), profile in source_profile.items():
                         if isinstance(profile[0], np.ndarray):
@@ -391,9 +414,16 @@ class BaseOptimization(nn.Module):
                             src_mode = profile[0]._value
                             ht_m = profile[1]._value
                             et_m = profile[2]._value
-                        f.create_dataset(f'source_profile-wl-{wl}-port-{port_name}-mode-{mode}', data=src_mode)
-                        f.create_dataset(f'ht_m-wl-{wl}-port-{port_name}-mode-{mode}', data=ht_m)
-                        f.create_dataset(f'et_m-wl-{wl}-port-{port_name}-mode-{mode}', data=et_m)
+                        f.create_dataset(
+                            f"source_profile-wl-{wl}-port-{port_name}-mode-{mode}",
+                            data=src_mode,
+                        )
+                        f.create_dataset(
+                            f"ht_m-wl-{wl}-port-{port_name}-mode-{mode}", data=ht_m
+                        )
+                        f.create_dataset(
+                            f"et_m-wl-{wl}-port-{port_name}-mode-{mode}", data=et_m
+                        )
                 for (port_name, wl, mode), fields in self.objective.solutions.items():
                     store_fields = {}
                     for key, field in fields.items():
@@ -403,8 +433,14 @@ class BaseOptimization(nn.Module):
                             store_fields[key] = fields[key].detach().cpu().numpy()
                         if isinstance(fields[key], ArrayBox):
                             store_fields[key] = fields[key]._value
-                    store_fields = np.stack((store_fields["Hx"], store_fields["Hy"], store_fields["Ez"]), axis=0)
-                    f.create_dataset(f'field_solutions-wl-{wl}-port-{port_name}-mode-{mode}', data=store_fields) # 3d numpy array
+                    store_fields = np.stack(
+                        (store_fields["Hx"], store_fields["Hy"], store_fields["Ez"]),
+                        axis=0,
+                    )
+                    f.create_dataset(
+                        f"field_solutions-wl-{wl}-port-{port_name}-mode-{mode}",
+                        data=store_fields,
+                    )  # 3d numpy array
                 for wl, A in self.objective.As.items():
                     Alist = []
                     for item in A:
@@ -415,10 +451,16 @@ class BaseOptimization(nn.Module):
                         elif isinstance(item, np.ndarray):
                             Alist.append(item)
                         else:
-                            raise ValueError(f"A is not a tensor, arraybox or numpy array, the type is {type(item)}")
-                    f.create_dataset(f'A-wl-{wl}-entries_a', data=Alist[0])
-                    f.create_dataset(f'A-wl-{wl}-indices_a', data=Alist[1])
-                for (port_name, wl, out_mode), s_params in self.objective.s_params.items():
+                            raise ValueError(
+                                f"A is not a tensor, arraybox or numpy array, the type is {type(item)}"
+                            )
+                    f.create_dataset(f"A-wl-{wl}-entries_a", data=Alist[0])
+                    f.create_dataset(f"A-wl-{wl}-indices_a", data=Alist[1])
+                for (
+                    port_name,
+                    wl,
+                    out_mode,
+                ), s_params in self.objective.s_params.items():
                     store_s_params = {}
                     for key, s_param in s_params.items():
                         if isinstance(s_param, Tensor):
@@ -428,11 +470,17 @@ class BaseOptimization(nn.Module):
                         if isinstance(s_param, ArrayBox):
                             store_s_params = s_param._value
                     if "s_p" in store_s_params.keys():
-                        store_s_params = np.stack((store_s_params["s_p"], store_s_params["s_m"]), axis=0)
+                        store_s_params = np.stack(
+                            (store_s_params["s_p"], store_s_params["s_m"]), axis=0
+                        )
                     else:
                         store_s_params = store_s_params["s"]
-                    f.create_dataset(f's_params-{port_name}-{wl}-{out_mode}', data=store_s_params) # 3d numpy array
-                adj_srcs, fields_adj, field_adj_normalizer = self.objective.obtain_adj_srcs()
+                    f.create_dataset(
+                        f"s_params-{port_name}-{wl}-{out_mode}", data=store_s_params
+                    )  # 3d numpy array
+                adj_srcs, fields_adj, field_adj_normalizer = (
+                    self.objective.obtain_adj_srcs()
+                )
                 for wl, adj_src in adj_srcs.items():
                     for (port_name, mode), b_adj in adj_src.items():
                         b_adj = b_adj.reshape(self.epsilon_map.shape)
@@ -442,7 +490,9 @@ class BaseOptimization(nn.Module):
                             b_adj = b_adj.detach().cpu().numpy()
                         if isinstance(b_adj, ArrayBox):
                             b_adj = b_adj._value
-                        f.create_dataset(f'adj_src-wl-{wl}-port-{port_name}-mode-{mode}', data=b_adj)
+                        f.create_dataset(
+                            f"adj_src-wl-{wl}-port-{port_name}-mode-{mode}", data=b_adj
+                        )
                 for wl, fields in fields_adj.items():
                     for (port_name, mode), field in fields.items():
                         store_fields = {}
@@ -450,11 +500,23 @@ class BaseOptimization(nn.Module):
                             if isinstance(component, Tensor):
                                 if component.dtype in complex_type:
                                     component = component.to(torch.complex64)
-                                store_fields[components_key] = component.detach().cpu().numpy()
+                                store_fields[components_key] = (
+                                    component.detach().cpu().numpy()
+                                )
                             if isinstance(component, ArrayBox):
                                 store_fields[components_key] = component._value
-                        store_fields = np.stack((store_fields["Hx"], store_fields["Hy"], store_fields["Ez"]), axis=0)
-                        f.create_dataset(f'fields_adj-wl-{wl}-port-{port_name}-mode-{mode}', data=store_fields) # 3d numpy array
+                        store_fields = np.stack(
+                            (
+                                store_fields["Hx"],
+                                store_fields["Hy"],
+                                store_fields["Ez"],
+                            ),
+                            axis=0,
+                        )
+                        f.create_dataset(
+                            f"fields_adj-wl-{wl}-port-{port_name}-mode-{mode}",
+                            data=store_fields,
+                        )  # 3d numpy array
                 for wl, field_normalizer in field_adj_normalizer.items():
                     for (port_name, mode), normalizer in field_normalizer.items():
                         if isinstance(normalizer, Tensor):
@@ -463,31 +525,57 @@ class BaseOptimization(nn.Module):
                             normalizer = normalizer.detach().cpu().numpy()
                         if isinstance(normalizer, ArrayBox):
                             normalizer = normalizer._value
-                        f.create_dataset(f'field_adj_normalizer-wl-{wl}-port-{port_name}-mode-{mode}', data=normalizer) # 2d numpy array
-                if hasattr(self, 'current_eps_grad'):
+                        f.create_dataset(
+                            f"field_adj_normalizer-wl-{wl}-port-{port_name}-mode-{mode}",
+                            data=normalizer,
+                        )  # 2d numpy array
+                if hasattr(self, "current_eps_grad"):
                     if isinstance(self.current_eps_grad, ArrayBox):
                         self.current_eps_grad = self.current_eps_grad._value
-                    f.create_dataset('gradient', data=self.current_eps_grad) # 2d numpy array
+                    f.create_dataset(
+                        "gradient", data=self.current_eps_grad
+                    )  # 2d numpy array
                 else:
-                    f.create_dataset('gradient', data=self._eps_map.grad.detach().cpu().numpy())
-                for design_region_name, design_region_mask in self.design_region_masks.items(): 
-                    f.create_dataset(f'design_region_mask-{design_region_name}_x_start', data=design_region_mask.x.start)
-                    f.create_dataset(f'design_region_mask-{design_region_name}_x_stop', data=design_region_mask.x.stop)
-                    f.create_dataset(f'design_region_mask-{design_region_name}_y_start', data=design_region_mask.y.start)
-                    f.create_dataset(f'design_region_mask-{design_region_name}_y_stop', data=design_region_mask.y.stop)
+                    f.create_dataset(
+                        "gradient", data=self._eps_map.grad.detach().cpu().numpy()
+                    )
+                for (
+                    design_region_name,
+                    design_region_mask,
+                ) in self.design_region_masks.items():
+                    f.create_dataset(
+                        f"design_region_mask-{design_region_name}_x_start",
+                        data=design_region_mask.x.start,
+                    )
+                    f.create_dataset(
+                        f"design_region_mask-{design_region_name}_x_stop",
+                        data=design_region_mask.x.stop,
+                    )
+                    f.create_dataset(
+                        f"design_region_mask-{design_region_name}_y_start",
+                        data=design_region_mask.y.start,
+                    )
+                    f.create_dataset(
+                        f"design_region_mask-{design_region_name}_y_stop",
+                        data=design_region_mask.y.stop,
+                    )
 
         # Check if the file exists using os.path.exists
         if os.path.exists(filename_yml):
             # File exists, read its content
-            with open(filename_yml, 'r') as f:
-                existing_data = yaml.safe_load(f) or {}  # Load existing data or use an empty dict if file is empty
+            with open(filename_yml, "r") as f:
+                existing_data = (
+                    yaml.safe_load(f) or {}
+                )  # Load existing data or use an empty dict if file is empty
         else:
             # File does not exist, start with an empty dictionary
             existing_data = {}
             existing_data.update(self._cfgs.dict())
             existing_data["port_cfgs"] = self.device.port_cfgs
             existing_data["design_region_cfgs"] = self.device.design_region_cfgs
-            existing_data["obj_cfgs"]["_fusion_func"] = existing_data["obj_cfgs"]["_fusion_func"].__name__
+            existing_data["obj_cfgs"]["_fusion_func"] = existing_data["obj_cfgs"][
+                "_fusion_func"
+            ].__name__
             for key, value in existing_data["obj_cfgs"].items():
                 if isinstance(value, dict):
                     value["out_modes"] = list(value["out_modes"])
@@ -495,11 +583,13 @@ class BaseOptimization(nn.Module):
         # Update the existing data with the new data
         opt_step = step
         existing_data[f"sharpness_{opt_step}"] = self.current_sharpness
-        existing_data[f"parameters_{opt_step}"] = {name: param.clone().detach().cpu().numpy().tolist()
-                                                for name, param in self.named_parameters()}
+        existing_data[f"parameters_{opt_step}"] = {
+            name: param.clone().detach().cpu().numpy().tolist()
+            for name, param in self.named_parameters()
+        }
 
         # Write the data to the file
-        with open(filename_yml, 'w') as f:
+        with open(filename_yml, "w") as f:
             yaml.dump(existing_data, f)
 
     def get_design_region_eps_dict(self):
@@ -507,10 +597,10 @@ class BaseOptimization(nn.Module):
         for key, design_region in self._design_region_eps_dict.items():
             design_region_eps_dict[key] = design_region.clone().detach()
         return design_region_eps_dict
-    
+
     def switch_solver(self, neural_solver, numerical_solver, use_autodiff=False):
         self.objective.switch_solver(neural_solver, numerical_solver, use_autodiff)
-    
+
     def forward(
         self,
         sharpness: float = 1,

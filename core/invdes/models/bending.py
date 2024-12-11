@@ -1,7 +1,6 @@
 import torch
 
 from .base_optimization import BaseOptimization, DefaultOptimizationConfig
-from pyutils.config import Config
 
 
 class DefaultConfig(DefaultOptimizationConfig):
@@ -34,10 +33,12 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="out_port_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        wl=[1.55],
+                        temp=[300],
                         out_modes=(
                             1,
                         ),  # can evaluate on multiple output modes and get average transmission
-                        type="eigenmode", # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
+                        type="eigenmode",  # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
                         direction="y+",
                     ),
                     refl_trans=dict(
@@ -47,6 +48,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="refl_port_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        wl=[1.55],
+                        temp=[300],
                         out_modes=(
                             1,
                         ),  # can evaluate on multiple output modes and get average transmission
@@ -59,6 +62,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         in_port_name="in_port_1",
                         out_port_name="rad_monitor_xp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -72,6 +77,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         in_port_name="in_port_1",
                         out_port_name="rad_monitor_xm",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -85,6 +92,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         in_port_name="in_port_1",
                         out_port_name="rad_monitor_yp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -98,6 +107,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         in_port_name="in_port_1",
                         out_port_name="rad_monitor_ym",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -125,7 +136,11 @@ class BendingOptimization(BaseOptimization):
             design_region_param_cfgs[region_name] = dict(
                 method="levelset",
                 rho_resolution=[25, 25],
-                transform=[dict(type="transpose_symmetry", flag=True), dict(type="blur", mfs=0.1, resolutions=[310, 310])],
+                transform=[
+                    dict(type="transpose_symmetry", flag=True),
+                    dict(type="blur", mfs=0.1, resolutions=[310, 310], dim="xy"),
+                    dict(type="binarize"),
+                ],
                 init_method="random",
                 # init_method="ring",
                 binary_projection=dict(

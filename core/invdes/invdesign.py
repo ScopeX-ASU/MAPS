@@ -92,6 +92,7 @@ class InvDesign:
         field_keys=[],
         in_port_names=[],
         exclude_port_names=[],
+        dump_gds=False,
     ):
         if plot:
             assert plot_filename is not None, "plot_filename must be provided"
@@ -118,7 +119,7 @@ class InvDesign:
             self.lr_scheduler.step()
             # update the sharpness
             self.sharp_scheduler.step()
-            
+
             if plot:
                 if plot_filename.endswith(".png"):
                     plot_filename = plot_filename[:-4]
@@ -135,6 +136,10 @@ class InvDesign:
                         # exclude_port_names=["refl_port_2"],
                         exclude_port_names=exclude_port_names[j],
                     )
+        if dump_gds:
+            if plot_filename.endswith(".png"):
+                plot_filename = plot_filename[:-4]
+            self.devOptimization.dump_gds_files(plot_filename + ".gds")
 
 
 if __name__ == "__main__":

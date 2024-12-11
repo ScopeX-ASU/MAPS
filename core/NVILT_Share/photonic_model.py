@@ -19,7 +19,7 @@ from kornia.morphology import closing, opening
 from torch.types import Device
 import torch.utils.checkpoint as checkpoint
 
-
+__all__ = ["My_nvilt2"]
 class Kernel:
     def __init__(self):
         self.optKernels = self.getOptKernels()

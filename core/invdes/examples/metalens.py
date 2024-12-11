@@ -16,10 +16,10 @@ import torch
 
 from core.invdes.invdesign import InvDesign
 from core.invdes.models import (
-    BendingOptimization,
+    MetaLensOptimization,
 )
 from core.invdes.models.base_optimization import DefaultSimulationConfig
-from core.invdes.models.layers import Bending
+from core.invdes.models.layers import MetaLens
 from core.utils import set_torch_deterministic
 
 if __name__ == "__main__":
@@ -31,36 +31,43 @@ if __name__ == "__main__":
     # first we need to instantiate the a optimization object
     sim_cfg = DefaultSimulationConfig()
 
-    bending_region_size = (1.6, 1.6)
-    port_len = 1.8
+    # mdm_region_size = (6, 6)
+    # port_len = 1.8
 
-    input_port_width = 0.48
-    output_port_width = 0.48
+    # input_port_width = 0.8
+    # output_port_width = 0.8
+
+    wl = 0.5
 
     sim_cfg.update(
         dict(
+            # solver="ceviche",
             solver="ceviche_torch",
-            border_width=[0, port_len, port_len, 0],
-            resolution=50,
-            plot_root=f"./figs/bending_{'init_try'}",
-            PML=[0.5, 0.5],
-            neural_solver=None,
             numerical_solver="solve_direct",
             use_autodiff=False,
+            neural_solver=None,
+            border_width=[0, 0, 1.5, 1.5],
+            PML=[0.8, 0.8],
+            resolution=50,
+            wl_cen=wl,
+            plot_root="./figs/metalens_near2far",
         )
     )
 
-    device = Bending(
+    device = MetaLens(
         sim_cfg=sim_cfg,
-        bending_region_size=bending_region_size,
-        port_len=(port_len, port_len),
-        port_width=(input_port_width, output_port_width),
+        port_len=(1.5, 10),
+        substrate_depth=0.75,
+        ridge_height_max=0.75,
+        nearfield_dx=0.2,
+        farfield_dxs=(8,),
+        farfield_sizes=(1,),
         device=operation_device,
     )
 
-    hr_device = device.copy(resolution=310)
+    hr_device = device.copy(resolution=50)
     print(device)
-    opt = BendingOptimization(
+    opt = MetaLensOptimization(
         device=device,
         hr_device=hr_device,
         sim_cfg=sim_cfg,
@@ -69,10 +76,9 @@ if __name__ == "__main__":
     invdesign = InvDesign(devOptimization=opt)
     invdesign.optimize(
         plot=True,
-        plot_filename=f"bending_{'init_try'}",
+        plot_filename=f"metalens_{'init_try'}",
         objs=["fwd_trans"],
-        field_keys=[("in_port_1", 1.55, 1, 300)],
+        field_keys=[("in_port_1", 0.5, 1, 300)],
         in_port_names=["in_port_1"],
         exclude_port_names=[],
-        dump_gds=True,
     )

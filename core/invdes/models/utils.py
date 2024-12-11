@@ -8,11 +8,11 @@ FilePath: /Metasurface-Opt/core/models/utils.py
 import math
 import os
 
+import numpy as np
 import torch
 from pyutils.general import ensure_dir
 from torch import Tensor
 from torch.nn.utils.rnn import pad_packed_sequence
-import numpy as np
 
 
 def conv_output_size(in_size, kernel_size, padding=0, stride=1, dilation=1):
@@ -53,6 +53,7 @@ def plot_permittivity(
     ax.axis("off")
     fig.tight_layout()
     fig.savefig(filepath, dpi=300)
+
 
 def nparray_as_real(data):
     return np.stack((data.real, data.imag), axis=-1)

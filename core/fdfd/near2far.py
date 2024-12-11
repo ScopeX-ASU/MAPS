@@ -77,6 +77,8 @@ def get_farfields_Rayleigh_Sommerfeld(
             far_ys = np.array(far_ys.item())
         far_xs = torch.from_numpy(far_xs).to(fields.device)
         far_ys = torch.from_numpy(far_ys).to(fields.device)
+        print("this is the shape of far_xs", far_xs.shape)
+        print("this is far_ys", far_ys)
         if len(far_xs.shape) == 0:  # vertical farfield slice
             far_xs = far_xs.reshape([1]).repeat(len(far_ys))
             # print(far_xs, far_ys)
@@ -84,6 +86,7 @@ def get_farfields_Rayleigh_Sommerfeld(
         else:
             far_ys = far_ys.reshape([1]).repeat(len(far_xs))
             far_xs = torch.stack((far_xs, far_ys), dim=-1)
+    print("this is far_xs send to the func", far_xs)
 
     far_fields = {"Ex": 0, "Ey": 0, "Ez": 0, "Hx": 0, "Hy": 0, "Hz": 0}
 

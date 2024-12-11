@@ -7,12 +7,12 @@ FilePath: /Metasurface-Opt/core/models/parametrization/levelset.py
 
 from functools import lru_cache
 from typing import Tuple
-import torch
 
-from torch import nn, Tensor
+import torch
+from torch import Tensor, nn
 from torch.types import Device
 
-from core.utils import print_stat
+
 from .base_parametrization import BaseParametrization
 from .utils import HeavisideProjection
 
@@ -259,12 +259,21 @@ class LeveSetParameterization(BaseParametrization):
             # print("this is the shape of weight.data", weight.data.shape, flush=True) #(66, 66)
             box_size_x = region_cfg["size"][0]
             box_size_y = region_cfg["size"][1]
-            x_ax = torch.linspace(0, box_size_x, weight.data.shape[0], device=self.operation_device) 
-            y_ax = torch.linspace(0, box_size_y, weight.data.shape[1], device=self.operation_device)
+            x_ax = torch.linspace(
+                0, box_size_x, weight.data.shape[0], device=self.operation_device
+            )
+            y_ax = torch.linspace(
+                0, box_size_y, weight.data.shape[1], device=self.operation_device
+            )
             x_ax, y_ax = torch.meshgrid(x_ax, y_ax)
             r = torch.sqrt(x_ax**2 + y_ax**2)
-            half_wg_width = 0.48 / 2 # 0.48 is hard coded here since for now we only need to consider the wg that support TE1 mode
-            quater_ring_mask = torch.logical_and(r < (box_size_x / 2 + half_wg_width), r > (box_size_x / 2 - half_wg_width))
+            half_wg_width = (
+                0.48 / 2
+            )  # 0.48 is hard coded here since for now we only need to consider the wg that support TE1 mode
+            quater_ring_mask = torch.logical_and(
+                r < (box_size_x / 2 + half_wg_width),
+                r > (box_size_x / 2 - half_wg_width),
+            )
             weight.data[quater_ring_mask] = 0.05
         else:
             raise ValueError(f"Unsupported initialization method: {init_method}")
@@ -297,11 +306,15 @@ class LeveSetParameterization(BaseParametrization):
 
     def build_permittivity(self, weights, sharpness: float):
         ## this is the high resolution, e.g., res=200, 310 permittivity
-        ## return: 
+        ## return:
         #   1. we need the first one for gds dump out
         #   2. we need the second one for evaluation, do not need to downsample it here. transform will handle it.
         hr_permittivity = self._build_permittivity(
-            weights, self.params["rho"], self.params["hr_phi"], self.params["n_hr_phi"], sharpness
+            weights,
+            self.params["rho"],
+            self.params["hr_phi"],
+            self.params["n_hr_phi"],
+            sharpness,
         )
 
         return hr_permittivity

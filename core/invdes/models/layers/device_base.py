@@ -6,7 +6,6 @@ FilePath: /Metasurface-Opt/core/models/layers/device_base.py
 """
 
 import copy
-import math
 import os
 from functools import lru_cache
 from typing import Tuple
@@ -15,28 +14,26 @@ import meep as mp
 import numpy as np
 import torch
 
-from thirdparty.ceviche.ceviche import fdfd_ez
-from core.fdfd import fdfd_ez as fdfd_ez_torch
-
 # from ceviche.modes import insert_mode
 from ceviche.constants import C_0
 from pyutils.config import Config
 from pyutils.general import ensure_dir
 
-from .utils import (
-    apply_regions_gpu,
-    get_eigenmode_coefficients,
-    get_flux,
-    get_grid,
-    insert_mode,
-    plot_eps_field,
-    get_temp_related_eps,
-)
+from core.fdfd import fdfd_ez as fdfd_ez_torch
 from core.utils import (
     Si_eps,
     SiO2_eps,
-    Air_eps,
     Slice,
+)
+from thirdparty.ceviche.ceviche import fdfd_ez
+
+from .utils import (
+    apply_regions_gpu,
+    get_flux,
+    get_grid,
+    get_temp_related_eps,
+    insert_mode,
+    plot_eps_field,
 )
 
 __all__ = ["BaseDevice", "N_Ports"]
@@ -221,7 +218,7 @@ class N_Ports(BaseDevice):
         ### here we use ceil to match meep
         self.Nx, self.Ny, self.Nz = [
             int(round(i * self.resolution)) for i in self.cell_size
-        ] # change math.ceil to round since sometimes we will have like 10.200000000000001 in the cell_size which will cause a size mismatch
+        ]  # change math.ceil to round since sometimes we will have like 10.200000000000001 in the cell_size which will cause a size mismatch
         self.NPML = [int(round(i * self.resolution)) for i in sim_cfg["PML"]]
         self.xs, self.ys = get_grid((self.Nx, self.Ny), self.grid_step)
         self.epsilon_map = self.get_epsilon_map(
@@ -574,7 +571,9 @@ class N_Ports(BaseDevice):
         if solver in {"ceviche", "ceviche_torch"}:
             for (wl, mode, temp), (source, _, _, _) in source_profiles.items():
                 current_eps = get_temp_related_eps(eps, wl, temp)
-                Hx, Hy, Ez = self.solve_ceviche(current_eps, source, wl=wl, grid_step=grid_step, solver=solver)
+                Hx, Hy, Ez = self.solve_ceviche(
+                    current_eps, source, wl=wl, grid_step=grid_step, solver=solver
+                )
                 fields[(wl, mode, temp)] = {"Hx": Hx, "Hy": Hy, "Ez": Ez}
             return fields
         else:
@@ -719,7 +718,6 @@ class N_Ports(BaseDevice):
 
     def copy(self, resolution: int = 310):
         sim_cfg = copy.deepcopy(self.sim_cfg)
-        print("finish deep copying...", flush=True)
         sim_cfg["resolution"] = resolution
         new_device = self.__class__()
         super(new_device.__class__, new_device).__init__(

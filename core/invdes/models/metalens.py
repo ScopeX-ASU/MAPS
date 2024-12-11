@@ -33,6 +33,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         in_port_name="in_port_1",
                         out_port_name="farfield_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
+                        temp = [300],
+                        wl=[0.5],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -47,6 +49,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         in_port_name="in_port_1",
                         out_port_name="refl_port_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
+                        temp = [300],
+                        wl=[0.5],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,

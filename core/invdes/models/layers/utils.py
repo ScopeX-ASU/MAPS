@@ -610,11 +610,19 @@ def plot_eps_field(
 
     if filepath is not None:
         ensure_dir(os.path.dirname(filepath))
+
+    # Calculate dynamic font size based on eps dimensions
+    base_fontsize = min(eps.shape[0], eps.shape[1]) / 30  # Scale factor can be adjusted
+    title_fontsize = base_fontsize * 1.2
+    label_fontsize = base_fontsize * 0.8
+    tick_fontsize = base_fontsize * 0.5
+
     fig, ax = plt.subplots(
         1,
         2,
         constrained_layout=True,
         figsize=(7 * Ez.shape[0] / 600, 1.7 * Ez.shape[1] / 300),
+        gridspec_kw={"wspace": 0.3},
     )
     ceviche.viz.abs(Ez, outline=None, ax=ax[0], cbar=True)
     ceviche.viz.abs(eps.astype(np.float64), ax=ax[0], cmap="Greys", alpha=0.2)
@@ -672,7 +680,9 @@ def plot_eps_field(
 
     ## add title to ax[0]
     if title is not None:
-        ax[0].set_title(title, fontsize=9, y=1.05)
+        # ax[0].set_title(title, fontsize=9, y=1.05)
+        # ax[0].set_title(title, fontsize=title_fontsize, y=1.05)
+        fig.suptitle(title, fontsize=title_fontsize, y=0.95, ha="center")
 
     xlabel = np.linspace(-x_width / 2, x_width / 2, 5)
     ylabel = np.linspace(-y_height / 2, y_height / 2, 5)
@@ -680,13 +690,16 @@ def plot_eps_field(
     yticks = np.linspace(0, Ez.shape[1] - 1, 5)
     xlabel = [f"{x:.2f}" for x in xlabel]
     ylabel = [f"{y:.2f}" for y in ylabel]
-    ax[0].set_xlabel(r"$x$ width ($\mu m$)")
-    ax[0].set_ylabel(r"$y$ height ($\mu m$)")
-    ax[0].set_xticks(xticks, xlabel)
-    ax[0].set_yticks(yticks, ylabel)
+    ax[0].set_xlabel(r"$x$ width ($\mu m$)", fontsize=label_fontsize)
+    ax[0].set_ylabel(r"$y$ height ($\mu m$)", fontsize=label_fontsize)
+    ax[0].set_xticks(xticks)
+    ax[0].set_yticks(yticks)
+    ax[0].set_xticklabels(xlabel, fontsize=tick_fontsize)
+    ax[0].set_yticklabels(ylabel, fontsize=tick_fontsize)
+    # ax[0].set_xticks(xticks, xlabel)
+    # ax[0].set_yticks(yticks, ylabel)
     ax[0].set_xlim([0, Ez.shape[0]])
     ax[0].set_ylim([0, Ez.shape[1]])
-    # ax[0].set_box_aspect(1)
 
     # for sl in slices:
     #     ax[0].plot(sl.x*np.ones(len(sl.y)), sl.y, 'b-')
@@ -709,11 +722,15 @@ def plot_eps_field(
     )
     xlabel = [f"{x:.2f}" for x in xlabel]
     ylabel = [f"{y:.2f}" for y in ylabel]
-    ax[1].set_xlabel(r"$x$ width ($\mu m$)")
-    ax[1].set_ylabel(r"$y$ height ($\mu m$)")
-    ax[1].set_xticks(xticks, xlabel)
-    ax[1].set_yticks(yticks, ylabel)
-    # ax[1].set_box_aspect(1)
+    ax[1].set_xlabel(r"$x$ width ($\mu m$)", fontsize=label_fontsize)
+    ax[1].set_ylabel(r"$y$ height ($\mu m$)", fontsize=label_fontsize)
+    ax[1].set_xticks(xticks)
+    ax[1].set_yticks(yticks)
+    ax[1].set_xticklabels(xlabel, fontsize=tick_fontsize)
+    ax[1].set_yticklabels(ylabel, fontsize=tick_fontsize)
+    # ax[1].set_xticks(xticks, xlabel)
+    # ax[1].set_yticks(yticks, ylabel)
+
 
     if filepath is not None:
         fig.savefig(filepath, dpi=600, bbox_inches="tight")
