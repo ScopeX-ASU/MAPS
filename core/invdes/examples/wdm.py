@@ -34,7 +34,7 @@ if __name__ == "__main__":
     # first we need to instantiate the a optimization object
     sim_cfg = DefaultSimulationConfig()
 
-    mdm_region_size = (6, 6)
+    mdm_region_size = (3, 3)
     port_len = 1.8
 
     input_port_width = 0.8
@@ -78,7 +78,7 @@ if __name__ == "__main__":
         plot=True,
         plot_filename=f"wdm_{'init_try'}",
         objs=["wl1_trans", "wl2_trans"],
-        field_keys=[("in_port_1", wl, 1) for wl in np.linspace(sim_cfg["wl_cen"] - sim_cfg["wl_width"]/2, sim_cfg["wl_cen"] + sim_cfg["wl_width"]/2, sim_cfg["n_wl"])],
+        field_keys=[("in_port_1", wl, 1, 300) for wl in np.linspace(sim_cfg["wl_cen"] - sim_cfg["wl_width"]/2, sim_cfg["wl_cen"] + sim_cfg["wl_width"]/2, sim_cfg["n_wl"])],
         in_port_names=["in_port_1", "in_port_1"],
         exclude_port_names=[],
     )

@@ -33,7 +33,7 @@ if __name__ == "__main__":
     # first we need to instantiate the a optimization object
     sim_cfg = DefaultSimulationConfig()
 
-    mdm_region_size = (6, 6)
+    mdm_region_size = (3, 3)
     port_len = 1.8
 
     input_port_width = 0.8
@@ -74,7 +74,7 @@ if __name__ == "__main__":
         plot=True,
         plot_filename=f"mdm_{'init_try'}",
         objs=["mode1_trans", "mode3_trans"],
-        field_keys=[("in_port_1", 1.55, 1), ("in_port_1", 1.55, 3)],
+        field_keys=[("in_port_1", 1.55, 1, 300), ("in_port_1", 1.55, 3, 300)],
         in_port_names=["in_port_1", "in_port_1"],
         exclude_port_names=[],
     )

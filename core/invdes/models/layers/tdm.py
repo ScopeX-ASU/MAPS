@@ -125,7 +125,7 @@ class TDM(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
-            temp=200,
+            temp=270,
             solver=self.sim_cfg["solver"],
             plot=True,
         )
@@ -137,7 +137,7 @@ class TDM(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
-            temp=400,
+            temp=330,
             solver=self.sim_cfg["solver"],
             plot=True,
         )
@@ -149,7 +149,7 @@ class TDM(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
-            temp=200,
+            temp=270,
             solver=self.sim_cfg["solver"],
             plot=True,
         )
@@ -161,7 +161,7 @@ class TDM(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
-            temp=400,
+            temp=330,
             solver=self.sim_cfg["solver"],
             plot=True,
         )
@@ -173,7 +173,7 @@ class TDM(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
-            temp=200,
+            temp=270,
             solver=self.sim_cfg["solver"],
             plot=True,
         )
@@ -185,7 +185,7 @@ class TDM(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
-            temp=400,
+            temp=330,
             solver=self.sim_cfg["solver"],
             plot=True,
         )

@@ -74,7 +74,7 @@ if __name__ == "__main__":
         plot=True,
         plot_filename=f"tdm_{'init_try'}",
         objs=["temp1_trans", "temp2_trans"],
-        field_keys=[("in_port_1", 1.55, 1, 200), ("in_port_1", 1.55, 1, 400)],
+        field_keys=[("in_port_1", 1.55, 1, 270), ("in_port_1", 1.55, 1, 330)],
         in_port_names=["in_port_1", "in_port_1"],
         exclude_port_names=[],
     )
