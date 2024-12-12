@@ -25,6 +25,112 @@ else:
     _params_t = Any
 
 
+def sph_2_car_field(
+    f_r: float,
+    f_phi: float,
+    f_theta: float,
+    phi: float,
+    theta: float = None,
+) -> Tuple[complex, complex, complex]:
+    """Convert vector field components in spherical coordinates to cartesian.
+
+    Parameters
+    ----------
+    f_r : float
+        radial component of the vector field.
+    f_theta : float
+        polar angle component of the vector fielf.
+    f_phi : float
+        azimuthal angle component of the vector field.
+    theta : float
+        polar angle (rad) of location of the vector field.
+    phi : float
+        azimuthal angle (rad) of location of the vector field.
+
+    Returns
+    -------
+    Tuple[float, float, float]
+        x, y, and z components of the vector field in cartesian coordinates.
+    """
+    sin_phi = torch.sin(phi)
+    cos_phi = torch.cos(phi)
+
+    if theta is None:
+        f_x = f_r * cos_phi - f_phi * sin_phi
+        f_y = f_r * sin_phi + f_phi * cos_phi
+        f_z = -f_theta
+    else:
+        sin_theta = torch.sin(theta)
+        cos_theta = torch.cos(theta)
+        f_x = (
+            f_r * sin_theta * cos_phi + f_theta * cos_theta * cos_phi - f_phi * sin_phi
+        )
+        f_y = (
+            f_r * sin_theta * sin_phi + f_theta * cos_theta * sin_phi + f_phi * cos_phi
+        )
+        f_z = f_r * cos_theta - f_theta * sin_theta
+    return f_x, f_y, f_z
+
+
+def car_2_sph(x: float, y: float, z: float = None) -> Tuple[float, float, float]:
+    """Convert Cartesian to spherical coordinates.
+
+    Parameters
+    ----------
+    x : float
+        x coordinate relative to ``local_origin``.
+    y : float
+        y coordinate relative to ``local_origin``.
+    z : float
+        z coordinate relative to ``local_origin``.
+
+    Returns
+    -------
+    Tuple[float, float, float]
+        r, theta, and phi coordinates relative to ``local_origin``.
+    """
+    if z is None:
+        r = x.square().add(y.square()).sqrt_()
+        theta = None
+    else:
+        r = torch.sqrt(x.square() + y.square() + z.square())
+        theta = torch.acos(z / r)
+    phi = torch.arctan2(y, x)
+    return r, phi, theta
+
+
+car_2_sph = torch.compile(car_2_sph)
+
+
+def sph_2_car(r: float, phi: float, theta: float = None) -> Tuple[float, float, float]:
+    """Convert spherical to Cartesian coordinates.
+
+    Parameters
+    ----------
+    r : float
+        radius.
+    theta : float
+        polar angle (rad) downward from x=y=0 line.
+    phi : float
+        azimuthal (rad) angle from y=z=0 line.
+
+    Returns
+    -------
+    Tuple[float, float, float]
+        x, y, and z coordinates relative to ``local_origin``.
+    """
+    if theta is None:
+        x = r * torch.cos(phi)
+        y = r * torch.sin(phi)
+        z = None
+    else:
+        r_sin_theta = r * torch.sin(theta)
+        x = r_sin_theta * torch.cos(phi)
+        y = r_sin_theta * torch.sin(phi)
+        z = r * torch.cos(theta)
+    return x, y, z
+
+
 def overlap(
     a,
     b,

@@ -51,6 +51,10 @@ class MetaLens(N_Ports):
         self.nearfield_dx = nearfield_dx
         self.farfield_dxs = farfield_dxs
         self.farfield_sizes = farfield_sizes
+        self.box_size = box_size
+        self.aperture = aperture
+        self.substrate_depth = substrate_depth
+        self.eps_bg = eps_bg_fn(wl_cen)
 
         port_cfgs = dict(
             in_port_1=dict(
@@ -121,13 +125,37 @@ class MetaLens(N_Ports):
             rel_width=rel_width,
         )
         # near field monitor
-        nearfield_slice = self.build_port_monitor_slice(
-            port_name="out_port_1",
-            slice_name="nearfield",
-            rel_loc=self.nearfield_dx / self.port_cfgs["out_port_1"]["size"][0],
-            rel_width=(self.cell_size[1] - 2 * self.sim_cfg["PML"][1])
-            / self.port_cfgs["out_port_1"]["size"][1],
+        nearfield_slice_1 = self.build_near2far_slice(
+            slice_name="nearfield_1",
+            center=(self.nearfield_dx + self.port_cfgs["out_port_1"]["center"][0] - self.port_cfgs["out_port_1"]["size"][0]/2, 0),
+            size=(0, 2*self.aperture),
+            direction="x+",
         )
+
+        nf1_center = self.port_monitor_slices_info["nearfield_1"]["center"]
+        nf1_size = self.port_monitor_slices_info["nearfield_1"]["size"]
+        nf2_width = self.box_size[0] + self.nearfield_dx + self.substrate_depth + self.port_cfgs["in_port_1"]["size"][0]/3
+
+        nearfield_slice_2 = self.build_near2far_slice(
+            slice_name="nearfield_2",
+            center=(nf1_center[0] - nf2_width/2, nf1_size[1]/2),
+            size=(nf2_width, 0),
+            direction="y+",
+        )
+
+        nearfield_slice_3 = self.build_near2far_slice(
+            slice_name="nearfield_3",
+            center=(nf1_center[0] - nf2_width/2, -nf1_size[1]/2),
+            size=(nf2_width, 0),
+            direction="y-",
+        )
+
+        # nearfield_slice_4 = self.build_near2far_slice(
+        #     slice_name="nearfield_4",
+        #     center=(nf1_center[0] - nf2_width, 0),
+        #     size=(0, 2*self.aperture),
+        #     direction="x-",
+        # )
 
         farfield_slices = [
             self.build_port_monitor_slice(
@@ -143,18 +171,28 @@ class MetaLens(N_Ports):
 
         self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=rel_width)
         radiation_monitor = self.build_radiation_monitor(monitor_name="rad_monitor")
+
+        farfield_region = self.build_farfield_region(
+            region_name="farfield_region",
+            direction="x",
+            extension_range=(nf1_center[0]+0.2, 6),
+        )
+
         return (
             src_slice,
-            nearfield_slice,
+            nearfield_slice_1,
+            nearfield_slice_2,
+            nearfield_slice_3,
             refl_slice,
             farfield_slices,
             radiation_monitor,
+            farfield_region,
         )
 
     def norm_run(self, verbose: bool = True):
         if verbose:
             logger.info("Start normalization run ...")
-        print(self.sim_cfg)
+        
         norm_source_profiles = self.build_norm_sources(
             source_modes=(1,),
             input_port_name="in_port_1",
