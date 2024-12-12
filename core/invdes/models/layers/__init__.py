@@ -12,9 +12,10 @@ from .metalens_fdtd import *
 from .metalens import *
 from .metamirror import *
 from .metacoupler import *
-from .isolator import *
+from .opticalDiode import *
 from .bending import *
 from .etchmmi import *
 from .mdm import *
 from .wdm import *
 from .tdm import *
+from .crossing import *

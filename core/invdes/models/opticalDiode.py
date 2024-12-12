@@ -51,6 +51,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         in_port_name="in_port_1",
                         out_port_name="out_port_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             3,
@@ -64,6 +66,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         in_port_name="out_port_1",
                         out_port_name="in_port_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -77,6 +81,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         in_port_name="in_port_1",
                         out_port_name="refl_port_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -90,6 +96,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         in_port_name="out_port_1",
                         out_port_name="refl_port_2",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -103,6 +111,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         in_port_name="in_port_1",
                         out_port_name="rad_monitor_xp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -116,6 +126,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         in_port_name="in_port_1",
                         out_port_name="rad_monitor_xm",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -129,6 +141,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         in_port_name="in_port_1",
                         out_port_name="rad_monitor_yp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -142,6 +156,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         in_port_name="in_port_1",
                         out_port_name="rad_monitor_ym",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -155,6 +171,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         in_port_name="out_port_1",
                         out_port_name="rad_monitor_xp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -168,6 +186,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         in_port_name="out_port_1",
                         out_port_name="rad_monitor_xm",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -181,6 +201,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         in_port_name="out_port_1",
                         out_port_name="rad_monitor_yp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -194,6 +216,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         in_port_name="out_port_1",
                         out_port_name="rad_monitor_ym",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -206,7 +230,7 @@ class DefaultConfig(DefaultOptimizationConfig):
         )
 
 
-class IsolatorOptimization(BaseOptimization):
+class opticalDiodeOptimization(BaseOptimization):
     def __init__(
         self,
         device,

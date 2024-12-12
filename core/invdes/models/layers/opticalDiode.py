@@ -6,10 +6,10 @@ from .device_base import N_Ports
 from core.utils import material_fn_dict
 from pyutils.general import logger
 
-__all__ = ["Isolator"]
+__all__ = ["opticalDiode"]
 
 
-class Isolator(N_Ports):
+class opticalDiode(N_Ports):
     def __init__(
         self,
         material_r: str = "Si",  # waveguide material

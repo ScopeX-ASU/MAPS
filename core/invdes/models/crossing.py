@@ -23,7 +23,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                     wl_cen=1.55,
                     wl_width=0,
                     n_wl=1,
-                    plot_root="./figs/bending",
+                    plot_root="./figs/crossing",
                 ),
                 obj_cfgs=dict(
                     fwd_trans=dict(
@@ -39,7 +39,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                             1,
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="eigenmode",  # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
-                        direction="y+",
+                        direction="x+",
                     ),
                     refl_trans=dict(
                         weight=-0.1,
@@ -55,6 +55,36 @@ class DefaultConfig(DefaultOptimizationConfig):
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux_minus_src",
                         direction="x",
+                    ),
+                    top_cross_talk=dict(
+                        weight=-0.1,
+                        #### objective is evaluated at this port
+                        in_port_name="in_port_1",
+                        out_port_name="top_port",
+
+                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        wl=[1.55],
+                        temp=[300],
+                        out_modes=(
+                            1,
+                        ),  # can evaluate on multiple output modes and get average transmission
+                        type="flux",
+                        direction="y+",
+                    ),
+                    bot_cross_talk=dict(
+                        weight=-0.1,
+                        #### objective is evaluated at this port
+                        in_port_name="in_port_1",
+                        out_port_name="bot_port",
+
+                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        wl=[1.55],
+                        temp=[300],
+                        out_modes=(
+                            1,
+                        ),  # can evaluate on multiple output modes and get average transmission
+                        type="flux",
+                        direction="y-",
                     ),
                     rad_trans_xp=dict(
                         weight=0,
@@ -121,7 +151,7 @@ class DefaultConfig(DefaultOptimizationConfig):
         )
 
 
-class BendingOptimization(BaseOptimization):
+class CrossingOptimization(BaseOptimization):
     def __init__(
         self,
         device,
@@ -137,9 +167,9 @@ class BendingOptimization(BaseOptimization):
                 method="levelset",
                 rho_resolution=[25, 25],
                 transform=[
-                    dict(type="transpose_symmetry", rot_k=3),
-                    dict(type="blur", mfs=0.1, resolutions=[310, 310], dim="xy"),
-                    dict(type="binarize"),
+                    dict(type="transpose_symmetry", rot_k=0),
+                    dict(type="mirror_symmetry", dims=[0,1]),
+                    # dict(type="transpose_symmetry", flag=True),
                 ],
                 init_method="random",
                 # init_method="ring",

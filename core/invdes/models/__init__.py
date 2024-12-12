@@ -9,8 +9,9 @@ from .metalens import MetaLensOptimization
 from .metamirror import MetaMirrorOptimization
 from .metacoupler import MetaCouplerOptimization
 from .bending import BendingOptimization
-from .isolator import IsolatorOptimization
+from .opticalDiode import opticalDiodeOptimization
 from .mdm import MDMOptimization
 from .wdm import WDMOptimization
 from .tdm import TDMOptimization
+from .crossing import CrossingOptimization
 from .layers import *

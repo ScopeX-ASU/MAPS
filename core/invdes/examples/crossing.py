@@ -13,16 +13,14 @@ project_root = os.path.abspath(
 )
 sys.path.insert(0, project_root)
 import torch
-from pyutils.config import Config
 
-from core.invdes import builder
+from core.invdes.invdesign import InvDesign
 from core.invdes.models import (
-    TDMOptimization,
+    CrossingOptimization,
 )
 from core.invdes.models.base_optimization import DefaultSimulationConfig
-from core.invdes.models.layers import TDM
+from core.invdes.models.layers import Crossing
 from core.utils import set_torch_deterministic
-from core.invdes.invdesign import InvDesign
 
 if __name__ == "__main__":
     gpu_id = 0
@@ -33,7 +31,7 @@ if __name__ == "__main__":
     # first we need to instantiate the a optimization object
     sim_cfg = DefaultSimulationConfig()
 
-    mdm_region_size = (10, 4)
+    crossing_region_size = (1.6, 1.6)
     port_len = 1.8
 
     input_port_width = 0.48
@@ -42,10 +40,9 @@ if __name__ == "__main__":
     sim_cfg.update(
         dict(
             solver="ceviche_torch",
-            # border_width=[port_len, port_len, 2, 2],
-            border_width=[0, 0, 2, 2],
+            border_width=[0, 0, 0, 0],
             resolution=50,
-            plot_root=f"./figs/tdm_{'init_try'}",
+            plot_root=f"./figs/crossing_{'init_try'}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -53,17 +50,17 @@ if __name__ == "__main__":
         )
     )
 
-    device = TDM(
+    device = Crossing(
         sim_cfg=sim_cfg,
-        box_size=mdm_region_size,
+        box_size=crossing_region_size,
         port_len=(port_len, port_len),
         port_width=(input_port_width, output_port_width),
         device=operation_device,
     )
 
-    hr_device = device.copy(resolution=50)
+    hr_device = device.copy(resolution=310)
     print(device)
-    opt = TDMOptimization(
+    opt = CrossingOptimization(
         device=device,
         hr_device=hr_device,
         sim_cfg=sim_cfg,
@@ -72,9 +69,10 @@ if __name__ == "__main__":
     invdesign = InvDesign(devOptimization=opt)
     invdesign.optimize(
         plot=True,
-        plot_filename=f"tdm_{'init_try'}",
-        objs=["temp1_trans", "temp2_trans"],
-        field_keys=[("in_port_1", 1.55, 1, 270), ("in_port_1", 1.55, 1, 330)],
-        in_port_names=["in_port_1", "in_port_1"],
+        plot_filename=f"crossing_{'init_try'}",
+        objs=["fwd_trans"],
+        field_keys=[("in_port_1", 1.55, 1, 300)],
+        in_port_names=["in_port_1"],
         exclude_port_names=[],
+        dump_gds=True,
     )

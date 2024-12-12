@@ -35,18 +35,17 @@ def mirror_symmetry(xs: Tuple | List, dims):
     return xs
 
 
-def _transpose_symmetry(x, flag: bool = True):
+def _transpose_symmetry(x, rot_k: int = 3):
     assert x.shape[0] == x.shape[1], "Only support square matrix for transpose symmetry"
-    if flag:
-        x_t = torch.transpose(x, 0, 1)
-        x = torch.tril(x, -1) + torch.triu(x_t)
-        x = torch.rot90(x, k=3, dims=[-2, -1])
+    x_t = torch.transpose(x, 0, 1)
+    x = torch.tril(x, -1) + torch.triu(x_t)
+    x = torch.rot90(x, k=rot_k, dims=[-2, -1])
 
     return x
 
 
-def transpose_symmetry(xs: Tuple | List, flag: bool = True) -> List:
-    xs = [_transpose_symmetry(x, flag=flag) for x in xs]
+def transpose_symmetry(xs: Tuple | List, rot_k: int = 3) -> List:
+    xs = [_transpose_symmetry(x, rot_k=rot_k) for x in xs]
     return xs
 
 
