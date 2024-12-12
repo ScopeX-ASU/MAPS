@@ -160,6 +160,7 @@ class BaseOptimization(nn.Module):
         self.build_objective(
             port_profiles=self.device.port_sources_dict,
             port_slices=self.device.port_monitor_slices,
+            port_slices_info=self.device.port_monitor_slices_info,
             epsilon_map=self.device.epsilon_map,
             obj_cfgs=self.obj_cfgs,
             solver=self.sim_cfg["solver"],
@@ -212,6 +213,7 @@ class BaseOptimization(nn.Module):
         self,
         port_profiles: dict,
         port_slices: dict,
+        port_slices_info: dict,
         epsilon_map=None,
         obj_cfgs=dict(
             fwd_trans=dict(
@@ -251,7 +253,9 @@ class BaseOptimization(nn.Module):
             simulations=simulations,
             port_profiles=port_profiles,
             port_slices=port_slices,
+            port_slices_info=port_slices_info,
             grid_step=self.device.grid_step,
+            eps_bg=self.device.eps_bg,
         )
 
         obj_cfgs = copy.deepcopy(obj_cfgs)

@@ -545,6 +545,102 @@ class N_Ports(BaseDevice):
             radiation_monitor_yp,
             radiation_monitor_ym,
         )
+    
+    def build_farfield_radiation_monitor(
+        self, monitor_name: str = "farfield_rad_monitor"
+    ):
+        """
+        for now, only xp_plus, xp_minus, yp and ym will be initialized
+        """
+        # self.port_monitor_slices[slice_name] = monitor_slice # index to refer in the np array or torch tensor
+        # self.port_monitor_slices_info[slice_name] = dict(
+        #     center=center, # coordinates of the center of the slice (um)
+        #     size=size,     # size of the slice (um)
+        #     xs=xs,         # x coordinates of the slice (um)
+        #     ys=ys,         # y coordinates of the slice (um)
+        #     direction=direction, # direction of the slice
+        # )
+        nearfield_vertices_x_coords = []
+        nearfield_vertices_y_coords = []
+        farfield_vertices_x_coords = []
+        farfield_vertices_y_coords = []
+        yp_info = {}
+        ym_info = {}
+        xp_plus_info = {}
+        xp_minus_info = {}
+        for key in list(self.port_monitor_slices_info.keys()):
+            if "nearfield" in key:
+                nearfield_vertices_x_coords.append(self.port_monitor_slices_info[key]["xs"])
+                nearfield_vertices_y_coords.append(self.port_monitor_slices_info[key]["ys"])
+            elif "farfield" in key:
+                print(self.port_monitor_slices_info[key])
+                farfield_vertices_x_coords.append(self.port_monitor_slices_info[key]["xs"])
+                farfield_vertices_y_coords.append(self.port_monitor_slices_info[key]["ys"])
+        def find_abs_max(input_list):
+            max_abs_value = float('-inf')
+            # Traverse the list
+            for item in input_list:
+                if isinstance(item, (int, float)):  # If it's a float or int
+                    max_abs_value = max(max_abs_value, abs(item))
+                elif isinstance(item, np.ndarray):  # If it's an array
+                    max_abs_value = max(max_abs_value, np.max(np.abs(item)))
+            return max_abs_value
+        def find_max(input_list):
+            max_value = float('-inf')
+            # Traverse the list
+            for item in input_list:
+                if isinstance(item, (int, float)):
+                    max_value = max(max_value, item)
+                elif isinstance(item, np.ndarray):
+                    max_value = max(max_value, np.max(item))
+            return max_value
+
+        nearfield_x_max = find_max(nearfield_vertices_x_coords) + 1
+        nearfield_y_max_abs = find_abs_max(nearfield_vertices_y_coords)
+        farfield_x_max = find_max(farfield_vertices_x_coords)
+        farfield_y_max_abs = find_abs_max(farfield_vertices_y_coords)
+        yp_info["center"] = [(nearfield_x_max + farfield_x_max) / 2, max(nearfield_y_max_abs, farfield_y_max_abs) + 1]
+        yp_info["size"] = [farfield_x_max - nearfield_x_max, 0]
+        yp_info["direction"] = "y"
+        ym_info["center"] = [(nearfield_x_max + farfield_x_max) / 2, -max(nearfield_y_max_abs, farfield_y_max_abs) - 1]
+        ym_info["size"] = [farfield_x_max - nearfield_x_max, 0]
+        ym_info["direction"] = "y"
+        yp_info["xs"] = np.arange(
+            int(round((yp_info["center"][0] - yp_info["size"][0] / 2) / self.grid_step)),
+            int(round((yp_info["center"][0] + yp_info["size"][0] / 2) / self.grid_step))
+        ) * self.grid_step
+        yp_info["ys"] = np.float32(yp_info["center"][1])
+        ym_info["xs"] = np.arange(
+            int(round((ym_info["center"][0] - ym_info["size"][0] / 2) / self.grid_step)),
+            int(round((ym_info["center"][0] + ym_info["size"][0] / 2) / self.grid_step))
+        ) * self.grid_step
+        ym_info["ys"] = np.float32(ym_info["center"][1])
+
+        xp_plus_info["center"] = [farfield_x_max, (farfield_y_max_abs + yp_info["center"][1]) / 2]
+        xp_plus_info["size"] = [0, yp_info["center"][1] - farfield_y_max_abs]
+        xp_plus_info["direction"] = "x"
+        xp_minus_info["center"] = [nearfield_x_max, -(farfield_y_max_abs + yp_info["center"][1]) / 2]
+        xp_minus_info["size"] = [0, -farfield_y_max_abs - ym_info["center"][1]]
+        xp_minus_info["direction"] = "x"
+        xp_plus_info["xs"] = np.float32(xp_plus_info["center"][0])
+        xp_plus_info["ys"] = np.arange(
+            int(round((xp_plus_info["center"][1] - xp_plus_info["size"][1] / 2) / self.grid_step)),
+            int(round((xp_plus_info["center"][1] + xp_plus_info["size"][1] / 2) / self.grid_step))
+        ) * self.grid_step
+        xp_minus_info["xs"] = np.float32(xp_minus_info["center"][0])
+        xp_minus_info["ys"] = np.arange(
+            int(round((xp_minus_info["center"][1] - xp_minus_info["size"][1] / 2) / self.grid_step)),
+            int(round((xp_minus_info["center"][1] + xp_minus_info["size"][1] / 2) / self.grid_step))
+        ) * self.grid_step
+
+        self.port_monitor_slices_info[monitor_name + "_yp"] = yp_info
+        self.port_monitor_slices_info[monitor_name + "_ym"] = ym_info
+        self.port_monitor_slices_info[monitor_name + "_xp_plus"] = xp_plus_info
+        self.port_monitor_slices_info[monitor_name + "_xp_minus"] = xp_minus_info
+        print(yp_info)
+        print(ym_info)
+        print(xp_plus_info)
+        print(xp_minus_info)
 
     def insert_modes(
         self,

@@ -18,6 +18,10 @@ from torch.types import Device
 from torch_sparse import spmm
 from core.utils import get_flux, get_eigenmode_coefficients, Si_eps, SiO2_eps, Slice
 import math
+from core.fdfd.near2far import (
+    get_farfields_GreenFunction,
+)
+import copy
 
 __all__ = [
     "get_grid",
@@ -766,7 +770,9 @@ class ObjectiveFunc(object):
         simulations: dict,
         port_profiles: dict,  # port monitor profiles {port_name: {(wl, mode): (profile, ht_m, et_m)}}
         port_slices: dict,
+        port_slices_info: dict,
         grid_step: float,
+        eps_bg:float,
         verbose=False,
     ):
         """_summary_
@@ -780,7 +786,9 @@ class ObjectiveFunc(object):
         self.sims = simulations
         self.port_profiles = port_profiles
         self.port_slices = port_slices
+        self.port_slices_info = port_slices_info
         self.grid_step = grid_step
+        self.eps_bg = eps_bg
 
         self.eps = None
         self.Ez = None
@@ -959,6 +967,104 @@ class ObjectiveFunc(object):
                         return torch.mean(torch.stack(s_list))
                     else:
                         return npa.mean(npa.array(s_list))  # we only need absolute flux
+            elif type in {"flux_near2far"}:
+
+                def objfn(
+                    fields,
+                    in_port_name=in_port_name,
+                    out_port_name=out_port_name,
+                    in_mode=in_mode,
+                    direction=direction,
+                    type=type,
+                    name = name,
+                    target_temps=target_temps,
+                ):
+                    s_list = []
+                    ## for each wavelength, we evaluate the objective
+                    for wl, _ in self.sims.items():
+                        for temp in target_temps:
+                            # monitor_slice = self.port_slices[out_port_name]
+                            norm_power = self.port_profiles[in_port_name][(wl, in_mode, temp)][3]
+                            # this is how ez, hx and hy are calculated in regular simulation
+                            field = fields[(in_port_name, wl, in_mode, temp)]
+                            hx_near, hy_near, ez_near = (
+                                field["Hx"],
+                                field["Hy"],
+                                field["Ez"],
+                            )  # fetch fields
+                            # print("this is the keys of the self.port_slices_info", list(self.port_slices.keys()))
+                            shifted_farfield_slice_info = copy.deepcopy(self.port_slices_info[out_port_name])
+                            if direction[0] == "x":
+                                shifted_farfield_slice_info["xs"] = shifted_farfield_slice_info["xs"] - self.grid_step
+                            elif direction[0] == "y":
+                                shifted_farfield_slice_info["ys"] = shifted_farfield_slice_info["ys"] - self.grid_step
+                            farfield = get_farfields_GreenFunction(
+                                nearfield_slices=[
+                                    self.port_slices[nearfield_slice_name] for nearfield_slice_name in list(self.port_slices.keys()) if nearfield_slice_name.startswith("nearfield")
+                                ],
+                                nearfield_slices_info=[
+                                    self.port_slices_info[nearfield_slice_name] for nearfield_slice_name in list(self.port_slices_info.keys()) if nearfield_slice_name.startswith("nearfield")
+                                ],
+                                Ez=ez_near[None, ..., None],
+                                Hx=hx_near[None, ..., None],
+                                Hy=hy_near[None, ..., None],
+                                farfield_x=None,
+                                farfield_slice_info=self.port_slices_info[out_port_name],
+                                freqs=torch.tensor([1 / wl], device=ez_near.device),
+                                eps=self.eps_bg,
+                                mu=ceviche.constants.MU_0,
+                                dL=self.grid_step,
+                                component="Ez",
+                                decimation_factor=4,
+                            )
+                            shifted_ez = get_farfields_GreenFunction(
+                                nearfield_slices=[
+                                    self.port_slices[nearfield_slice_name] for nearfield_slice_name in list(self.port_slices.keys()) if nearfield_slice_name.startswith("nearfield")
+                                ],
+                                nearfield_slices_info=[
+                                    self.port_slices_info[nearfield_slice_name] for nearfield_slice_name in list(self.port_slices_info.keys()) if nearfield_slice_name.startswith("nearfield")
+                                ],
+                                Ez=ez_near[None, ..., None],
+                                Hx=hx_near[None, ..., None],
+                                Hy=hy_near[None, ..., None],
+                                farfield_x=None,
+                                farfield_slice_info=shifted_farfield_slice_info,
+                                freqs=torch.tensor([1 / wl], device=ez_near.device),
+                                eps=self.eps_bg,
+                                mu=ceviche.constants.MU_0,
+                                dL=self.grid_step,
+                                component="Ez",
+                                decimation_factor=4,
+                            )["Ez"][0, ..., 0]
+                            ez = farfield["Ez"][0, ..., 0]
+                            hx = farfield["Hx"][0, ..., 0]
+                            hy = farfield["Hy"][0, ..., 0]
+                            ez = (ez + shifted_ez) / 2 # Yee grid average
+                            s = get_flux(
+                                hx,
+                                hy,
+                                ez,
+                                None,
+                                grid_step=self.grid_step,
+                                direction=direction[0],
+                                autograd=True,
+                                is_slice=True,
+                            )
+                            if isinstance(s, Tensor):
+                                abs = torch.abs
+                            else:
+                                abs = npa.abs
+                            s = abs(s / norm_power)  # we only need absolute flux
+
+                            s_list.append(s)
+                            self.s_params[(name, wl, type, temp)] = {
+                                "s": s,
+                            }
+                    if isinstance(s_list[0], Tensor):
+                        return torch.mean(torch.stack(s_list))
+                    else:
+                        return npa.mean(npa.array(s_list))  # we only need absolute flux
+            
             else:
                 raise ValueError("Invalid type")
 

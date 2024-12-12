@@ -34,13 +34,13 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="farfield_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         temp = [300],
-                        wl=[0.5],
+                        wl=[0.832],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
                         ),  # can evaluate on multiple output modes and get average transmission
                         # type="eigenmode",
-                        type="flux",
+                        type="flux_near2far",
                         direction="x+",
                     ),
                     fwd_refl_trans=dict(
@@ -50,12 +50,72 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="refl_port_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         temp = [300],
-                        wl=[0.5],
+                        wl=[0.832],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux_minus_src",
+                        direction="x",
+                    ),
+                    rad_trans_yp=dict(
+                        weight=-0.2,
+                        #### objective is evaluated at this port
+                        in_port_name="in_port_1",
+                        out_port_name="farfield_rad_monitor_yp",
+                        #### objective is evaluated at all points by sweeping the wavelength and modes
+                        temp = [300],
+                        wl=[0.832],
+                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        out_modes=(
+                            1,
+                        ),  # can evaluate on multiple output modes and get average transmission
+                        type="flux_near2far",
+                        direction="y",
+                    ),
+                    rad_trans_ym=dict(
+                        weight=-0.2,
+                       #### objective is evaluated at this port
+                        in_port_name="in_port_1",
+                        out_port_name="farfield_rad_monitor_ym",
+                        #### objective is evaluated at all points by sweeping the wavelength and modes
+                        temp = [300],
+                        wl=[0.832],
+                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        out_modes=(
+                            1,
+                        ),  # can evaluate on multiple output modes and get average transmission
+                        type="flux_near2far",
+                        direction="y",
+                    ),
+                    rad_trans_xp_plus=dict(
+                        weight=-0.2,
+                       #### objective is evaluated at this port
+                        in_port_name="in_port_1",
+                        out_port_name="farfield_rad_monitor_xp_plus",
+                        #### objective is evaluated at all points by sweeping the wavelength and modes
+                        temp = [300],
+                        wl=[0.832],
+                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        out_modes=(
+                            1,
+                        ),  # can evaluate on multiple output modes and get average transmission
+                        type="flux_near2far",
+                        direction="x",
+                    ),
+                    rad_trans_xp_minus=dict(
+                        weight=-0.2,
+                       #### objective is evaluated at this port
+                        in_port_name="in_port_1",
+                        out_port_name="farfield_rad_monitor_xp_minus",
+                        #### objective is evaluated at all points by sweeping the wavelength and modes
+                        temp = [300],
+                        wl=[0.832],
+                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        out_modes=(
+                            1,
+                        ),  # can evaluate on multiple output modes and get average transmission
+                        type="flux_near2far",
                         direction="x",
                     ),
                 ),

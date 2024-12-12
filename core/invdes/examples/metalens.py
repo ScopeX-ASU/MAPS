@@ -37,7 +37,7 @@ if __name__ == "__main__":
     # input_port_width = 0.8
     # output_port_width = 0.8
 
-    wl = 0.5
+    wl = 0.832
 
     sim_cfg.update(
         dict(
@@ -55,12 +55,14 @@ if __name__ == "__main__":
     )
 
     device = MetaLens(
+        material_bg="SiO2",
         sim_cfg=sim_cfg,
-        port_len=(1.5, 10),
+        aperture=3,
+        port_len=(1.5, 1.5),
         substrate_depth=0.75,
         ridge_height_max=0.75,
-        nearfield_dx=0.2,
-        farfield_dxs=(8,),
+        nearfield_dx=0.9,
+        farfield_dxs=(10,),
         farfield_sizes=(1,),
         device=operation_device,
     )
@@ -75,10 +77,10 @@ if __name__ == "__main__":
     ).to(operation_device)
     invdesign = InvDesign(devOptimization=opt)
     invdesign.optimize(
-        plot=True,
+        plot=False,
         plot_filename=f"metalens_{'init_try'}",
         objs=["fwd_trans"],
-        field_keys=[("in_port_1", 0.5, 1, 300)],
+        field_keys=[("in_port_1", wl, 1, 300)],
         in_port_names=["in_port_1"],
         exclude_port_names=[],
     )

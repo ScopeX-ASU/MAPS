@@ -1697,7 +1697,7 @@ def grid_average(e, monitor, direction: str = "x", autograd=False):
     return e_yee_shifted
 
 
-def get_flux(hx, hy, ez, monitor, grid_step, direction: str = "x", autograd=False):
+def get_flux(hx, hy, ez, monitor, grid_step, direction: str = "x", autograd=False, is_slice=False):
     if autograd:
         ravel = npa.ravel
         real = npa.real
@@ -1709,13 +1709,23 @@ def get_flux(hx, hy, ez, monitor, grid_step, direction: str = "x", autograd=Fals
         real = torch.real
 
     if direction == "x":
-        h = (0.0, ravel(hy[monitor]), 0)
+        if is_slice:
+            # no need to ravel
+            h = (0, hy, 0)
+        else:
+            h = (0, ravel(hy[monitor]), 0)
     elif direction == "y":
-        h = (ravel(hx[monitor]), 0, 0)
+        if is_slice:
+            h = (hx, 0, 0)
+        else:
+            h = (ravel(hx[monitor]), 0, 0)
     # The E-field is not co-located with the H-field in the Yee cell. Therefore,
     # we must sample at two neighboring pixels in the propataion direction and
     # then interpolate:
-    e_yee_shifted = grid_average(ez, monitor, direction, autograd=autograd)
+    if is_slice:
+        e_yee_shifted = ez
+    else:
+        e_yee_shifted = grid_average(ez, monitor, direction, autograd=autograd)
 
     e = (0.0, 0.0, e_yee_shifted)
 
