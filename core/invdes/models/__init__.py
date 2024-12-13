@@ -14,4 +14,5 @@ from .mdm import MDMOptimization
 from .wdm import WDMOptimization
 from .tdm import TDMOptimization
 from .crossing import CrossingOptimization
+from .mmi import MMIOptimization
 from .layers import *

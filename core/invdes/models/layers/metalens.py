@@ -34,6 +34,7 @@ class MetaLens(N_Ports):
         substrate_depth: float = 0,
         port_len: Tuple[float] = (1, 1),
         nearfield_dx: float = 0.5,  # distance from metalens surface to nearfield monitor, e.g., 500 nm
+        nearfield_size: float = 4,  # monitor size of nearfield monitor, e.g., 1um
         farfield_dxs: Tuple[float] = (
             2,
         ),  # distance from metalens surface to multiple farfield monitors, e.g., (2 um)
@@ -49,6 +50,7 @@ class MetaLens(N_Ports):
         size_x = box_size[0] + port_len[0] + port_len[1] + substrate_depth
         size_y = aperture
         self.nearfield_dx = nearfield_dx
+        self.nearfield_size = nearfield_size
         self.farfield_dxs = farfield_dxs
         self.farfield_sizes = farfield_sizes
         self.box_size = box_size
@@ -68,7 +70,8 @@ class MetaLens(N_Ports):
                 type="box",
                 direction="x",
                 center=[size_x / 2 - port_len[1] / 2, 0],
-                size=[port_len[1], aperture],
+                # size=[port_len[1], aperture],
+                size=[port_len[1], 1],
                 eps=eps_bg_fn(wl_cen),
             ),
         )
@@ -128,7 +131,7 @@ class MetaLens(N_Ports):
         nearfield_slice_1 = self.build_near2far_slice(
             slice_name="nearfield_1",
             center=(self.nearfield_dx + self.port_cfgs["out_port_1"]["center"][0] - self.port_cfgs["out_port_1"]["size"][0]/2, 0),
-            size=(0, 2*self.aperture),
+            size=(0, self.nearfield_size),
             direction="x+",
         )
 
@@ -169,9 +172,9 @@ class MetaLens(N_Ports):
             )
         ]
 
-        self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=rel_width)
+        self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=1)
         radiation_monitor = self.build_radiation_monitor(monitor_name="rad_monitor")
-        farfield_radiation_monitor = self.build_farfield_radiation_monitor(monitor_name="farfield_rad_monitor")
+        # farfield_radiation_monitor = self.build_farfield_radiation_monitor(monitor_name="farfield_rad_monitor")
 
         farfield_region = self.build_farfield_region(
             region_name="farfield_region",
@@ -187,7 +190,7 @@ class MetaLens(N_Ports):
             refl_slice,
             farfield_slices,
             radiation_monitor,
-            farfield_radiation_monitor,
+            # farfield_radiation_monitor,
             farfield_region,
         )
 

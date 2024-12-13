@@ -1064,7 +1064,73 @@ class ObjectiveFunc(object):
                         return torch.mean(torch.stack(s_list))
                     else:
                         return npa.mean(npa.array(s_list))  # we only need absolute flux
-            
+            elif type == "phase":
+                # this is to make a equal phase MMI
+                def objfn(
+                    fields,
+                    in_port_name=in_port_name,
+                    out_port_name=out_port_name,
+                    in_mode=in_mode,
+                    out_modes=out_modes,
+                    direction=direction,
+                    name=name,
+                    target_wls=target_wls,
+                    target_temps=target_temps,
+                ):
+                    s_list = []
+                    ## for each wavelength, we evaluate the objective
+                    for wl, sim in self.sims.items():
+                        ## we calculate the average eigen energy for all output modes
+                        if wl not in target_wls:
+                            continue
+                        for out_mode in out_modes:
+                            for temp in target_temps:
+                                src, ht_m, et_m, norm_p = self.port_profiles[out_port_name][
+                                    (wl, out_mode, temp)
+                                ]
+                                norm_power = self.port_profiles[in_port_name][
+                                    (wl, in_mode, temp)
+                                ][3]
+                                monitor_slice = self.port_slices[out_port_name]
+                                field = fields[(in_port_name, wl, in_mode, temp)]
+                                hx, hy, ez = (
+                                    field["Hx"],
+                                    field["Hy"],
+                                    field["Ez"],
+                                )  # fetch fields
+                                if isinstance(ht_m, Tensor) and ht_m.device != ez.device:
+                                    ht_m = ht_m.to(ez.device)
+                                    et_m = et_m.to(ez.device)
+                                    self.port_profiles[out_port_name][(wl, out_mode, temp)] = [
+                                        src.to(ez.device),
+                                        ht_m,
+                                        et_m,
+                                        norm_p,
+                                    ]
+
+                                s_p, s_m = get_eigenmode_coefficients(
+                                    hx,
+                                    hy,
+                                    ez,
+                                    ht_m,
+                                    et_m,
+                                    monitor_slice,
+                                    grid_step=self.grid_step,
+                                    direction=direction[0],
+                                    autograd=True,
+                                    energy=False,
+                                )
+                                if direction[1] == "+":
+                                    s = s_p
+                                elif direction[1] == "-":
+                                    s = s_m
+                                else:
+                                    raise ValueError("Invalid direction")
+                                s_list.append(s / math.sqrt(norm_power))
+                    if isinstance(s_list[0], Tensor):
+                        return torch.mean(torch.stack(s_list))
+                    else:
+                        return npa.mean(npa.array(s_list))
             else:
                 raise ValueError("Invalid type")
 

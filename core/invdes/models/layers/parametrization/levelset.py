@@ -229,6 +229,9 @@ class LeveSetParameterization(BaseParametrization):
         elif init_method == "ones":
             nn.init.normal_(weight_dict["ls_knots"], mean=0, std=0.01)
             weight_dict["ls_knots"].data += 0.05
+        elif init_method == "zeros":
+            nn.init.normal_(weight_dict["ls_knots"], mean=0, std=0.01)
+            weight_dict["ls_knots"].data -= 0.05
         elif init_method == "rectangle":
             weight = weight_dict["ls_knots"]
             weight.data.fill_(-0.2)

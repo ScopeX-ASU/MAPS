@@ -13,6 +13,7 @@ project_root = os.path.abspath(
 )
 sys.path.insert(0, project_root)
 import torch
+from pyutils.config import Config
 
 from core.invdes.invdesign import InvDesign
 from core.invdes.models import (
@@ -47,27 +48,27 @@ if __name__ == "__main__":
             use_autodiff=False,
             neural_solver=None,
             border_width=[0, 0, 1.5, 1.5],
-            PML=[0.8, 0.8],
-            resolution=50,
+            PML=[0.5, 0.5],
+            resolution=100,
             wl_cen=wl,
             plot_root="./figs/metalens_near2far",
         )
     )
 
     device = MetaLens(
-        material_bg="SiO2",
+        material_bg="Air",
         sim_cfg=sim_cfg,
         aperture=3,
-        port_len=(1.5, 1.5),
+        port_len=(1.5, 5),
         substrate_depth=0.75,
         ridge_height_max=0.75,
-        nearfield_dx=0.9,
-        farfield_dxs=(10,),
+        nearfield_dx=0.3,
+        farfield_dxs=(4,),
         farfield_sizes=(1,),
         device=operation_device,
     )
 
-    hr_device = device.copy(resolution=50)
+    hr_device = device.copy(resolution=100)
     print(device)
     opt = MetaLensOptimization(
         device=device,
@@ -75,12 +76,14 @@ if __name__ == "__main__":
         sim_cfg=sim_cfg,
         operation_device=operation_device,
     ).to(operation_device)
-    invdesign = InvDesign(devOptimization=opt)
+    invdesign = InvDesign(
+        devOptimization=opt,
+    )
     invdesign.optimize(
-        plot=False,
+        plot=True,
         plot_filename=f"metalens_{'init_try'}",
         objs=["fwd_trans"],
         field_keys=[("in_port_1", wl, 1, 300)],
         in_port_names=["in_port_1"],
-        exclude_port_names=[],
+        exclude_port_names=["farfield_region"],
     )
