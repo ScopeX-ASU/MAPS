@@ -1164,6 +1164,8 @@ class ObjectiveFunc(object):
                                     autograd=True,
                                     shape_type=shape_type,
                                     shape_cfg=shape_cfg,
+                                    intensity=True,
+                                    similarity="angular"
                                 )
                                 similarity_list.append(shape_similarity)
                     if isinstance(similarity_list[0], Tensor):

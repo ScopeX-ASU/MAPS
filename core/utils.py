@@ -23,6 +23,8 @@ if TYPE_CHECKING:
     from torch.optim.optimizer import _params_t
 else:
     _params_t = Any
+
+
 # def get_shape(shape_type, shape_cfg, field_size, grid_step):
 #     shape_cfg["size"] = field_size
 #     shape_cfg["grid_step"] = grid_step
@@ -49,11 +51,13 @@ def gaussian(**kwargs):
     width = kwargs["width"]
     x_mesh = torch.linspace(-size * grid_step / 2, size * grid_step / 2, size)
 
-    return torch.exp(-x_mesh ** 2 / (2 * width ** 2))
+    return torch.exp(-(x_mesh**2) / (2 * width**2))
+
 
 shape_dict = {
     "gaussian": gaussian,
 }
+
 
 def sph_2_car_field(
     f_r: float,
@@ -1727,7 +1731,9 @@ def grid_average(e, monitor, direction: str = "x", autograd=False):
     return e_yee_shifted
 
 
-def get_flux(hx, hy, ez, monitor, grid_step, direction: str = "x", autograd=False, is_slice=False):
+def get_flux(
+    hx, hy, ez, monitor, grid_step, direction: str = "x", autograd=False, is_slice=False
+):
     if autograd:
         ravel = npa.ravel
         real = npa.real
@@ -1763,6 +1769,7 @@ def get_flux(hx, hy, ez, monitor, grid_step, direction: str = "x", autograd=Fals
 
     return s
 
+
 def get_shape(shape_type, shape_cfg, field_size, grid_step):
     shape_cfg["size"] = field_size[0]
     shape_cfg["grid_step"] = grid_step
@@ -1776,11 +1783,33 @@ def get_shape_similarity(
     autograd,
     shape_type,
     shape_cfg,
+    intensity: bool = True,
+    similarity: str = "cosine", # angular or cosine
 ):
-    field = torch.ravel(field[monitor_slice])
-    target_shape = get_shape(shape_type, shape_cfg, field.shape, grid_step).to(field.device)
-    # return the cosine similarity between the field and the target shape
-    return torch.nn.functional.cosine_similarity(torch.abs(field).unsqueeze(0), target_shape.unsqueeze(0), dim=-1).mean()
+    field = torch.ravel(field[monitor_slice]).abs()
+    if intensity:
+        field = field.square()
+
+    target_shape = get_shape(shape_type, shape_cfg, field.shape, grid_step).to(
+        field.device
+    )
+    # return the angular similarity between the field intensity and the target shape
+    if similarity == "cosine":
+        return torch.nn.functional.cosine_similarity(
+                field.unsqueeze(0), target_shape.unsqueeze(0), dim=-1
+            ).mean()
+    elif similarity == "angular":
+        return (
+            1
+            - torch.arccos(
+                torch.nn.functional.cosine_similarity(
+                    field.unsqueeze(0), target_shape.unsqueeze(0), dim=-1
+                )
+            ).mul(1 / np.pi)
+        ).mean()
+    else:
+        raise ValueError(f"Invalid similarity: {similarity}")
+
 
 Slice = collections.namedtuple("Slice", "x y")
 

@@ -19,9 +19,9 @@ class EdgeCoupler(N_Ports):
         sim_cfg: dict = {
             "border_width": [
                 0,
-                1.8,
-                1.8,
                 0,
+                2,
+                2,
             ],  # left, right, lower, upper, containing PML
             "PML": [0.5, 0.5],  # left/right, lower/upper
             "cell_size": None,
@@ -55,15 +55,15 @@ class EdgeCoupler(N_Ports):
             in_port_1=dict(
                 type="box",
                 direction="x",
-                center=[-(port_len[0] + box_size[0] / 2) / 2, 0],
-                size=[port_len[0] + box_size[0] / 2, port_width[0]],
+                center=[-(port_len[0] + box_size[0]) / 2, 0],
+                size=[port_len[0] + 1 / sim_cfg["resolution"], port_width[0]],
                 eps=eps_r_fn(wl_cen),
             ),
             out_port_1=dict(
                 type="box",
                 direction="x",
-                center=[(port_len[0] + box_size[0] / 2) / 2, 0],
-                size=[port_len[0] + box_size[0] / 2, port_width[0]],
+                center=[(port_len[1] + box_size[0]) / 2, 0],
+                size=[port_len[1], port_width[1]],
                 eps=eps_bg_fn(wl_cen),
             ),
         )
@@ -113,7 +113,7 @@ class EdgeCoupler(N_Ports):
         out_slice = self.build_port_monitor_slice(
             port_name="out_port_1",
             slice_name="out_port_1",
-            rel_loc=(self.out_slice_dx + self.design_region_cfgs['edge_coupler_region']['size'][0] / 2) / (self.port_cfgs["out_port_1"]["size"][0] + self.design_region_cfgs['edge_coupler_region']['size'][0] / 2),
+            rel_loc=self.out_slice_dx / self.port_cfgs["out_port_1"]["size"][0],
             rel_width=self.out_slice_size / self.port_cfgs["out_port_1"]["size"][1],
         )
         self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=rel_width)
