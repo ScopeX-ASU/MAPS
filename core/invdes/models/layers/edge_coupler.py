@@ -68,7 +68,14 @@ class EdgeCoupler(N_Ports):
             ),
         )
 
-        geometry_cfgs = dict()
+        geometry_cfgs = dict(
+            pad=dict(
+                type="box",
+                center=[(box_size[0] + port_len[1]) / 2, 0],
+                size=[port_len[1], box_size[1] + sim_cfg["border_width"][2] + sim_cfg["border_width"][3]],
+                eps=material_fn_dict["Air"](wl_cen),
+            )
+        )
 
         design_region_cfgs = dict()
         design_region_cfgs["edge_coupler_region"] = dict(
