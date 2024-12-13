@@ -1,19 +1,19 @@
 '''
 Date: 2024-08-24 21:37:48
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-12-08 14:05:36
+LastEditTime: 2024-12-13 02:57:32
 FilePath: /MAPS/core/invdes/models/__init__.py
 '''
-from .metalens_fdtd import Metalens
-from .metalens import MetaLensOptimization
-from .metamirror import MetaMirrorOptimization
-from .metacoupler import MetaCouplerOptimization
 from .bending import BendingOptimization
-from .opticalDiode import opticalDiodeOptimization
-from .mdm import MDMOptimization
-from .wdm import WDMOptimization
-from .tdm import TDMOptimization
 from .crossing import CrossingOptimization
-from .mmi import MMIOptimization
-from .edgeCoupler import edgeCouplerOptimization
+from .edge_coupler import EdgeCouplerOptimization
 from .layers import *
+from .mdm import MDMOptimization
+from .metacoupler import MetaCouplerOptimization
+from .metalens import MetaLensOptimization
+from .metalens_fdtd import Metalens
+from .metamirror import MetaMirrorOptimization
+from .mmi import MMIOptimization
+from .optical_diode import OpticalDiodeOptimization
+from .tdm import TDMOptimization
+from .wdm import WDMOptimization

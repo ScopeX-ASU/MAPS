@@ -7,24 +7,21 @@ basically, this should be like the training logic like in train_NN.py
 import os
 import sys
 
-# Add the project root to sys.path
-project_root = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "/home/pingchua/projects/MAPS")
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 )
-sys.path.insert(0, project_root)
-import torch
-from pyutils.config import Config
 import numpy as np
+import torch
 
-from core.invdes import builder
+from core.invdes.invdesign import InvDesign
 from core.invdes.models import (
     WDMOptimization,
 )
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import WDM
 from core.utils import set_torch_deterministic
-from core.invdes.invdesign import InvDesign
 
+sys.path.pop(0)
 if __name__ == "__main__":
     gpu_id = 0
     torch.cuda.set_device(gpu_id)
@@ -78,7 +75,14 @@ if __name__ == "__main__":
         plot=True,
         plot_filename=f"wdm_{'init_try'}",
         objs=["wl1_trans", "wl2_trans"],
-        field_keys=[("in_port_1", wl, 1, 300) for wl in np.linspace(sim_cfg["wl_cen"] - sim_cfg["wl_width"]/2, sim_cfg["wl_cen"] + sim_cfg["wl_width"]/2, sim_cfg["n_wl"])],
+        field_keys=[
+            ("in_port_1", wl, 1, 300)
+            for wl in np.linspace(
+                sim_cfg["wl_cen"] - sim_cfg["wl_width"] / 2,
+                sim_cfg["wl_cen"] + sim_cfg["wl_width"] / 2,
+                sim_cfg["n_wl"],
+            )
+        ],
         in_port_names=["in_port_1", "in_port_1"],
         exclude_port_names=[],
     )

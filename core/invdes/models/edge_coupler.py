@@ -23,7 +23,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                     wl_cen=1.55,
                     wl_width=0,
                     n_wl=1,
-                    plot_root="./figs/edgeCoupler",
+                    plot_root="./figs/edge_coupler",
                 ),
                 obj_cfgs=dict(
                     fwd_trans=dict(
@@ -80,7 +80,7 @@ class DefaultConfig(DefaultOptimizationConfig):
         )
 
 
-class edgeCouplerOptimization(BaseOptimization):
+class EdgeCouplerOptimization(BaseOptimization):
     def __init__(
         self,
         device,

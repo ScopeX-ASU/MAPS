@@ -8,8 +8,7 @@ from pyutils.optimizer.sam import SAM
 from pyutils.typing import Optimizer, Scheduler
 from torch.types import Device
 
-from core.models import *
-from core.datasets import *
+from core.invdes.models import *
 
 from core.utils import (
     TemperatureScheduler,

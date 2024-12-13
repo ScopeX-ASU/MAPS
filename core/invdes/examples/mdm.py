@@ -7,11 +7,10 @@ basically, this should be like the training logic like in train_NN.py
 import os
 import sys
 
-# Add the project root to sys.path
-project_root = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "/home/pingchua/projects/MAPS")
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 )
-sys.path.insert(0, project_root)
+
 import torch
 from pyutils.config import Config
 
@@ -24,6 +23,7 @@ from core.invdes.models.layers import MDM
 from core.utils import set_torch_deterministic
 from core.invdes.invdesign import InvDesign
 
+sys.path.pop(0)
 if __name__ == "__main__":
     gpu_id = 0
     torch.cuda.set_device(gpu_id)

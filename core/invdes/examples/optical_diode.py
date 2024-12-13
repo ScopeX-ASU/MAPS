@@ -1,4 +1,11 @@
 """
+Date: 1969-12-31 17:00:00
+LastEditors: Jiaqi Gu && jiaqigu@asu.edu
+LastEditTime: 2024-12-13 03:06:19
+FilePath: /MAPS/core/invdes/examples/optical_diode.py
+"""
+
+"""
 this is a wrapper for the invdes module
 we call use InvDesign.optimize() to optimize the inventory design
 basically, this should be like the training logic like in train_NN.py
@@ -7,23 +14,22 @@ basically, this should be like the training logic like in train_NN.py
 import os
 import sys
 
-# Add the project root to sys.path
-project_root = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "/home/pingchua/projects/MAPS")
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 )
-sys.path.insert(0, project_root)
 import torch
 from pyutils.config import Config
 
 from core.invdes import builder
 from core.invdes.models import (
-    opticalDiodeOptimization,
+    OpticalDiodeOptimization,
 )
 from core.invdes.models.base_optimization import DefaultSimulationConfig
-from core.invdes.models.layers import opticalDiode
+from core.invdes.models.layers import OpticalDiode
 from core.utils import set_torch_deterministic
 from core.invdes.invdesign import InvDesign
 
+sys.path.pop(0)
 if __name__ == "__main__":
     gpu_id = 0
     torch.cuda.set_device(gpu_id)
@@ -45,7 +51,7 @@ if __name__ == "__main__":
             # border_width=[port_len, port_len, 2, 2],
             border_width=[0, 0, 2, 2],
             resolution=50,
-            plot_root=f"./figs/opticalDiode_{'init_try'}",
+            plot_root=f"./figs/optical_diode_{'init_try'}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -66,7 +72,7 @@ if __name__ == "__main__":
 
     obj_cfgs = dict(_fusion_func=fom_func)
 
-    device = opticalDiode(
+    device = OpticalDiode(
         sim_cfg=sim_cfg,
         box_size=opticaldiode_region_size,
         port_len=(port_len, port_len),
@@ -76,7 +82,7 @@ if __name__ == "__main__":
 
     hr_device = device.copy(resolution=310)
     print(device)
-    opt = opticalDiodeOptimization(
+    opt = OpticalDiodeOptimization(
         device=device,
         hr_device=hr_device,
         sim_cfg=sim_cfg,
@@ -86,7 +92,7 @@ if __name__ == "__main__":
     invdesign = InvDesign(devOptimization=opt)
     invdesign.optimize(
         plot=True,
-        plot_filename=f"opticalDiode_{'init_try'}",
+        plot_filename=f"optical_diode_{'init_try'}",
         objs=["fwd_trans", "bwd_trans"],
         field_keys=[("in_port_1", 1.55, 1, 300), ("out_port_1", 1.55, 1, 300)],
         in_port_names=["in_port_1", "out_port_1"],

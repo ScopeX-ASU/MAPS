@@ -7,12 +7,11 @@ basically, this should be like the training logic like in train_NN.py
 import os
 import sys
 
-# Add the project root to sys.path
-project_root = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "/home/pingchua/projects/MAPS")
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 )
-sys.path.insert(0, project_root)
 import torch
+from autograd.numpy import array as npa
 
 from core.invdes.invdesign import InvDesign
 from core.invdes.models import (
@@ -21,8 +20,8 @@ from core.invdes.models import (
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import MMI
 from core.utils import set_torch_deterministic
-from autograd.numpy import array as npa
 
+sys.path.pop(0)
 if __name__ == "__main__":
     gpu_id = 0
     torch.cuda.set_device(gpu_id)
@@ -41,7 +40,7 @@ if __name__ == "__main__":
     sim_cfg.update(
         dict(
             solver="ceviche_torch",
-            border_width=[0, 0, 1, 1], # left, right, lower, upper, containing PML
+            border_width=[0, 0, 1, 1],  # left, right, lower, upper, containing PML
             resolution=50,
             plot_root=f"./figs/mmi_{'init_try'}",
             PML=[0.5, 0.5],
@@ -51,6 +50,7 @@ if __name__ == "__main__":
         )
     )
     num_outports = 3
+
     def fom_func(breakdown):
         ## maximization fom
         fom = 1
@@ -65,7 +65,7 @@ if __name__ == "__main__":
         if isinstance(s_param_list[0], torch.Tensor):
             s_params = torch.tensor(s_param_list)
             s_params_std = torch.std(s_params)
-            fom = fom - s_params_std 
+            fom = fom - s_params_std
         else:
             s_params = npa.array(s_param_list)
             s_params_std = npa.std(s_params)

@@ -230,7 +230,7 @@ class DefaultConfig(DefaultOptimizationConfig):
         )
 
 
-class opticalDiodeOptimization(BaseOptimization):
+class OpticalDiodeOptimization(BaseOptimization):
     def __init__(
         self,
         device,
