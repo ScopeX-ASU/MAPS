@@ -1,8 +1,8 @@
 """
 Date: 2024-10-04 18:49:06
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-10-06 00:38:40
-FilePath: /Metasurface-Opt/core/models/base_optimization.py
+LastEditTime: 2024-12-13 13:43:58
+FilePath: /MAPS/core/invdes/models/base_optimization.py
 """
 
 import copy
@@ -23,8 +23,9 @@ from torch.types import Device
 
 from .layers.device_base import N_Ports
 from .layers.fom_layer import SimulatedFoM
+from .layers.objective import ObjectiveFunc
 from .layers.parametrization import parametrization_builder
-from .layers.utils import ObjectiveFunc, plot_eps_field
+from .layers.utils import plot_eps_field
 
 __all__ = [
     "DefaultSimulationConfig",
