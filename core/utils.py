@@ -23,7 +23,37 @@ if TYPE_CHECKING:
     from torch.optim.optimizer import _params_t
 else:
     _params_t = Any
+# def get_shape(shape_type, shape_cfg, field_size, grid_step):
+#     shape_cfg["size"] = field_size
+#     shape_cfg["grid_step"] = grid_step
+#     return shape_dict[shape_type](**shape_cfg)
+def gaussian(**kwargs):
+    """Generate a gaussian shape.
 
+    Parameters
+    ----------
+    x : torch.Tensor
+        x coordinates.
+    y : torch.Tensor
+        y coordinates.
+    sigma : float
+        standard deviation of the gaussian.
+
+    Returns
+    -------
+    torch.Tensor
+        2D gaussian shape.
+    """
+    grid_step = kwargs["grid_step"]
+    size = kwargs["size"]
+    width = kwargs["width"]
+    x_mesh = torch.linspace(-size * grid_step / 2, size * grid_step / 2, size)
+
+    return torch.exp(-x_mesh ** 2 / (2 * width ** 2))
+
+shape_dict = {
+    "gaussian": gaussian,
+}
 
 def sph_2_car_field(
     f_r: float,
@@ -1733,6 +1763,24 @@ def get_flux(hx, hy, ez, monitor, grid_step, direction: str = "x", autograd=Fals
 
     return s
 
+def get_shape(shape_type, shape_cfg, field_size, grid_step):
+    shape_cfg["size"] = field_size[0]
+    shape_cfg["grid_step"] = grid_step
+    return shape_dict[shape_type](**shape_cfg)
+
+
+def get_shape_similarity(
+    field,
+    monitor_slice,
+    grid_step,
+    autograd,
+    shape_type,
+    shape_cfg,
+):
+    field = torch.ravel(field[monitor_slice])
+    target_shape = get_shape(shape_type, shape_cfg, field.shape, grid_step).to(field.device)
+    # return the cosine similarity between the field and the target shape
+    return torch.nn.functional.cosine_similarity(torch.abs(field).unsqueeze(0), target_shape.unsqueeze(0), dim=-1).mean()
 
 Slice = collections.namedtuple("Slice", "x y")
 

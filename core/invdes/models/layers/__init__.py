@@ -20,3 +20,4 @@ from .wdm import *
 from .tdm import *
 from .crossing import *
 from .mmi import *
+from .edgeCoupler import *

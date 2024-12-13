@@ -16,7 +16,7 @@ from scipy.ndimage import zoom
 from torch import Tensor
 from torch.types import Device
 from torch_sparse import spmm
-from core.utils import get_flux, get_eigenmode_coefficients, Si_eps, SiO2_eps, Slice
+from core.utils import get_flux, get_eigenmode_coefficients, Si_eps, SiO2_eps, Slice, get_shape_similarity
 import math
 from core.fdfd.near2far import (
     get_farfields_GreenFunction,
@@ -835,6 +835,8 @@ class ObjectiveFunc(object):
             direction = cfg["direction"]
             target_wls = cfg["wl"]
             target_temps = cfg["temp"]
+            shape_type = cfg.get("shape_type", None)
+            shape_cfg = cfg.get("shape_cfg", None)
 
             if type == "eigenmode":
 
@@ -1131,6 +1133,43 @@ class ObjectiveFunc(object):
                         return torch.mean(torch.stack(s_list))
                     else:
                         return npa.mean(npa.array(s_list))
+            elif type == "intensity_shape":
+                def objfn(
+                    fields,
+                    in_port_name=in_port_name,
+                    out_port_name=out_port_name,
+                    in_mode=in_mode,
+                    out_modes=out_modes,
+                    direction=direction,
+                    name=name,
+                    target_wls=target_wls,
+                    target_temps=target_temps,
+                    shape_type=shape_type,
+                    shape_cfg=shape_cfg,
+                ):
+                    similarity_list = []
+                    ## for each wavelength, we evaluate the objective
+                    for wl, sim in self.sims.items():
+                        ## we calculate the average eigen energy for all output modes
+                        if wl not in target_wls:
+                            continue
+                        for out_mode in out_modes:
+                            for temp in target_temps:
+                                monitor_slice = self.port_slices[out_port_name]
+                                ez = fields[(in_port_name, wl, in_mode, temp)]["Ez"]
+                                shape_similarity = get_shape_similarity(
+                                    ez,
+                                    monitor_slice,
+                                    grid_step=self.grid_step,
+                                    autograd=True,
+                                    shape_type=shape_type,
+                                    shape_cfg=shape_cfg,
+                                )
+                                similarity_list.append(shape_similarity)
+                    if isinstance(similarity_list[0], Tensor):
+                        return torch.mean(torch.stack(similarity_list))
+                    else:
+                        return npa.mean(npa.array(similarity_list))
             else:
                 raise ValueError("Invalid type")
 
