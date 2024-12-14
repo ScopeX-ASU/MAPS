@@ -1,7 +1,7 @@
 """
 Date: 2024-10-04 18:49:06
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-12-13 13:43:58
+LastEditTime: 2024-12-13 21:26:08
 FilePath: /MAPS/core/invdes/models/base_optimization.py
 """
 
@@ -257,6 +257,7 @@ class BaseOptimization(nn.Module):
             port_slices_info=port_slices_info,
             grid_step=self.device.grid_step,
             eps_bg=self.device.eps_bg,
+            device=self.device,
         )
 
         obj_cfgs = copy.deepcopy(obj_cfgs)

@@ -10,8 +10,8 @@ from torch import Tensor
 from core.fdfd.near2far import (
     get_farfields_GreenFunction,
 )
-from core.invdes.models.layers.utils import Si_eps, get_temp_related_eps
 from core.utils import (
+    Si_eps,
     get_eigenmode_coefficients,
     get_flux,
     get_shape_similarity,
@@ -469,6 +469,7 @@ class ObjectiveFunc(object):
         port_slices_info: dict,
         grid_step: float,
         eps_bg: float,
+        device,  # BaseDevice
         verbose=False,
     ):
         """_summary_
@@ -485,6 +486,7 @@ class ObjectiveFunc(object):
         self.port_slices_info = port_slices_info
         self.grid_step = grid_step
         self.eps_bg = eps_bg
+        self.device = device  # BaseDevice
 
         self.eps = None
         self.Ez = None
@@ -667,14 +669,28 @@ class ObjectiveFunc(object):
                 ## here the source is already normalized during norm_run to make sure it has target power
                 ## here is the key part that build the common "eps to field" autograd graph
                 ## later on, multiple "field to fom" autograd graph(s) will be built inside of multiple obj_fn's
-                # TODO: this is currently fixed to Si
-                self.sims[wl].eps_r = get_temp_related_eps(
-                    eps=permittivity,
-                    temp=temp,
-                    temp_0=300,
-                    eps_r_0=Si_eps(wl),
-                    dn_dT=1.8e-4,
-                )
+
+                ## temperature is effective only when there is active region defined
+                if getattr(self.device, "active_region_masks", None) is not None:
+                    control_cfgs = {
+                        name: {"T": temp}
+                        for name in self.device.active_region_masks.keys()
+                    }
+
+                    self.sims[wl].eps_r = self.device.apply_active_modulation(
+                        permittivity, control_cfgs
+                    )
+                else:
+                    self.sims[wl].eps_r = permittivity
+                ## eps_r: permittivity tensor, denormalized
+
+                # self.sims[wl].eps_r = get_temp_related_eps(
+                #     eps=permittivity,
+                #     temp=temp,
+                #     temp_0=300,
+                #     eps_r_0=Si_eps(wl),
+                #     dn_dT=1.8e-4,
+                # )
                 Hx, Hy, Ez = self.sims[wl].solve(source, port_name=port_name, mode=mode)
                 self.solutions[(port_name, wl, mode, temp)] = {
                     "Hx": Hx,

@@ -1,8 +1,8 @@
 """
 Date: 2024-10-04 23:22:57
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-10-04 23:35:34
-FilePath: /Metasurface-Opt/core/models/base_parametrization.py
+LastEditTime: 2024-12-13 16:52:16
+FilePath: /MAPS/core/invdes/models/layers/parametrization/base_parametrization.py
 """
 
 from copy import deepcopy

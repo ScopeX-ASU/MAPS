@@ -35,6 +35,7 @@ __all__ = [
     "get_eigenmode_coefficients",
     "insert_mode",
     "get_temp_related_eps",
+    "modulation_fn_dict",
 ]
 
 
@@ -50,6 +51,15 @@ def get_temp_related_eps(
     eps = eps * (eps_max - eps_min) + eps_min
     return eps
 
+
+def temperature_modulation(
+    eps: float, T: float, T0: float = 300, dn_dT: float = 1.8e-4
+):
+    return (math.sqrt(eps) + (T - T0) * dn_dT) ** 2
+
+modulation_fn_dict = {
+    "temperature": temperature_modulation,
+}
 
 def get_grid(shape, dl):
     # dl in um

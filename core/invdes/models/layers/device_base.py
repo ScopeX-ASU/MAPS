@@ -1,8 +1,8 @@
 """
 Date: 2024-10-02 20:59:04
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-10-02 21:37:00
-FilePath: /Metasurface-Opt/core/models/layers/device_base.py
+LastEditTime: 2024-12-13 20:51:54
+FilePath: /MAPS/core/invdes/models/layers/device_base.py
 """
 
 import copy
@@ -20,16 +20,17 @@ from pyutils.config import Config
 from pyutils.general import ensure_dir
 
 from core.fdfd import fdfd_ez as fdfd_ez_torch
+from core.invdes.models.layers.utils import modulation_fn_dict
 from core.utils import (
     Si_eps,
     SiO2_eps,
     Slice,
+    get_flux,
 )
 from thirdparty.ceviche.ceviche import fdfd_ez
 
 from .utils import (
     apply_regions_gpu,
-    get_flux,
     get_grid,
     get_temp_related_eps,
     insert_mode,
@@ -164,6 +165,7 @@ class N_Ports(BaseDevice):
                 eps=Si_eps(1.55),
             )
         ),
+        active_region_cfgs=dict(),
         sim_cfg: dict = {
             "border_width": [
                 0,
@@ -187,6 +189,7 @@ class N_Ports(BaseDevice):
         self.geometry_cfgs = geometry_cfgs
 
         self.design_region_cfgs = design_region_cfgs
+        self.active_region_cfgs = active_region_cfgs
 
         self.resolution = sim_cfg["resolution"]
         self.grid_step = 1 / self.resolution
@@ -229,6 +232,8 @@ class N_Ports(BaseDevice):
             self.eps_bg,
         )
         self.design_region_masks = self.build_design_region_mask(design_region_cfgs)
+        ## active region must within the design region
+        self.active_region_masks = self.build_active_region_mask(active_region_cfgs)
         self.ports_regions = self.build_port_region(port_cfgs)
 
         self.port_monitor_slices = {}  # {port_name: Slice or mask}
@@ -337,6 +342,72 @@ class N_Ports(BaseDevice):
             design_region_masks[name] = region
 
         return design_region_masks
+
+    def build_active_region_mask(self, active_region_cfgs):
+        active_region_masks = {}
+        for name, cfg in active_region_cfgs.items():
+            assert (
+                name in self.design_region_masks
+            ), f"Active region {name} not found in design region"
+            design_region_cfg = self.design_region_cfgs[name]
+            center = cfg["center"]
+            size = cfg["size"]
+            design_center, design_size = (
+                design_region_cfg["center"],
+                design_region_cfg["size"],
+            )
+
+            left = center[0] - size[0] / 2 + self.cell_size[0] / 2
+            right = left + size[0]
+            lower = center[1] - size[1] / 2 + self.cell_size[1] / 2
+            upper = lower + size[1]
+
+            ## active region must be contained in design region
+            assert (
+                center[0] - size[0] / 2 >= design_center[0] - design_size[0] / 2
+            ), f"Active region {name} left boundary ({center[0] - size[0] / 2}) out of design region ({design_center[0] - design_size[0] / 2})"
+            assert (
+                center[0] + size[0] / 2 <= design_center[0] + design_size[0] / 2
+            ), f"Active region {name} right boundary ({center[0] + size[0] / 2}) out of design region ({design_center[0] + design_size[0] / 2})"
+            assert (
+                center[1] - size[1] / 2 >= design_center[1] - design_size[1] / 2
+            ), f"Active region {name} lower boundary ({center[1] - size[1] / 2}) out of design region ({design_center[1] - design_size[1] / 2})"
+            assert (
+                center[1] + size[1] / 2 <= design_center[1] + design_size[1] / 2
+            ), f"Active region {name} upper boundary ({center[1] + size[1] / 2}) out of design region ({design_center[1] + design_size[1] / 2})"
+            left = int(np.round(left / self.grid_step))
+            right = int(np.round(right / self.grid_step))
+            lower = int(np.round(lower / self.grid_step))
+            upper = int(np.round(upper / self.grid_step))
+            region = Slice(
+                x=slice(left, right + 1), y=slice(lower, upper + 1)
+            )  # a rectangular region
+            active_region_masks[name] = region
+
+        return active_region_masks
+
+    def apply_active_modulation(self, eps, control_cfgs):
+        ## eps_r: permittivity tensor, denormalized
+        ## control_cfgs, include control signals for (multiple) active region(s).
+        eps_copy = eps.clone()
+        for name, control_cfg in control_cfgs.items():
+            design_region_cfg = self.design_region_cfgs[name]
+            eps_bg, eps_r = design_region_cfg["eps_bg"], design_region_cfg["eps"]
+            active_region_cfg = self.active_region_cfgs[name]
+            method = active_region_cfg["method"]
+            eps_r_cfg = active_region_cfg["eps_r"]
+            eps_bg_cfg = active_region_cfg["eps_bg"]
+            mod_fn = modulation_fn_dict[method]
+
+            eps_r_new = mod_fn(eps_r, **eps_r_cfg, **control_cfg)
+            eps_bg_new = mod_fn(eps_bg, **eps_bg_cfg, **control_cfg)
+
+            active_region = self.active_region_masks[name]
+            eps_region = (eps[active_region] - eps_bg) / (eps_r - eps_bg) * (
+                eps_r_new - eps_bg_new
+            ) + eps_bg_new
+            eps_copy[active_region] = eps_region
+        return eps_copy
 
     def build_port_region(self, port_cfgs, rel_width=2):
         ports_regions = []
@@ -545,7 +616,7 @@ class N_Ports(BaseDevice):
             radiation_monitor_yp,
             radiation_monitor_ym,
         )
-    
+
     def build_farfield_radiation_monitor(
         self, monitor_name: str = "farfield_rad_monitor"
     ):
@@ -570,14 +641,23 @@ class N_Ports(BaseDevice):
         xp_minus_info = {}
         for key in list(self.port_monitor_slices_info.keys()):
             if "nearfield" in key:
-                nearfield_vertices_x_coords.append(self.port_monitor_slices_info[key]["xs"])
-                nearfield_vertices_y_coords.append(self.port_monitor_slices_info[key]["ys"])
+                nearfield_vertices_x_coords.append(
+                    self.port_monitor_slices_info[key]["xs"]
+                )
+                nearfield_vertices_y_coords.append(
+                    self.port_monitor_slices_info[key]["ys"]
+                )
             elif "farfield" in key:
                 print(self.port_monitor_slices_info[key])
-                farfield_vertices_x_coords.append(self.port_monitor_slices_info[key]["xs"])
-                farfield_vertices_y_coords.append(self.port_monitor_slices_info[key]["ys"])
+                farfield_vertices_x_coords.append(
+                    self.port_monitor_slices_info[key]["xs"]
+                )
+                farfield_vertices_y_coords.append(
+                    self.port_monitor_slices_info[key]["ys"]
+                )
+
         def find_abs_max(input_list):
-            max_abs_value = float('-inf')
+            max_abs_value = float("-inf")
             # Traverse the list
             for item in input_list:
                 if isinstance(item, (int, float)):  # If it's a float or int
@@ -585,8 +665,9 @@ class N_Ports(BaseDevice):
                 elif isinstance(item, np.ndarray):  # If it's an array
                     max_abs_value = max(max_abs_value, np.max(np.abs(item)))
             return max_abs_value
+
         def find_max(input_list):
-            max_value = float('-inf')
+            max_value = float("-inf")
             # Traverse the list
             for item in input_list:
                 if isinstance(item, (int, float)):
@@ -599,39 +680,99 @@ class N_Ports(BaseDevice):
         nearfield_y_max_abs = find_abs_max(nearfield_vertices_y_coords)
         farfield_x_max = find_max(farfield_vertices_x_coords)
         farfield_y_max_abs = find_abs_max(farfield_vertices_y_coords)
-        yp_info["center"] = [(nearfield_x_max + farfield_x_max) / 2, max(nearfield_y_max_abs, farfield_y_max_abs) + 1]
+        yp_info["center"] = [
+            (nearfield_x_max + farfield_x_max) / 2,
+            max(nearfield_y_max_abs, farfield_y_max_abs) + 1,
+        ]
         yp_info["size"] = [farfield_x_max - nearfield_x_max, 0]
         yp_info["direction"] = "y"
-        ym_info["center"] = [(nearfield_x_max + farfield_x_max) / 2, -max(nearfield_y_max_abs, farfield_y_max_abs) - 1]
+        ym_info["center"] = [
+            (nearfield_x_max + farfield_x_max) / 2,
+            -max(nearfield_y_max_abs, farfield_y_max_abs) - 1,
+        ]
         ym_info["size"] = [farfield_x_max - nearfield_x_max, 0]
         ym_info["direction"] = "y"
-        yp_info["xs"] = np.arange(
-            int(round((yp_info["center"][0] - yp_info["size"][0] / 2) / self.grid_step)),
-            int(round((yp_info["center"][0] + yp_info["size"][0] / 2) / self.grid_step))
-        ) * self.grid_step
+        yp_info["xs"] = (
+            np.arange(
+                int(
+                    round(
+                        (yp_info["center"][0] - yp_info["size"][0] / 2) / self.grid_step
+                    )
+                ),
+                int(
+                    round(
+                        (yp_info["center"][0] + yp_info["size"][0] / 2) / self.grid_step
+                    )
+                ),
+            )
+            * self.grid_step
+        )
         yp_info["ys"] = np.float32(yp_info["center"][1])
-        ym_info["xs"] = np.arange(
-            int(round((ym_info["center"][0] - ym_info["size"][0] / 2) / self.grid_step)),
-            int(round((ym_info["center"][0] + ym_info["size"][0] / 2) / self.grid_step))
-        ) * self.grid_step
+        ym_info["xs"] = (
+            np.arange(
+                int(
+                    round(
+                        (ym_info["center"][0] - ym_info["size"][0] / 2) / self.grid_step
+                    )
+                ),
+                int(
+                    round(
+                        (ym_info["center"][0] + ym_info["size"][0] / 2) / self.grid_step
+                    )
+                ),
+            )
+            * self.grid_step
+        )
         ym_info["ys"] = np.float32(ym_info["center"][1])
 
-        xp_plus_info["center"] = [farfield_x_max, (farfield_y_max_abs + yp_info["center"][1]) / 2]
+        xp_plus_info["center"] = [
+            farfield_x_max,
+            (farfield_y_max_abs + yp_info["center"][1]) / 2,
+        ]
         xp_plus_info["size"] = [0, yp_info["center"][1] - farfield_y_max_abs]
         xp_plus_info["direction"] = "x"
-        xp_minus_info["center"] = [nearfield_x_max, -(farfield_y_max_abs + yp_info["center"][1]) / 2]
+        xp_minus_info["center"] = [
+            nearfield_x_max,
+            -(farfield_y_max_abs + yp_info["center"][1]) / 2,
+        ]
         xp_minus_info["size"] = [0, -farfield_y_max_abs - ym_info["center"][1]]
         xp_minus_info["direction"] = "x"
         xp_plus_info["xs"] = np.float32(xp_plus_info["center"][0])
-        xp_plus_info["ys"] = np.arange(
-            int(round((xp_plus_info["center"][1] - xp_plus_info["size"][1] / 2) / self.grid_step)),
-            int(round((xp_plus_info["center"][1] + xp_plus_info["size"][1] / 2) / self.grid_step))
-        ) * self.grid_step
+        xp_plus_info["ys"] = (
+            np.arange(
+                int(
+                    round(
+                        (xp_plus_info["center"][1] - xp_plus_info["size"][1] / 2)
+                        / self.grid_step
+                    )
+                ),
+                int(
+                    round(
+                        (xp_plus_info["center"][1] + xp_plus_info["size"][1] / 2)
+                        / self.grid_step
+                    )
+                ),
+            )
+            * self.grid_step
+        )
         xp_minus_info["xs"] = np.float32(xp_minus_info["center"][0])
-        xp_minus_info["ys"] = np.arange(
-            int(round((xp_minus_info["center"][1] - xp_minus_info["size"][1] / 2) / self.grid_step)),
-            int(round((xp_minus_info["center"][1] + xp_minus_info["size"][1] / 2) / self.grid_step))
-        ) * self.grid_step
+        xp_minus_info["ys"] = (
+            np.arange(
+                int(
+                    round(
+                        (xp_minus_info["center"][1] - xp_minus_info["size"][1] / 2)
+                        / self.grid_step
+                    )
+                ),
+                int(
+                    round(
+                        (xp_minus_info["center"][1] + xp_minus_info["size"][1] / 2)
+                        / self.grid_step
+                    )
+                ),
+            )
+            * self.grid_step
+        )
 
         self.port_monitor_slices_info[monitor_name + "_yp"] = yp_info
         self.port_monitor_slices_info[monitor_name + "_ym"] = ym_info

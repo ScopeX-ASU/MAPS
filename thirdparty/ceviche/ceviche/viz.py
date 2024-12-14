@@ -1,5 +1,14 @@
+"""
+Date: 1969-12-31 17:00:00
+LastEditors: Jiaqi Gu && jiaqigu@asu.edu
+LastEditTime: 2024-12-13 12:50:34
+FilePath: /MAPS/thirdparty/ceviche/ceviche/viz.py
+"""
+
 import numpy as np
 import matplotlib.pylab as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+import matplotlib.pyplot as plot
 
 """ Utilities for plotting and visualization """
 
@@ -19,26 +28,24 @@ def real(val, outline=None, ax=None, cbar=False, cmap='RdBu', outline_alpha=0.5)
     ax.set_ylabel('y')
     ax.set_xlabel('x')
     if cbar:
-        plt.colorbar(h, ax=ax)
+        add_colorbar(h)
     
     return ax
 
-def add_colorbar(mappable):
-    from mpl_toolkits.axes_grid1 import make_axes_locatable
-    import matplotlib.pyplot as plt
-    last_axes = plt.gca()
+def add_colorbar(mappable, font_size=9):
+    last_axes = plot.gca()
     ax = mappable.axes
     fig = ax.figure
     divider = make_axes_locatable(ax)
     cax = divider.append_axes("right", size="5%", pad=0.17)
     cbar = fig.colorbar(mappable, cax=cax)
-    plt.sca(last_axes)
+    cbar.ax.tick_params(labelsize=font_size)
+    plot.sca(last_axes)
     return cbar
 
-def abs(val, outline=None, ax=None, cbar=False, cmap='magma', outline_alpha=0.5, outline_val=None, alpha=1):
+def abs(val, outline=None, ax=None, cbar=False, cmap='magma', outline_alpha=0.5, outline_val=None, alpha=1, font_size=9):
     """Plots the absolute value of 'val', optionally overlaying an outline of 'outline'
     """
-    
     if ax is None:
         fig, ax = plt.subplots(1, 1, constrained_layout=True)      
     
@@ -56,6 +63,6 @@ def abs(val, outline=None, ax=None, cbar=False, cmap='magma', outline_alpha=0.5,
     # if cbar:
     #     plt.colorbar(h, cax=cax)
     if cbar:
-        add_colorbar(h)
+        add_colorbar(h, font_size=font_size)
     
     return ax

@@ -13,7 +13,7 @@ class TDM(N_Ports):
     def __init__(
         self,
         material_r: str = "Si",  # waveguide material
-        material_bg: str = "SiO2",  # background material
+        material_bg: str = "Air",  # background material
         sim_cfg: dict = {
             "border_width": [
                 0,
@@ -74,12 +74,31 @@ class TDM(N_Ports):
             )
         )
 
+        active_region_cfgs = dict(
+            design_region_1=dict(
+                center=[
+                    0,
+                    0,
+                ],
+                size=box_size,
+                method="temperature",
+                eps_r=dict(
+                    T0=300,
+                    dn_dT=1.8e-4,
+                ),
+                eps_bg=dict(
+                    T0=300,
+                    dn_dT=0,
+                ),
+            )
+        )
         super().__init__(
             eps_bg=eps_bg_fn(wl_cen),
             sim_cfg=sim_cfg,
             port_cfgs=port_cfgs,
             geometry_cfgs=geometry_cfgs,
             design_region_cfgs=design_region_cfgs,
+            active_region_cfgs=active_region_cfgs,
             device=device,
         )
 
@@ -113,7 +132,13 @@ class TDM(N_Ports):
         )
         self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=rel_width)
         radiation_monitor = self.build_radiation_monitor(monitor_name="rad_monitor")
-        return src_slice, refl_slice, mode1_out_slice, mode3_out_slice, radiation_monitor
+        return (
+            src_slice,
+            refl_slice,
+            mode1_out_slice,
+            mode3_out_slice,
+            radiation_monitor,
+        )
 
     def norm_run(self, verbose: bool = True):
         if verbose:
