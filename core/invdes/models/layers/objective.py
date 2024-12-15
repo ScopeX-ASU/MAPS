@@ -202,17 +202,29 @@ class FluxNear2FarObjective(object):
                     field["Ez"],
                 )  # fetch fields
                 # print("this is the keys of the self.port_slices_info", list(self.port_slices.keys()))
-                shifted_farfield_slice_info = copy.deepcopy(
+                extended_farfield_slice_info = copy.deepcopy(
                     self.port_slices_info[out_port_name]
                 )
                 if direction[0] == "x":
-                    shifted_farfield_slice_info["xs"] = (
-                        shifted_farfield_slice_info["xs"] - grid_step
-                    )
+                    xs = extended_farfield_slice_info["xs"]
+                    if not xs.shape:
+                        extended_farfield_slice_info["xs"] = np.array(
+                            [xs - grid_step, xs]
+                        )
+                    else:
+                        extended_farfield_slice_info["xs"] = np.concatenate(
+                            [xs[0:1] - grid_step, xs], axis=0
+                        )
                 elif direction[0] == "y":
-                    shifted_farfield_slice_info["ys"] = (
-                        shifted_farfield_slice_info["ys"] - grid_step
-                    )
+                    ys = extended_farfield_slice_info["ys"]
+                    if not ys.shape:
+                        extended_farfield_slice_info["ys"] = np.array(
+                            [ys - grid_step, ys]
+                        )
+                    else:
+                        extended_farfield_slice_info["ys"] = np.concatenate(
+                            [ys[0:1] - grid_step, ys], axis=0
+                        )
                 farfield = get_farfields_GreenFunction(
                     nearfield_slices=[
                         self.port_slices[nearfield_slice_name]
@@ -236,48 +248,57 @@ class FluxNear2FarObjective(object):
                     component="Ez",
                     decimation_factor=4,
                 )
-                shifted_ez = get_farfields_GreenFunction(
-                    nearfield_slices=[
-                        self.port_slices[nearfield_slice_name]
-                        for nearfield_slice_name in list(self.port_slices.keys())
-                        if nearfield_slice_name.startswith("nearfield")
-                    ],
-                    nearfield_slices_info=[
-                        self.port_slices_info[nearfield_slice_name]
-                        for nearfield_slice_name in list(self.port_slices_info.keys())
-                        if nearfield_slice_name.startswith("nearfield")
-                    ],
-                    Ez=ez_near[None, ..., None],
-                    Hx=hx_near[None, ..., None],
-                    Hy=hy_near[None, ..., None],
-                    farfield_x=None,
-                    farfield_slice_info=shifted_farfield_slice_info,
-                    freqs=torch.tensor([1 / wl], device=ez_near.device),
-                    eps=self.eps_bg,
-                    mu=MU_0,
-                    dL=grid_step,
-                    component="Ez",
-                    decimation_factor=4,
-                )["Ez"][0, ..., 0]
+                # shifted_ez = get_farfields_GreenFunction(
+                #     nearfield_slices=[
+                #         self.port_slices[nearfield_slice_name]
+                #         for nearfield_slice_name in list(self.port_slices.keys())
+                #         if nearfield_slice_name.startswith("nearfield")
+                #     ],
+                #     nearfield_slices_info=[
+                #         self.port_slices_info[nearfield_slice_name]
+                #         for nearfield_slice_name in list(self.port_slices_info.keys())
+                #         if nearfield_slice_name.startswith("nearfield")
+                #     ],
+                #     Ez=ez_near[None, ..., None],
+                #     Hx=hx_near[None, ..., None],
+                #     Hy=hy_near[None, ..., None],
+                #     farfield_x=None,
+                #     farfield_slice_info=shifted_farfield_slice_info,
+                #     freqs=torch.tensor([1 / wl], device=ez_near.device),
+                #     eps=self.eps_bg,
+                #     mu=MU_0,
+                #     dL=grid_step,
+                #     component="Ez",
+                #     decimation_factor=4,
+                # )["Ez"][0, ..., 0]
                 ez = farfield["Ez"][0, ..., 0]
                 hx = farfield["Hx"][0, ..., 0]
                 hy = farfield["Hy"][0, ..., 0]
-                ez = (ez + shifted_ez) / 2  # Yee grid average
+                if direction[0] == "x":  # Yee grid average
+                    ez = (ez[:-1] + ez[1:]) / 2
+                    hx = hx[1:]
+                    hy = hy[1:]
+                else:
+                    ez = (ez[:, :-1] + ez[:, 1:]) / 2
+                    hx = hx[:, 1:]
+                    hy = hy[:, 1:]
                 s = get_flux(
                     hx,
                     hy,
                     ez,
-                    None,
+                    monitor=None,
                     grid_step=grid_step,
                     direction=direction[0],
                     autograd=True,
-                    is_slice=True,
                 )
                 if isinstance(s, Tensor):
                     abs = torch.abs
                 else:
                     abs = npa.abs
                 s = abs(s / norm_power)  # we only need absolute flux
+
+                ## we need to average the flux across the region, which is treated as multiple slices
+                s = s / (ez.shape[0] if direction[0] == "x" else ez.shape[1])
 
                 s_list.append(s)
                 self.s_params[(name, wl, type, temp)] = {

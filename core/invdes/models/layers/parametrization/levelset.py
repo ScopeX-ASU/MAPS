@@ -1,8 +1,8 @@
 """
 Date: 2024-10-05 02:02:33
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-10-05 02:06:40
-FilePath: /Metasurface-Opt/core/models/parametrization/levelset.py
+LastEditTime: 2024-12-15 00:11:07
+FilePath: /MAPS/core/invdes/models/layers/parametrization/levelset.py
 """
 
 from functools import lru_cache
@@ -237,6 +237,23 @@ class LeveSetParameterization(BaseParametrization):
             weight.data.fill_(-0.2)
             weight.data[:, weight.shape[1] // 4 : 3 * weight.shape[1] // 4] = 0.05
             # weight.data += torch.randn_like(weight) * 0.01
+        elif init_method == "grating_1d":
+            weight = weight_dict["ls_knots"]
+            weight.data.fill_(-0.2)
+            rho_res = self.cfgs["rho_resolution"]
+            if weight.shape[0] == 1:
+                rho_res = rho_res[1]
+                n_gratings = weight.shape[1] // 2 # 0 1 0 1 0, 2 gratings
+                grating_widths = torch.linspace(0, 2 / rho_res, n_gratings)
+                ## (rho_res - width/2) / (width/2) = 0.2 / knots
+                weight.data[:, 1::2] = 0.2 * grating_widths / 2 / (rho_res - grating_widths / 2)
+            elif weight.shape[1] == 1:
+                rho_res = rho_res[0]
+                n_gratings = weight.shape[0] // 2 # 0 1 0 1 0, 2 gratings
+                grating_widths = torch.linspace(0, 2 / rho_res, n_gratings)
+                ## (rho_res - width/2) / (width/2) = 0.2 / knots
+                weight.data[1::2, :] = 0.2 * grating_widths / 2 / (rho_res - grating_widths / 2)
+                # weight.data[1::2, :] = torch.linspace(0, 0.2, weight.shape[0] // 2)
         elif init_method == "ring":
             # region_cfg
             #     design_region_cfgs["bending_region"] = dict(

@@ -15,7 +15,8 @@ from core.utils import (
     Slice,
     get_eigenmode_coefficients,
 )
-from thirdparty.ceviche.ceviche import constants, viz
+from thirdparty.ceviche.ceviche import constants
+from .viz import abs as plot_abs, real as plot_real
 from thirdparty.ceviche.ceviche.modes import get_modes
 
 __all__ = [
@@ -57,9 +58,11 @@ def temperature_modulation(
 ):
     return (math.sqrt(eps) + (T - T0) * dn_dT) ** 2
 
+
 modulation_fn_dict = {
     "temperature": temperature_modulation,
 }
+
 
 def get_grid(shape, dl):
     # dl in um
@@ -614,6 +617,7 @@ def plot_eps_field(
     x_width=1,
     y_height=1,
     NPML=[0, 0],
+    field_stat: str = "abs", # "abs" or "real" or "abs_real"
     title: str = None,
 ):
     if isinstance(Ez, torch.Tensor):
@@ -629,91 +633,111 @@ def plot_eps_field(
     title_fontsize = base_fontsize * 1.2
     label_fontsize = base_fontsize * 0.8
     tick_fontsize = base_fontsize * 0.5
-
+    field_stat = field_stat.lower().split("_")
     fig, ax = plt.subplots(
         1,
-        2,
+        len(field_stat) + 1,
         constrained_layout=True,
-        figsize=(7 * Ez.shape[0] / 600, 1.7 * Ez.shape[1] / 300),
+        figsize=(7 * Ez.shape[0] / 600 * (len(field_stat) + 1)/2, 1.7 * Ez.shape[1] / 300),
         gridspec_kw={"wspace": 0.3},
     )
-    viz.abs(Ez, outline=None, ax=ax[0], cbar=True)
-    viz.abs(eps.astype(np.float64), ax=ax[0], cmap="Greys", alpha=0.2)
-    if len(monitors) > 0:
-        for m in monitors:
-            if isinstance(m[0], Slice):
-                m_slice, color = m
-                if len(m_slice.x.shape) == 0:
-                    xs = m_slice.x * np.ones(len(m_slice.y))
-                    ys = m_slice.y
-                else:
-                    xs = m_slice.x
-                    ys = m_slice.y * np.ones(len(m_slice.x))
-                ax[0].plot(xs, ys, color, alpha=0.5)
-            elif isinstance(m[0], np.ndarray):
-                mask, color = m
-                xs, ys = mask.nonzero()
-                ax[0].scatter(xs, ys, c=color, s=1.5, alpha=0.5, linewidths=0)
+    for i, stat in enumerate(field_stat):
+        if stat == "abs":
+            plot_abs(Ez, outline=None, ax=ax[i], cbar=True, font_size=label_fontsize)
+        elif stat == "real":
+            plot_real(Ez, outline=None, ax=ax[i], cbar=True, font_size=label_fontsize)
+        plot_abs(eps.astype(np.float64), ax=ax[i], cmap="Greys", alpha=0.2, font_size=label_fontsize)
+        if len(monitors) > 0:
+            for m in monitors:
+                if isinstance(m[0], Slice):
+                    m_slice, color = m
+                    if len(m_slice.x.shape) == 0:
+                        xs = m_slice.x * np.ones(len(m_slice.y))
+                        ys = m_slice.y
+                        ax[i].plot(xs, ys, color, alpha=0.5)
+                    elif len(m_slice.y.shape) == 0:
+                        xs = m_slice.x
+                        ys = m_slice.y * np.ones(len(m_slice.x))
+                        ax[i].plot(xs, ys, color, alpha=0.5)
+                    else:  # two axis are all arrays, this is a box, we draw its 4 edges
+                        xs, ys = m_slice.x[:, 0], m_slice.y[0]
+                        left_xs = xs[0] * np.ones(len(ys))
+                        left_ys = ys
+                        ax[i].plot(left_xs, left_ys, color, alpha=0.5)
+                        right_xs = xs[-1] * np.ones(len(ys))
+                        right_ys = ys
+                        ax[i].plot(right_xs, right_ys, color, alpha=0.5)
+                        lower_xs = xs
+                        lower_ys = ys[0] * np.ones(len(xs))
+                        ax[i].plot(lower_xs, lower_ys, color, alpha=0.5)
+                        upper_xs = xs
+                        upper_ys = ys[-1] * np.ones(len(xs))
+                        ax[i].plot(upper_xs, upper_ys, color, alpha=0.5)
 
-    ## draw shaddow with NPML border
-    ## left
-    rect = patches.Rectangle(
-        (0, 0), width=NPML[0], height=Ez.shape[1], facecolor="gray", alpha=0.5
-    )
-    ax[0].add_patch(rect)
-    ## right
-    rect = patches.Rectangle(
-        (Ez.shape[0] - NPML[0], 0),
-        width=NPML[0],
-        height=Ez.shape[1],
-        facecolor="gray",
-        alpha=0.5,
-    )
-    ax[0].add_patch(rect)
+                elif isinstance(m[0], np.ndarray):
+                    mask, color = m
+                    xs, ys = mask.nonzero()
+                    ax[i].scatter(xs, ys, c=color, s=1.5, alpha=0.5, linewidths=0)
 
-    ## lower
-    rect = patches.Rectangle(
-        (NPML[0], 0),
-        width=Ez.shape[0] - NPML[0] * 2,
-        height=NPML[1],
-        facecolor="gray",
-        alpha=0.5,
-    )
-    ax[0].add_patch(rect)
+        ## draw shaddow with NPML border
+        ## left
+        rect = patches.Rectangle(
+            (0, 0), width=NPML[0], height=Ez.shape[1], facecolor="gray", alpha=0.5
+        )
+        ax[i].add_patch(rect)
+        ## right
+        rect = patches.Rectangle(
+            (Ez.shape[0] - NPML[0], 0),
+            width=NPML[0],
+            height=Ez.shape[1],
+            facecolor="gray",
+            alpha=0.5,
+        )
+        ax[i].add_patch(rect)
 
-    ## upper
-    rect = patches.Rectangle(
-        (NPML[0], Ez.shape[1] - NPML[1]),
-        width=Ez.shape[0] - NPML[0] * 2,
-        height=NPML[1],
-        facecolor="gray",
-        alpha=0.5,
-    )
-    ax[0].add_patch(rect)
+        ## lower
+        rect = patches.Rectangle(
+            (NPML[0], 0),
+            width=Ez.shape[0] - NPML[0] * 2,
+            height=NPML[1],
+            facecolor="gray",
+            alpha=0.5,
+        )
+        ax[i].add_patch(rect)
 
-    ## add title to ax[0]
-    if title is not None:
-        # ax[0].set_title(title, fontsize=9, y=1.05)
-        # ax[0].set_title(title, fontsize=title_fontsize, y=1.05)
-        fig.suptitle(title, fontsize=title_fontsize, y=0.95, ha="center")
+        ## upper
+        rect = patches.Rectangle(
+            (NPML[0], Ez.shape[1] - NPML[1]),
+            width=Ez.shape[0] - NPML[0] * 2,
+            height=NPML[1],
+            facecolor="gray",
+            alpha=0.5,
+        )
+        ax[i].add_patch(rect)
 
-    xlabel = np.linspace(-x_width / 2, x_width / 2, 5)
-    ylabel = np.linspace(-y_height / 2, y_height / 2, 5)
-    xticks = np.linspace(0, Ez.shape[0] - 1, 5)
-    yticks = np.linspace(0, Ez.shape[1] - 1, 5)
-    xlabel = [f"{x:.2f}" for x in xlabel]
-    ylabel = [f"{y:.2f}" for y in ylabel]
-    ax[0].set_xlabel(r"$x$ width ($\mu m$)", fontsize=label_fontsize)
-    ax[0].set_ylabel(r"$y$ height ($\mu m$)", fontsize=label_fontsize)
-    ax[0].set_xticks(xticks)
-    ax[0].set_yticks(yticks)
-    ax[0].set_xticklabels(xlabel, fontsize=tick_fontsize)
-    ax[0].set_yticklabels(ylabel, fontsize=tick_fontsize)
-    # ax[0].set_xticks(xticks, xlabel)
-    # ax[0].set_yticks(yticks, ylabel)
-    ax[0].set_xlim([0, Ez.shape[0]])
-    ax[0].set_ylim([0, Ez.shape[1]])
-    ax[0].set_aspect("equal")
+        ## add title to ax[0]
+        if title is not None:
+            # ax[0].set_title(title, fontsize=9, y=1.05)
+            # ax[0].set_title(title, fontsize=title_fontsize, y=1.05)
+            fig.suptitle(title, fontsize=title_fontsize, y=0.95, ha="center")
+
+        xlabel = np.linspace(-x_width / 2, x_width / 2, 5)
+        ylabel = np.linspace(-y_height / 2, y_height / 2, 5)
+        xticks = np.linspace(0, Ez.shape[0] - 1, 5)
+        yticks = np.linspace(0, Ez.shape[1] - 1, 5)
+        xlabel = [f"{x:.2f}" for x in xlabel]
+        ylabel = [f"{y:.2f}" for y in ylabel]
+        ax[i].set_xlabel(r"$x$ width ($\mu m$)", fontsize=label_fontsize)
+        ax[i].set_ylabel(r"$y$ height ($\mu m$)", fontsize=label_fontsize)
+        ax[i].set_xticks(xticks)
+        ax[i].set_yticks(yticks)
+        ax[i].set_xticklabels(xlabel, fontsize=tick_fontsize)
+        ax[i].set_yticklabels(ylabel, fontsize=tick_fontsize)
+        # ax[0].set_xticks(xticks, xlabel)
+        # ax[0].set_yticks(yticks, ylabel)
+        ax[i].set_xlim([0, Ez.shape[0]])
+        ax[i].set_ylim([0, Ez.shape[1]])
+        ax[i].set_aspect("equal")
 
     # for sl in slices:
     #     ax[0].plot(sl.x*np.ones(len(sl.y)), sl.y, 'b-')
@@ -727,7 +751,7 @@ def plot_eps_field(
             eps.shape[1] // 2 - size[1] // 2 : eps.shape[1] // 2 + size[1] // 2,
         ]
 
-    viz.abs(eps, ax=ax[1], cmap="Greys", cbar=True)
+    plot_abs(eps, ax=ax[-1], cmap="Greys", cbar=True, font_size=label_fontsize)
     xlabel = np.linspace(
         -x_width / 2 / zoom_eps_factor, x_width / 2 / zoom_eps_factor, 5
     )
@@ -736,13 +760,13 @@ def plot_eps_field(
     )
     xlabel = [f"{x:.2f}" for x in xlabel]
     ylabel = [f"{y:.2f}" for y in ylabel]
-    ax[1].set_xlabel(r"$x$ width ($\mu m$)", fontsize=label_fontsize)
-    ax[1].set_ylabel(r"$y$ height ($\mu m$)", fontsize=label_fontsize)
-    ax[1].set_xticks(xticks)
-    ax[1].set_yticks(yticks)
-    ax[1].set_xticklabels(xlabel, fontsize=tick_fontsize)
-    ax[1].set_yticklabels(ylabel, fontsize=tick_fontsize)
-    ax[1].set_aspect("equal")
+    ax[-1].set_xlabel(r"$x$ width ($\mu m$)", fontsize=label_fontsize)
+    ax[-1].set_ylabel(r"$y$ height ($\mu m$)", fontsize=label_fontsize)
+    ax[-1].set_xticks(xticks)
+    ax[-1].set_yticks(yticks)
+    ax[-1].set_xticklabels(xlabel, fontsize=tick_fontsize)
+    ax[-1].set_yticklabels(ylabel, fontsize=tick_fontsize)
+    ax[-1].set_aspect("equal")
     # ax[1].set_xticks(xticks, xlabel)
     # ax[1].set_yticks(yticks, ylabel)
 

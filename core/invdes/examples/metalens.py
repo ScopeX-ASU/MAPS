@@ -1,4 +1,11 @@
 """
+Date: 1969-12-31 17:00:00
+LastEditors: Jiaqi Gu && jiaqigu@asu.edu
+LastEditTime: 2024-12-15 00:28:22
+FilePath: /MAPS/core/invdes/examples/metalens.py
+"""
+
+"""
 this is a wrapper for the invdes module
 we call use InvDesign.optimize() to optimize the inventory design
 basically, this should be like the training logic like in train_NN.py
@@ -45,9 +52,9 @@ if __name__ == "__main__":
             numerical_solver="solve_direct",
             use_autodiff=False,
             neural_solver=None,
-            border_width=[0, 0, 1.5, 1.5],
+            border_width=[0, 0, 0, 0],
             PML=[0.5, 0.5],
-            resolution=100,
+            resolution=20,
             wl_cen=wl,
             plot_root="./figs/metalens_near2far",
         )
@@ -56,17 +63,36 @@ if __name__ == "__main__":
     device = MetaLens(
         material_bg="Air",
         sim_cfg=sim_cfg,
-        aperture=3,
-        port_len=(1.5, 5),
-        substrate_depth=0.75,
+        aperture=20,
+        port_len=(1.5, 41),
+        port_width=(22.2, 2),
+        substrate_depth=0,
         ridge_height_max=0.75,
         nearfield_dx=0.3,
-        farfield_dxs=(4,),
-        farfield_sizes=(1,),
+        nearfield_size=21,
+        farfield_dxs=((20, 40),),
+        farfield_sizes=(2,),
         device=operation_device,
     )
 
-    hr_device = device.copy(resolution=100)
+    hr_device = device.copy(resolution=50)
+
+    # def fom_func(breakdown):
+    #     ## maximization fom
+    #     fom = 0
+    #     local_fom = 10
+    #     for name, obj in breakdown.items():
+    #         if name.startswith("fwd_trans"):
+    #             local_fom = local_fom * obj["value"]
+    #             local_weight = obj["weight"]
+    #         else:
+    #             fom = fom + obj["weight"] * obj["value"]
+    #     fom = fom + local_fom * local_weight
+
+    #     return fom, {"trans_prod": {"weight": local_weight, "value": local_fom}}
+
+    # obj_cfgs = dict(_fusion_func=fom_func)
+
     print(device)
     opt = MetaLensOptimization(
         device=device,

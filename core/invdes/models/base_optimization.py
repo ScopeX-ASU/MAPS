@@ -1,7 +1,7 @@
 """
 Date: 2024-10-04 18:49:06
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-12-13 21:26:08
+LastEditTime: 2024-12-15 00:22:33
 FilePath: /MAPS/core/invdes/models/base_optimization.py
 """
 
@@ -354,6 +354,7 @@ class BaseOptimization(nn.Module):
             y_height=self.device.cell_size[1],
             NPML=self.device.NPML,
             title=f"|{field_component}|^2: {field_key}, FoM: {obj:.3f}",
+            field_stat="abs_real",
             zoom_eps_factor=2,
         )
 

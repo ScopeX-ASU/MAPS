@@ -1,7 +1,7 @@
 """
 Date: 2024-10-02 20:59:04
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-12-13 20:51:54
+LastEditTime: 2024-12-14 22:17:11
 FilePath: /MAPS/core/invdes/models/layers/device_base.py
 """
 
@@ -13,7 +13,6 @@ from typing import Tuple
 import meep as mp
 import numpy as np
 import torch
-
 # from ceviche.modes import insert_mode
 from ceviche.constants import C_0
 from pyutils.config import Config
@@ -219,11 +218,7 @@ class N_Ports(BaseDevice):
         else:
             self.cell_size = sim_cfg["cell_size"]
         ### here we use ceil to match meep
-        self.Nx, self.Ny, self.Nz = [
-            int(round(i * self.resolution)) for i in self.cell_size
-        ]  # change math.ceil to round since sometimes we will have like 10.200000000000001 in the cell_size which will cause a size mismatch
-        self.NPML = [int(round(i * self.resolution)) for i in sim_cfg["PML"]]
-        self.xs, self.ys = get_grid((self.Nx, self.Ny), self.grid_step)
+
         self.epsilon_map = self.get_epsilon_map(
             self.cell_size,
             self.geometry,
@@ -231,6 +226,15 @@ class N_Ports(BaseDevice):
             self.resolution,
             self.eps_bg,
         )
+
+        self.Nx, self.Ny, self.Nz = [
+            int(round(i * self.resolution)) for i in self.cell_size
+        ]  # change math.ceil to round since sometimes we will have like 10.200000000000001 in the cell_size which will cause a size mismatch
+        self.Nx, self.Ny = self.epsilon_map.shape
+        self.Nz = int(round(self.cell_size[-1] * self.resolution))
+        self.NPML = [int(round(i * self.resolution)) for i in sim_cfg["PML"]]
+        self.xs, self.ys = get_grid((self.Nx, self.Ny), self.grid_step)
+
         self.design_region_masks = self.build_design_region_mask(design_region_cfgs)
         ## active region must within the design region
         self.active_region_masks = self.build_active_region_mask(active_region_cfgs)
@@ -332,12 +336,16 @@ class N_Ports(BaseDevice):
             right = left + size[0]
             lower = center[1] - size[1] / 2 + self.cell_size[1] / 2
             upper = lower + size[1]
-            left = int(np.round(left / self.grid_step))
-            right = int(np.round(right / self.grid_step))
-            lower = int(np.round(lower / self.grid_step))
-            upper = int(np.round(upper / self.grid_step))
+            left = max(0, int(np.round(left / self.grid_step)))
+            right = min(
+                self.Nx, int(np.round(right / self.grid_step)) + 1
+            )  # +1 to include the right boundary
+            lower = max(0, int(np.round(lower / self.grid_step)))
+            upper = min(
+                self.Ny, int(np.round(upper / self.grid_step)) + 1
+            )  # +1 to include the right boundary
             region = Slice(
-                x=slice(left, right + 1), y=slice(lower, upper + 1)
+                x=slice(left, right), y=slice(lower, upper)
             )  # a rectangular region
             design_region_masks[name] = region
 
@@ -449,8 +457,8 @@ class N_Ports(BaseDevice):
             monitor_slice = Slice(
                 x=np.array(monitor_center[0]),
                 y=np.arange(
-                    monitor_center[1] - monitor_half_width,
-                    monitor_center[1] + monitor_half_width,
+                    max(0, monitor_center[1] - monitor_half_width),
+                    min(self.Ny, monitor_center[1] + monitor_half_width),
                 ),
             )
         elif direction[0] == "y":
@@ -461,8 +469,8 @@ class N_Ports(BaseDevice):
             monitor_half_width = int(round(size[0] / 2 / self.grid_step))
             monitor_slice = Slice(
                 x=np.arange(
-                    monitor_center[0] - monitor_half_width,
-                    monitor_center[0] + monitor_half_width,
+                    max(0, monitor_center[0] - monitor_half_width),
+                    min(self.Nx, monitor_center[0] + monitor_half_width),
                 ),
                 y=np.array(monitor_center[1]),
             )
@@ -488,18 +496,26 @@ class N_Ports(BaseDevice):
         slice_name: str = "in_port_1",
         rel_loc=0.2,
         rel_width=2,
+        direction: str = None,
     ):
         port_cfg = self.port_cfgs[port_name]
-        direction = port_cfg["direction"]
+        direction = port_cfg["direction"] if direction is None else direction
         center = port_cfg["center"]
         size = port_cfg["size"]
-        if direction == "x":
+
+        if rel_width == float("inf"):
+            if direction[0] == "x":
+                rel_width = self.cell_size[1] / size[1]
+            elif direction[0] == "y":
+                rel_width = self.cell_size[0] / size[0]
+
+        if direction[0] == "x":
             monitor_center = [
                 center[0] - size[0] / 2 + rel_loc * size[0],
                 center[1],
             ]
             monitor_size = [0, size[1] * rel_width]
-        elif direction == "y":
+        elif direction[0] == "y":
             monitor_center = [
                 center[0],
                 center[1] - size[1] / 2 + rel_loc * size[1],
@@ -514,8 +530,52 @@ class N_Ports(BaseDevice):
     def build_farfield_region(
         self,
         region_name: str = "farfield",
-        direction: str = "x",
-        extension_range: Tuple[float] = (3, 10),
+        center: Tuple[float, float] = (3, 0),
+        size: Tuple[float, float] = (1, 1),
+        direction: str = "x+",
+    ):
+        ## extend the farfield from range[0] to range[1] um along the direction
+        
+        region_center = [
+            int(round((c + offset / 2) / self.grid_step))
+            for c, offset in zip(center, self.cell_size)
+        ]
+        half_width_x = int(round(size[0] / 2 / self.grid_step))
+        half_width_y = int(round(size[1] / 2 / self.grid_step))
+        xs = np.arange(
+            region_center[0] - half_width_x, region_center[0] + half_width_x
+        )
+        ys = np.arange(
+                region_center[1] - half_width_y,
+                region_center[1] + half_width_y,
+            )
+
+        region = Slice(
+            x=xs[:, None],
+            y=ys[None, :],
+        )
+
+        # center of pixel's physical locations (um)
+        xs = (-(self.Nx - 1) / 2 + region.x) * self.grid_step
+        ys = (-(self.Ny - 1) / 2 + region.y) * self.grid_step
+        xs, ys = np.meshgrid(xs, ys, indexing="ij")
+        self.port_monitor_slices[region_name] = region
+        self.port_monitor_slices_info[region_name] = dict(
+            center=center,
+            size=size,
+            xs=xs,
+            ys=ys,
+            direction=direction,
+        )
+
+        return region
+
+
+    def build_farfield_region_ext(
+        self,
+        region_name: str = "farfield",
+        direction: str = "x+",
+        extension_range: Tuple[float, float] = (3, 6),
     ):
         ## extend the farfield from range[0] to range[1] um along the direction
         if direction == "x":
@@ -576,6 +636,7 @@ class N_Ports(BaseDevice):
 
         return region
 
+
     def build_near2far_slice(
         self,
         slice_name: str = "nearfield_1",
@@ -583,7 +644,11 @@ class N_Ports(BaseDevice):
         size: Tuple[float, float] = (0, 1),
         direction="x+",
     ):
-        return self.add_monitor_slice(slice_name, center, size, direction)
+        monitor_slice = self.add_monitor_slice(slice_name, center, size, direction)
+        ## need to check the slice of eps is homogeneous medium
+        eps_slice = self.epsilon_map[monitor_slice.x, monitor_slice.y]
+        assert(np.unique(eps_slice).size == 1), f"Near2far slice {slice_name} is not in a homogeneous medium"
+        return monitor_slice
 
     def build_radiation_monitor(
         self, monitor_name: str = "rad_monitor", distance_to_PML=[0.2, 0.2]
@@ -805,10 +870,6 @@ class N_Ports(BaseDevice):
                 ht_m, et_m, _, mode = insert_mode(
                     omega, dl, slice.x, slice.y, current_eps, m=source_mode
                 )
-                # mode *= 0
-                # mode[100,150:250]=1
-                # mode[40,35:-35] = 1
-                # mode[39,35:-35] = np.exp(-1j * 2 * np.pi / wl_cen * grid_step - 1j * np.pi)
                 if power_scales is not None:
                     power_scale = power_scales[(wl, source_mode)]
                     ht_m = ht_m * power_scale
@@ -818,6 +879,48 @@ class N_Ports(BaseDevice):
                     power_scale = 1
                 mode_profiles[(wl, source_mode, temp)] = [mode, ht_m, et_m, power_scale]
         return mode_profiles
+
+    def insert_plane_wave(
+        self,
+        eps,
+        slice: Slice,
+        wl_cen: float = 1.55,
+        wl_width: float = 0,
+        n_wl: int = 1,
+        temp: float = 300,
+        grid_step=None,
+        power_scales: dict = None,
+        direction: str = "x+",
+    ):
+        grid_step = grid_step or self.grid_step
+        source_profiles = {}
+        mode = 1  # placeholder, by default treat it as mode 1
+        offset = -1 if direction[1] == "+" else 1
+        for wl in np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl):
+            source = np.zeros_like(eps, dtype=np.complex64)
+            if direction[0] == "y":  # horizontal slice
+                source[:, slice.y] = 1
+                source[:, slice.y + offset] = np.exp(
+                    -1j * 2 * np.pi / wl_cen * grid_step - 1j * np.pi
+                )
+            elif direction[0] == "x":  # vertical slice
+                source[slice.x, :] = 1
+                source[slice.x + offset, :] = np.exp(
+                    -1j * 2 * np.pi / wl_cen * grid_step - 1j * np.pi
+                )
+
+            ht_m = et_m = source.reshape(-1)
+            if power_scales is not None:
+                power_scale = power_scales[
+                    (wl, mode)
+                ]  # use direction as a placeholder for mode
+                ht_m = et_m = et_m * power_scale
+                source = source * power_scale
+            else:
+                power_scale = 1
+
+            source_profiles[(wl, mode, temp)] = [source, ht_m, et_m, power_scale]
+        return source_profiles
 
     def create_simulation(self, omega, dl, eps, NPML, solver="ceviche"):
         if solver == "ceviche":
@@ -882,7 +985,8 @@ class N_Ports(BaseDevice):
         fields = {}
         if solver in {"ceviche", "ceviche_torch"}:
             for (wl, mode, temp), (source, _, _, _) in source_profiles.items():
-                current_eps = get_temp_related_eps(eps, wl, temp)
+                # current_eps = get_temp_related_eps(eps, wl, temp)
+                current_eps = eps
                 Hx, Hy, Ez = self.solve_ceviche(
                     current_eps, source, wl=wl, grid_step=grid_step, solver=solver
                 )
@@ -903,12 +1007,18 @@ class N_Ports(BaseDevice):
         temp=300,
         solver="ceviche",
         power: float = 1e-8,
+        source_type: str = "mode",
         plot=False,
     ):
+        assert source_type in {
+            "mode",
+            "plane_wave",
+        }, f"Source type {source_type} not supported"
+
         input_slice = self.port_monitor_slices[input_slice_name]
         in_port = get_two_ports(self, port_name=input_port_name)
         in_port_eps = in_port.epsilon_map
-        direction = in_port.port_cfgs[input_port_name]["direction"]
+        direction = self.port_monitor_slices_info[input_slice_name]["direction"]
 
         if direction[0] == "x":
             output_slice = Slice(x=self.Nx - input_slice.x, y=input_slice.y)
@@ -916,27 +1026,40 @@ class N_Ports(BaseDevice):
             output_slice = Slice(x=input_slice.x, y=self.Ny - input_slice.y)
 
         def _norm_run(power_scales=None):
-            source_profiles = self.insert_modes(
-                in_port_eps,
-                input_slice,
-                wl_cen=wl_cen,
-                wl_width=wl_width,
-                n_wl=n_wl,
-                temp=temp,
-                power_scales=power_scales,
-                source_modes=source_modes,
-            )  # {(wl, mode): [source, ht_m, et_m, scale], ...}
-            # print_stat(source_profiles[(1.55, 1)][0])
-            monitor_profiles = self.insert_modes(
-                in_port_eps,
-                output_slice,
-                wl_cen=wl_cen,
-                wl_width=wl_width,
-                n_wl=n_wl,
-                temp=temp,
-                power_scales=power_scales,
-                source_modes=source_modes,
-            )  # {(wl, mode): [monitor, ht_m, et_m, scale], ...}
+            if source_type == "mode":
+                source_profiles = self.insert_modes(
+                    in_port_eps,
+                    input_slice,
+                    wl_cen=wl_cen,
+                    wl_width=wl_width,
+                    n_wl=n_wl,
+                    temp=temp,
+                    power_scales=power_scales,
+                    source_modes=source_modes,
+                )  # {(wl, mode): [source, ht_m, et_m, scale], ...}
+                # print_stat(source_profiles[(1.55, 1)][0])
+                # monitor_profiles = self.insert_modes(
+                #     in_port_eps,
+                #     output_slice,
+                #     wl_cen=wl_cen,
+                #     wl_width=wl_width,
+                #     n_wl=n_wl,
+                #     temp=temp,
+                #     power_scales=power_scales,
+                #     source_modes=source_modes,
+                # )  # {(wl, mode): [monitor, ht_m, et_m, scale], ...}
+            elif source_type == "plane_wave":
+                source_profiles = self.insert_plane_wave(
+                    in_port_eps,
+                    input_slice,
+                    wl_cen=wl_cen,
+                    wl_width=wl_width,
+                    n_wl=n_wl,
+                    temp=temp,
+                    power_scales=power_scales,
+                    direction=direction,
+                )
+
             # print_stat(monitor_profiles[(1.55, 1)][0])
             fields = self.solve(
                 in_port_eps, source_profiles, solver=solver
@@ -944,7 +1067,7 @@ class N_Ports(BaseDevice):
             # print_stat(fields[(1.55, 1)]["Ez"])
 
             input_SCALE = {}
-            for k in monitor_profiles:
+            for k in source_profiles:
                 Hx, Hy, Ez = fields[k]["Hx"], fields[k]["Hy"], fields[k]["Ez"]
                 # _, ht_m, et_m, _ = monitor_profiles[k]
                 # print("this is the type of Hx:", type(Hx), flush=True)

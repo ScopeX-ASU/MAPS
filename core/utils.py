@@ -202,11 +202,11 @@ def overlap(
 
 def cross(a, b, direction="x"):
     """Compute the cross product between two VectorFields."""
-    if direction == "x":
+    if direction[0] == "x":
         return a[1] * b[2] - a[2] * b[1]
-    elif direction == "y":
+    elif direction[0] == "y":
         return a[2] * b[0] - a[0] * b[2]
-    elif direction == "z":
+    elif direction[0] == "z":
         return a[0] * b[1] - a[1] * b[0]
     else:
         raise ValueError("Invalid direction")
@@ -237,7 +237,7 @@ def get_eigenmode_coefficients(
         abs = torch.abs
         ravel = torch.ravel
 
-    if direction == "x":
+    if direction[0] == "x":
         h = (0.0, ravel(hy[monitor]), 0)
         hm = (0.0, ht_m, 0.0)
         # The E-field is not co-located with the H-field in the Yee cell. Therefore,
@@ -245,7 +245,7 @@ def get_eigenmode_coefficients(
         # then interpolate:
         e_yee_shifted = grid_average(ez, monitor, direction, autograd=autograd)
 
-    elif direction == "y":
+    elif direction[0] == "y":
         h = (ravel(hx[monitor]), 0, 0)
         hm = (-ht_m, 0.0, 0.0)
         # The E-field is not co-located with the H-field in the Yee cell. Therefore,
@@ -1696,7 +1696,7 @@ def grid_average(e, monitor, direction: str = "x", autograd=False):
     if isinstance(e, torch.Tensor):
         mean = lambda x, axis: torch.mean(x, dim=axis)
 
-    if direction == "x":
+    if direction[0] == "x":
         if isinstance(monitor, Slice):
             if isinstance(monitor[0], torch.Tensor):
                 e_monitor = (
@@ -1713,7 +1713,7 @@ def grid_average(e, monitor, direction: str = "x", autograd=False):
             e_monitor = monitor.nonzero()
             e_monitor = (e_monitor[0], e_monitor[1] - 1)
             e_yee_shifted = (e[monitor] + e[e_monitor]) / 2
-    elif direction == "y":
+    elif direction[0] == "y":
         if isinstance(monitor, Slice):
             if isinstance(monitor[0], torch.Tensor):
                 e_monitor = (
@@ -1732,7 +1732,13 @@ def grid_average(e, monitor, direction: str = "x", autograd=False):
 
 
 def get_flux(
-    hx, hy, ez, monitor, grid_step, direction: str = "x", autograd=False, is_slice=False
+    hx,
+    hy,
+    ez,
+    monitor=None,
+    grid_step: float = 0.05,
+    direction: str = "x",
+    autograd=False,
 ):
     if autograd:
         ravel = npa.ravel
@@ -1744,21 +1750,21 @@ def get_flux(
         ravel = torch.ravel
         real = torch.real
 
-    if direction == "x":
-        if is_slice:
-            # no need to ravel
+    if direction[0] == "x":
+        if monitor is None:
+            # no need to slice and ravel
             h = (0, hy, 0)
         else:
             h = (0, ravel(hy[monitor]), 0)
-    elif direction == "y":
-        if is_slice:
+    elif direction[0] == "y":
+        if monitor is None:
             h = (hx, 0, 0)
         else:
             h = (ravel(hx[monitor]), 0, 0)
     # The E-field is not co-located with the H-field in the Yee cell. Therefore,
     # we must sample at two neighboring pixels in the propataion direction and
     # then interpolate:
-    if is_slice:
+    if monitor is None:
         e_yee_shifted = ez
     else:
         e_yee_shifted = grid_average(ez, monitor, direction, autograd=autograd)
@@ -1784,7 +1790,7 @@ def get_shape_similarity(
     shape_type,
     shape_cfg,
     intensity: bool = True,
-    similarity: str = "cosine", # angular or cosine
+    similarity: str = "cosine",  # angular or cosine
 ):
     field = torch.ravel(field[monitor_slice]).abs()
     if intensity:
@@ -1796,8 +1802,8 @@ def get_shape_similarity(
     # return the angular similarity between the field intensity and the target shape
     if similarity == "cosine":
         return torch.nn.functional.cosine_similarity(
-                field.unsqueeze(0), target_shape.unsqueeze(0), dim=-1
-            ).mean()
+            field.unsqueeze(0), target_shape.unsqueeze(0), dim=-1
+        ).mean()
     elif similarity == "angular":
         return (
             1
