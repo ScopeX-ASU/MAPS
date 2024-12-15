@@ -1,7 +1,7 @@
 """
 Date: 1969-12-31 17:00:00
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-12-15 03:20:05
+LastEditTime: 2024-12-15 03:40:49
 FilePath: /MAPS/core/invdes/examples/metalens.py
 """
 
@@ -54,7 +54,7 @@ if __name__ == "__main__":
             neural_solver=None,
             border_width=[0, 0, 0, 0],
             PML=[0.5, 0.5],
-            resolution=20,
+            resolution=50,
             wl_cen=wl,
             plot_root="./figs/metalens_near2far",
         )
@@ -75,7 +75,7 @@ if __name__ == "__main__":
         device=operation_device,
     )
 
-    hr_device = device.copy(resolution=50)
+    hr_device = device.copy(resolution=100)
 
     # def fom_func(breakdown):
     #     ## maximization fom
