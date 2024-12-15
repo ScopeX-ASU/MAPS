@@ -405,6 +405,7 @@ class ShapeSimilarityObjective(object):
         self,
         sims: dict,  # {wl: Simulation}
         port_slices: dict,
+        port_slices_info: dict,
         in_port_name: str,
         out_port_name: str,
         in_mode: int,
@@ -420,6 +421,7 @@ class ShapeSimilarityObjective(object):
     ):
         self.sims = sims
         self.port_slices = port_slices
+        self.port_slices_info = port_slices_info
         self.in_port_name = in_port_name
         self.out_port_name = out_port_name
         self.in_mode = in_mode
@@ -463,12 +465,17 @@ class ShapeSimilarityObjective(object):
             for out_mode in out_modes:
                 for temp in target_temps:
                     monitor_slice = self.port_slices[out_port_name]
+                    monitor_direction = self.port_slices_info[out_port_name]["direction"]
                     ez = fields[(in_port_name, wl, in_mode, temp)]["Ez"]
+                    ez = ez[monitor_slice]
+                    if len(monitor_slice.x.shape) <= 1 or len(monitor_slice.y.shape) <= 1: # 1d slice
+                        ez = ez.reshape(1, -1)
+                    else: # 2d slice
+                        if monitor_direction[0] == "y":
+                            ez = ez.t()
                     shape_similarity = get_shape_similarity(
                         ez,
-                        monitor_slice,
                         grid_step=self.grid_step,
-                        autograd=True,
                         shape_type=shape_type,
                         shape_cfg=shape_cfg,
                         intensity=self.intensity,
@@ -628,6 +635,7 @@ class ObjectiveFunc(object):
                 objfn = ShapeSimilarityObjective(
                     sims=self.sims,
                     port_slices=self.port_slices,
+                    port_slices_info=self.port_slices_info,
                     in_port_name=in_port_name,
                     out_port_name=out_port_name,
                     in_mode=in_mode,

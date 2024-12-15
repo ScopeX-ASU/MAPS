@@ -29,7 +29,18 @@ else:
 #     shape_cfg["size"] = field_size
 #     shape_cfg["grid_step"] = grid_step
 #     return shape_dict[shape_type](**shape_cfg)
-def gaussian(**kwargs):
+
+
+@lru_cache(maxsize=8)
+def _gaussian(grid_step, size, width, device="cuda"):
+    x_mesh = torch.linspace(
+        -size * grid_step / 2, size * grid_step / 2, size, device=device
+    )
+
+    return torch.exp((x_mesh**2) / (-2 * width**2))
+
+
+def gaussian(device="cuda", **kwargs):
     """Generate a gaussian shape.
 
     Parameters
@@ -49,9 +60,7 @@ def gaussian(**kwargs):
     grid_step = kwargs["grid_step"]
     size = kwargs["size"]
     width = kwargs["width"]
-    x_mesh = torch.linspace(-size * grid_step / 2, size * grid_step / 2, size)
-
-    return torch.exp(-(x_mesh**2) / (2 * width**2))
+    return _gaussian(grid_step, size, width, device=device)
 
 
 shape_dict = {
@@ -1776,40 +1785,44 @@ def get_flux(
     return s
 
 
-def get_shape(shape_type, shape_cfg, field_size, grid_step):
-    shape_cfg["size"] = field_size[0]
+def get_shape(shape_type, shape_cfg, field_size, grid_step, device):
+    shape_cfg["size"] = field_size[
+        -1
+    ]  # last dimension is the shape dimension, others are batch dimension
     shape_cfg["grid_step"] = grid_step
-    return shape_dict[shape_type](**shape_cfg)
+    return shape_dict[shape_type](**shape_cfg, device=device)
 
 
 def get_shape_similarity(
-    field,
-    monitor_slice,
+    field,  # slices field
     grid_step,
-    autograd,
     shape_type,
     shape_cfg,
     intensity: bool = True,
     similarity: str = "cosine",  # angular or cosine
 ):
-    field = torch.ravel(field[monitor_slice]).abs()
+    ## field: can support batch dimension, effective dimension is the last dimension
+    ## e.g., field can be of shape [..., n]
+    field = field.abs()
+    field = field.reshape(-1, field.shape[-1])  # [b, n]
+
     if intensity:
         field = field.square()
 
-    target_shape = get_shape(shape_type, shape_cfg, field.shape, grid_step).to(
-        field.device
+    target_shape = get_shape(
+        shape_type, shape_cfg, field.shape, grid_step, device=field.device
     )
     # return the angular similarity between the field intensity and the target shape
     if similarity == "cosine":
         return torch.nn.functional.cosine_similarity(
-            field.unsqueeze(0), target_shape.unsqueeze(0), dim=-1
+            field, target_shape.unsqueeze(0), dim=-1
         ).mean()
     elif similarity == "angular":
         return (
             1
             - torch.arccos(
                 torch.nn.functional.cosine_similarity(
-                    field.unsqueeze(0), target_shape.unsqueeze(0), dim=-1
+                    field, target_shape.unsqueeze(0), dim=-1
                 )
             ).mul(1 / np.pi)
         ).mean()

@@ -1,7 +1,7 @@
 """
 Date: 1969-12-31 17:00:00
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-12-15 00:28:22
+LastEditTime: 2024-12-15 01:40:05
 FilePath: /MAPS/core/invdes/examples/metalens.py
 """
 
@@ -54,7 +54,7 @@ if __name__ == "__main__":
             neural_solver=None,
             border_width=[0, 0, 0, 0],
             PML=[0.5, 0.5],
-            resolution=20,
+            resolution=50,
             wl_cen=wl,
             plot_root="./figs/metalens_near2far",
         )
@@ -70,12 +70,12 @@ if __name__ == "__main__":
         ridge_height_max=0.75,
         nearfield_dx=0.3,
         nearfield_size=21,
-        farfield_dxs=((20, 40),),
+        farfield_dxs=((20, 60),),
         farfield_sizes=(2,),
         device=operation_device,
     )
 
-    hr_device = device.copy(resolution=50)
+    hr_device = device.copy(resolution=100)
 
     # def fom_func(breakdown):
     #     ## maximization fom

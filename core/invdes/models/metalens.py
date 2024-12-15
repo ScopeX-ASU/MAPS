@@ -168,6 +168,25 @@ class DefaultConfig(DefaultOptimizationConfig):
                     #     type="flux",
                     #     direction="x",
                     # ),
+                    fwd_intensity_shape=dict(
+                        weight=1,
+                        #### objective is evaluated at this port
+                        in_port_name="in_port_1",
+                        out_port_name="farfield_1",
+                        #### objective is evaluated at all points by sweeping the wavelength and modes
+                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        wl=[0.832],
+                        temp=[300],
+                        out_modes=(
+                            1,
+                        ),  # can evaluate on multiple output modes and get average transmission
+                        type="intensity_shape",  # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
+                        shape_type="gaussian",
+                        shape_cfg=dict(
+                            width=0.5, # sigma
+                        ),
+                        direction="x+",
+                    ),
                 ),
             )
         )
