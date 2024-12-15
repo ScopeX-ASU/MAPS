@@ -1,7 +1,7 @@
 """
 Date: 2024-10-04 18:49:06
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-12-15 00:22:33
+LastEditTime: 2024-12-15 02:36:05
 FilePath: /MAPS/core/invdes/models/base_optimization.py
 """
 
@@ -345,6 +345,7 @@ class BaseOptimization(nn.Module):
             obj = obj.item()
         if isinstance(Ez, ArrayBox):
             Ez = Ez._value
+        design_region_center = np.mean(np.array([cfg["center"] for cfg in self.device.design_region_cfgs.values()]), axis=0)
         plot_eps_field(
             Ez,
             eps_map.detach().cpu().numpy(),
@@ -356,6 +357,7 @@ class BaseOptimization(nn.Module):
             title=f"|{field_component}|^2: {field_key}, FoM: {obj:.3f}",
             field_stat="abs_real",
             zoom_eps_factor=2,
+            zoom_eps_center=design_region_center
         )
 
     def dump_gds_files(self, filename):

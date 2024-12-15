@@ -128,7 +128,7 @@ class MetaLens(N_Ports):
         refl_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="refl_port_1",
-            rel_loc=0.61,
+            rel_loc=0.65,
             rel_width=float("inf"),
             direction="x+",
         )

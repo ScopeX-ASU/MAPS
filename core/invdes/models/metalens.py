@@ -180,7 +180,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_modes=(
                             1,
                         ),  # can evaluate on multiple output modes and get average transmission
-                        type="intensity_shape",  # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
+                        type="intensity_shape_near2far",  # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
                         shape_type="gaussian",
                         shape_cfg=dict(
                             width=0.5, # sigma

@@ -465,12 +465,144 @@ class ShapeSimilarityObjective(object):
             for out_mode in out_modes:
                 for temp in target_temps:
                     monitor_slice = self.port_slices[out_port_name]
-                    monitor_direction = self.port_slices_info[out_port_name]["direction"]
+                    monitor_direction = self.port_slices_info[out_port_name][
+                        "direction"
+                    ]
                     ez = fields[(in_port_name, wl, in_mode, temp)]["Ez"]
                     ez = ez[monitor_slice]
-                    if len(monitor_slice.x.shape) <= 1 or len(monitor_slice.y.shape) <= 1: # 1d slice
+                    if (
+                        len(monitor_slice.x.shape) <= 1
+                        or len(monitor_slice.y.shape) <= 1
+                    ):  # 1d slice
                         ez = ez.reshape(1, -1)
-                    else: # 2d slice
+                    else:  # 2d slice
+                        if monitor_direction[0] == "y":
+                            ez = ez.t()
+                    shape_similarity = get_shape_similarity(
+                        ez,
+                        grid_step=self.grid_step,
+                        shape_type=shape_type,
+                        shape_cfg=shape_cfg,
+                        intensity=self.intensity,
+                        similarity=self.similarity,
+                    )
+                    similarity_list.append(shape_similarity)
+        if isinstance(similarity_list[0], Tensor):
+            return torch.mean(torch.stack(similarity_list))
+        else:
+            return npa.mean(npa.array(similarity_list))
+
+
+class ShapeSimilarityNear2FarObjective(object):
+    def __init__(
+        self,
+        sims: dict,  # {wl: Simulation}
+        port_slices: dict,
+        port_slices_info: dict,
+        in_port_name: str,
+        out_port_name: str,
+        in_mode: int,
+        out_modes: Tuple[int],
+        name: str,
+        target_wls: Tuple[float],
+        target_temps: Tuple[float],
+        shape_type: str,
+        shape_cfg: dict,
+        grid_step: float,
+        eps_bg: float,
+        intensity: bool = True,
+        similarity: str = "angular",
+    ):
+        self.sims = sims
+        self.port_slices = port_slices
+        self.port_slices_info = port_slices_info
+        self.in_port_name = in_port_name
+        self.out_port_name = out_port_name
+        self.in_mode = in_mode
+        self.out_modes = out_modes
+        self.name = name
+        self.target_wls = target_wls
+        self.target_temps = target_temps
+        self.shape_type = shape_type
+        self.shape_cfg = shape_cfg
+        self.grid_step = grid_step
+        self.eps_bg = eps_bg
+        self.intensity = intensity
+        self.similarity = similarity
+
+    def __call__(self, fields):
+        (
+            target_wls,
+            target_temps,
+            in_port_name,
+            out_port_name,
+            in_mode,
+            out_modes,
+            shape_type,
+            shape_cfg,
+        ) = (
+            self.target_wls,
+            self.target_temps,
+            self.in_port_name,
+            self.out_port_name,
+            self.in_mode,
+            self.out_modes,
+            self.shape_type,
+            self.shape_cfg,
+        )
+
+        similarity_list = []
+        ## for each wavelength, we evaluate the objective
+        for wl, sim in self.sims.items():
+            ## we calculate the average eigen energy for all output modes
+            if wl not in target_wls:
+                continue
+            for out_mode in out_modes:
+                for temp in target_temps:
+                    monitor_slice = self.port_slices[out_port_name]
+                    monitor_direction = self.port_slices_info[out_port_name][
+                        "direction"
+                    ]
+                    field = fields[(in_port_name, wl, in_mode, temp)]
+                    hx_near, hy_near, ez_near = (
+                        field["Hx"],
+                        field["Hy"],
+                        field["Ez"],
+                    )
+
+                    farfield = get_farfields_GreenFunction(
+                        nearfield_slices=[
+                            self.port_slices[nearfield_slice_name]
+                            for nearfield_slice_name in list(self.port_slices.keys())
+                            if nearfield_slice_name.startswith("nearfield")
+                        ],
+                        nearfield_slices_info=[
+                            self.port_slices_info[nearfield_slice_name]
+                            for nearfield_slice_name in list(
+                                self.port_slices_info.keys()
+                            )
+                            if nearfield_slice_name.startswith("nearfield")
+                        ],
+                        Ez=ez_near[None, ..., None],
+                        Hx=hx_near[None, ..., None],
+                        Hy=hy_near[None, ..., None],
+                        farfield_x=None,
+                        farfield_slice_info=self.port_slices_info[out_port_name],
+                        freqs=torch.tensor([1 / wl], device=ez_near.device),
+                        eps=self.eps_bg,
+                        mu=MU_0,
+                        dL=self.grid_step,
+                        component="Ez",
+                        decimation_factor=4,
+                    )
+                    ez = farfield["Ez"][0, ..., 0]
+                    # ez = ez[monitor_slice]
+                    if (
+                        len(monitor_slice.x.shape) <= 1
+                        or len(monitor_slice.y.shape) <= 1
+                    ):  # 1d slice
+                        ez = ez.reshape(1, -1)
+                    else:  # 2d slice
                         if monitor_direction[0] == "y":
                             ez = ez.t()
                     shape_similarity = get_shape_similarity(
@@ -646,6 +778,26 @@ class ObjectiveFunc(object):
                     grid_step=self.grid_step,
                     shape_type=shape_type,
                     shape_cfg=shape_cfg,
+                    intensity=True,
+                    similarity="angular",
+                )
+
+            elif type == "intensity_shape_near2far":
+                objfn = ShapeSimilarityNear2FarObjective(
+                    sims=self.sims,
+                    port_slices=self.port_slices,
+                    port_slices_info=self.port_slices_info,
+                    in_port_name=in_port_name,
+                    out_port_name=out_port_name,
+                    in_mode=in_mode,
+                    out_modes=out_modes,
+                    name=name,
+                    target_wls=target_wls,
+                    target_temps=target_temps,
+                    grid_step=self.grid_step,
+                    shape_type=shape_type,
+                    shape_cfg=shape_cfg,
+                    eps_bg=self.eps_bg,
                     intensity=True,
                     similarity="angular",
                 )

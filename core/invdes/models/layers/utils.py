@@ -1,6 +1,6 @@
 import math
 import os
-from typing import Callable, List
+from typing import Callable, List, Tuple
 
 import matplotlib.patches as patches
 import matplotlib.pylab as plt
@@ -16,8 +16,10 @@ from core.utils import (
     get_eigenmode_coefficients,
 )
 from thirdparty.ceviche.ceviche import constants
-from .viz import abs as plot_abs, real as plot_real
 from thirdparty.ceviche.ceviche.modes import get_modes
+
+from .viz import abs as plot_abs
+from .viz import real as plot_real
 
 __all__ = [
     "get_grid",
@@ -608,16 +610,39 @@ def poynting_vector(
     return P
 
 
+def loc2ind(
+    loc: Tuple[float, float],
+    box_size: Tuple[float, float],
+    box_shape: Tuple[float, float],
+    clip: bool = True,
+):
+    ## take arbitrary dimensions and return the index of the location in the box (if clip), otherwise can be outside of box
+    indices = []
+    ## box is in the center of the space, center aligns with origin
+    assert (
+        len(loc) == len(box_size) == len(box_shape)
+    ), "The dimensions of loc, box_size, and box_shape should be the same"
+    loc = np.array(loc)
+    box_size = np.array(box_size)
+    box_shape = np.array(box_shape)
+    indices = np.round((loc + box_size / 2) / box_size * box_shape).astype(np.int32)
+
+    if clip:
+        indices = np.clip(indices, 0, box_shape - 1)
+    return indices
+
+
 def plot_eps_field(
     Ez,
     eps,
     monitors=[],
     filepath=None,
     zoom_eps_factor=1,
+    zoom_eps_center=(0, 0),
     x_width=1,
     y_height=1,
     NPML=[0, 0],
-    field_stat: str = "abs", # "abs" or "real" or "abs_real"
+    field_stat: str = "abs",  # "abs" or "real" or "abs_real"
     title: str = None,
 ):
     if isinstance(Ez, torch.Tensor):
@@ -638,7 +663,10 @@ def plot_eps_field(
         1,
         len(field_stat) + 1,
         constrained_layout=True,
-        figsize=(7 * Ez.shape[0] / 600 * (len(field_stat) + 1)/2, 1.7 * Ez.shape[1] / 300),
+        figsize=(
+            7 * Ez.shape[0] / 600 * (len(field_stat) + 1) / 2,
+            1.7 * Ez.shape[1] / 300,
+        ),
         gridspec_kw={"wspace": 0.3},
     )
     for i, stat in enumerate(field_stat):
@@ -646,7 +674,13 @@ def plot_eps_field(
             plot_abs(Ez, outline=None, ax=ax[i], cbar=True, font_size=label_fontsize)
         elif stat == "real":
             plot_real(Ez, outline=None, ax=ax[i], cbar=True, font_size=label_fontsize)
-        plot_abs(eps.astype(np.float64), ax=ax[i], cmap="Greys", alpha=0.2, font_size=label_fontsize)
+        plot_abs(
+            eps.astype(np.float64),
+            ax=ax[i],
+            cmap="Greys",
+            alpha=0.2,
+            font_size=label_fontsize,
+        )
         if len(monitors) > 0:
             for m in monitors:
                 if isinstance(m[0], Slice):
@@ -744,19 +778,39 @@ def plot_eps_field(
 
     size = eps.shape
     ## center crop of eps of size of new_size
+    ## find center pixel index based on zoom_eps_center
+    patch_size = (x_width / zoom_eps_factor, y_height / zoom_eps_factor)
     if zoom_eps_factor > 1:
+        ## move center to avoid exceeding the boundary
+        zoom_eps_center = np.clip(
+            zoom_eps_center,
+            (-(x_width - patch_size[0]) / 2, -(y_height - patch_size[1]) / 2),
+            ((x_width - patch_size[0]) / 2, (y_height - patch_size[1]) / 2),
+        )
+        zoom_eps_center_ind = np.round(
+            loc2ind(zoom_eps_center, (x_width, y_height), size) * zoom_eps_factor
+        ).astype(np.int32)
+
         eps = zoom(eps, zoom_eps_factor)
         eps = eps[
-            eps.shape[0] // 2 - size[0] // 2 : eps.shape[0] // 2 + size[0] // 2,
-            eps.shape[1] // 2 - size[1] // 2 : eps.shape[1] // 2 + size[1] // 2,
+            zoom_eps_center_ind[0] - size[0] // 2 : zoom_eps_center_ind[0]
+            + size[0] // 2,
+            zoom_eps_center_ind[1] - size[1] // 2 : zoom_eps_center_ind[1]
+            + size[1] // 2,
         ]
+    else:
+        zoom_eps_center = (0, 0)  # force to be origin if not zoomed
 
     plot_abs(eps, ax=ax[-1], cmap="Greys", cbar=True, font_size=label_fontsize)
     xlabel = np.linspace(
-        -x_width / 2 / zoom_eps_factor, x_width / 2 / zoom_eps_factor, 5
+        zoom_eps_center[0] - patch_size[0] / 2,
+        zoom_eps_center[0] + patch_size[0] / 2,
+        5,
     )
     ylabel = np.linspace(
-        -y_height / 2 / zoom_eps_factor, y_height / 2 / zoom_eps_factor, 5
+        zoom_eps_center[1] - patch_size[1] / 2,
+        zoom_eps_center[1] + patch_size[1] / 2,
+        5,
     )
     xlabel = [f"{x:.2f}" for x in xlabel]
     ylabel = [f"{y:.2f}" for y in ylabel]
