@@ -48,7 +48,7 @@ def get_temp_related_eps(
     # and we treat the air as it is independent of the temperature
     eps_max = eps.max()
     eps_min = eps.min()
-    eps = (eps - eps_min) / (eps_max - eps_min)
+    eps = (eps - eps_min) / (eps_max - eps_min) # (0, 1)
     n_si = math.sqrt(eps_r_0) + (temp - temp_0) * dn_dT
     eps = eps * (n_si**2 / eps_r_0)
     eps = eps * (eps_max - eps_min) + eps_min

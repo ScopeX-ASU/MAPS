@@ -32,7 +32,7 @@ if __name__ == "__main__":
     # first we need to instantiate the a optimization object
     sim_cfg = DefaultSimulationConfig()
 
-    mdm_region_size = (10, 4)
+    mdm_region_size = (3, 2)
     port_len = 1.8
 
     input_port_width = 0.48
@@ -52,6 +52,21 @@ if __name__ == "__main__":
         )
     )
 
+    def fom_func(breakdown):
+        ## maximization fom
+        fom = 0
+        for key, obj in breakdown.items():
+            if key in {"temp1_trans", "temp2_trans"}:
+                continue
+            fom = fom + obj["weight"] * obj["value"]
+
+        ## add extra temp mul
+        product = breakdown["temp1_trans"]["value"] * breakdown["temp2_trans"]["value"] * 5
+        fom = fom + product
+        return fom, {"trans_product": {"weight": 5, "value": product}}
+
+    obj_cfgs = dict(_fusion_func=fom_func)
+
     device = TDM(
         sim_cfg=sim_cfg,
         box_size=mdm_region_size,
@@ -66,6 +81,7 @@ if __name__ == "__main__":
         device=device,
         hr_device=hr_device,
         sim_cfg=sim_cfg,
+        obj_cfgs=obj_cfgs,
         operation_device=operation_device,
     ).to(operation_device)
     invdesign = InvDesign(devOptimization=opt)
@@ -73,7 +89,7 @@ if __name__ == "__main__":
         plot=True,
         plot_filename=f"tdm_{'init_try'}",
         objs=["temp1_trans", "temp2_trans"],
-        field_keys=[("in_port_1", 1.55, 1, 270), ("in_port_1", 1.55, 1, 330)],
+        field_keys=[("in_port_1", 1.55, 1, 300), ("in_port_1", 1.55, 1, 360)],
         in_port_names=["in_port_1", "in_port_1"],
         exclude_port_names=[],
     )

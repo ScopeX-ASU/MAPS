@@ -169,6 +169,8 @@ class CrossingOptimization(BaseOptimization):
                 transform=[
                     dict(type="transpose_symmetry", rot_k=0),
                     dict(type="mirror_symmetry", dims=[0,1]),
+                    dict(type="blur", mfs=0.1, resolutions=[310, 310], dim="xy"),
+                    dict(type="binarize"),
                     # dict(type="transpose_symmetry", flag=True),
                 ],
                 init_method="random",

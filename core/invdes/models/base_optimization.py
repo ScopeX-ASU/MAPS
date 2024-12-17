@@ -406,7 +406,7 @@ class BaseOptimization(nn.Module):
                         f.create_dataset(f"port_slice-{slice_name}_x", data=slice.x)
                         f.create_dataset(f"port_slice-{slice_name}_y", data=slice.y)
                 for port_name, source_profile in self.norm_run_profiles.items():
-                    for (wl, mode), profile in source_profile.items():
+                    for (wl, mode, temp), profile in source_profile.items():
                         if isinstance(profile[0], np.ndarray):
                             src_mode = profile[0].astype(np.complex64)
                             ht_m = profile[1].astype(np.complex64)
@@ -424,16 +424,16 @@ class BaseOptimization(nn.Module):
                             ht_m = profile[1]._value
                             et_m = profile[2]._value
                         f.create_dataset(
-                            f"source_profile-wl-{wl}-port-{port_name}-mode-{mode}",
+                            f"source_profile-wl-{wl}-port-{port_name}-mode-{mode}-temp-{temp}",
                             data=src_mode,
                         )
                         f.create_dataset(
-                            f"ht_m-wl-{wl}-port-{port_name}-mode-{mode}", data=ht_m
+                            f"ht_m-wl-{wl}-port-{port_name}-mode-{mode}-temp-{temp}", data=ht_m
                         )
                         f.create_dataset(
-                            f"et_m-wl-{wl}-port-{port_name}-mode-{mode}", data=et_m
+                            f"et_m-wl-{wl}-port-{port_name}-mode-{mode}-temp-{temp}", data=et_m
                         )
-                for (port_name, wl, mode), fields in self.objective.solutions.items():
+                for (port_name, wl, mode, temp), fields in self.objective.solutions.items():
                     store_fields = {}
                     for key, field in fields.items():
                         if isinstance(fields[key], Tensor):
@@ -447,7 +447,7 @@ class BaseOptimization(nn.Module):
                         axis=0,
                     )
                     f.create_dataset(
-                        f"field_solutions-wl-{wl}-port-{port_name}-mode-{mode}",
+                        f"field_solutions-wl-{wl}-port-{port_name}-mode-{mode}-temp-{temp}",
                         data=store_fields,
                     )  # 3d numpy array
                 for wl, A in self.objective.As.items():
@@ -468,8 +468,10 @@ class BaseOptimization(nn.Module):
                 for (
                     port_name,
                     wl,
-                    out_mode,
+                    obj_type,
+                    temp,
                 ), s_params in self.objective.s_params.items():
+                    # the obj_type is a string, if it is an integer, it implys the eigenmode type and the value is the mode index
                     store_s_params = {}
                     for key, s_param in s_params.items():
                         if isinstance(s_param, Tensor):
@@ -485,7 +487,7 @@ class BaseOptimization(nn.Module):
                     else:
                         store_s_params = store_s_params["s"]
                     f.create_dataset(
-                        f"s_params-{port_name}-{wl}-{out_mode}", data=store_s_params
+                        f"s_params-port-{port_name}-wl-{wl}-type-{obj_type}-temp-{temp}", data=store_s_params
                     )  # 3d numpy array
                 adj_srcs, fields_adj, field_adj_normalizer = (
                     self.objective.obtain_adj_srcs()

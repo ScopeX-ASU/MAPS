@@ -24,9 +24,9 @@ def worker_process(queue):
     metacoupler_launcher(queue)
 
 if __name__ == "__main__":
-    num_gpus = 3  # Number of GPUs
+    num_gpus = 4  # Number of GPUs
     # taskid_begin, taskid_end = (250, 260)
-    taskid_begin, taskid_end = (1000, 1001)
+    taskid_begin, taskid_end = (1, 2)
 
     # Manager's queue allows inter-process communication for tasks
     manager = Manager()

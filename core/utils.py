@@ -1800,6 +1800,7 @@ def get_shape_similarity(
     shape_cfg,
     intensity: bool = True,
     similarity: str = "cosine",  # angular or cosine
+    plot: bool = True,
 ):
     ## field: can support batch dimension, effective dimension is the last dimension
     ## e.g., field can be of shape [..., n]

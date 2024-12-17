@@ -19,7 +19,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     design_region_1=dict(
                         method="levelset",
                         rho_resolution=[20, 20],
-                        transform=[dict(type="mirror_symmetry", dims=[1])],
+                        # transform=[dict(type="mirror_symmetry", dims=[1])],
+                        transform=[],
                         init_method="rectangle",
                         binary_projection=dict(
                             fw_threshold=100,
@@ -55,7 +56,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            3,
+                            2,
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="eigenmode",
                         direction="x+",

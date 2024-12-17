@@ -2,10 +2,9 @@ import os
 import sys
 
 # Add the project root to sys.path
-project_root = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "/home/pingchua/projects/MAPS")
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
 )
-sys.path.insert(0, project_root)
 import argparse
 
 import torch
@@ -21,6 +20,7 @@ from core.invdes.models.layers import Bending
 from core.utils import set_torch_deterministic
 from thirdparty.ceviche.ceviche.constants import *
 
+from core.utils import DeterministicCtx
 
 def compare_designs(design_regions_1, design_regions_2):
     similarity = []
@@ -75,6 +75,43 @@ def bending_opt(device_id, operation_device):
         optimizer, T_max=70, eta_min=0.0002
     )
     last_design_region_dict = None
+
+    perturb_scale = 1e-2
+
+    def perturb_and_dump(step, perturb_scale=1e-2):
+        """
+        Perturb parameters, perform forward and backward passes, and dump data.
+        """
+        with DeterministicCtx(seed=42 + step):
+            # Save the original parameters and optimizer state
+            original_params = [p.clone().detach() for p in opt.parameters()]
+            optimizer_state = optimizer.state_dict()
+
+            try:
+                # Perturb parameters with noise
+                with torch.no_grad():
+                    for p in opt.parameters():
+                        p.data.add_(torch.randn_like(p) * perturb_scale)
+
+                # Forward and backward pass (isolate computation graph)
+                optimizer.zero_grad(set_to_none=True)
+                results_perturbed = opt.forward(sharpness=1 + 2 * step)
+                (-results_perturbed["obj"]).backward()
+
+                # Dump data for the perturbed model
+                filename_h5 = f"./data/fdfd/bending/mfs_raw_test_1/bending_id-{device_id}_opt_step_{step}_perturbed.h5"
+                filename_yml = f"./data/fdfd/bending/mfs_raw_test_1/bending_id-{device_id}_perturbed.yml"
+                opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
+
+            finally:
+                # Restore the original parameters and optimizer state
+                with torch.no_grad():
+                    for p, original_p in zip(opt.parameters(), original_params):
+                        p.copy_(original_p)
+                optimizer.load_state_dict(optimizer_state)
+                optimizer.zero_grad(set_to_none=True)  # Clear gradients completely
+
+
     for step in range(10):
         # for step in range(1):
         optimizer.zero_grad()
@@ -87,20 +124,21 @@ def bending_opt(device_id, operation_device):
 
         (-results["obj"]).backward()
         current_design_region_dict = opt.get_design_region_eps_dict()
-        filename_h5 = f"./data/fdfd/bending/mfs_raw_test/bending_id-{device_id}_opt_step_{step}.h5"
-        filename_yml = f"./data/fdfd/bending/mfs_raw_test/bending_id-{device_id}.yml"
+        filename_h5 = f"./data/fdfd/bending/mfs_raw_test_1/bending_id-{device_id}_opt_step_{step}.h5"
+        filename_yml = f"./data/fdfd/bending/mfs_raw_test_1/bending_id-{device_id}.yml"
         if last_design_region_dict is None:
             opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
             last_design_region_dict = current_design_region_dict
-            opt.plot(
-                eps_map=opt._eps_map,
-                obj=results["breakdown"]["fwd_trans"]["value"],
-                plot_filename="bending_opt_step_{}_fwd.png".format(step),
-                field_key=("in_port_1", 1.55, 1),
-                field_component="Ez",
-                in_port_name="in_port_1",
-                exclude_port_names=["refl_port_2"],
-            )
+            dumped_data = True
+            # opt.plot(
+            #     eps_map=opt._eps_map,
+            #     obj=results["breakdown"]["fwd_trans"]["value"],
+            #     plot_filename="bending_opt_step_{}_fwd.png".format(step),
+            #     field_key=("in_port_1", 1.55, 1),
+            #     field_component="Ez",
+            #     in_port_name="in_port_1",
+            #     exclude_port_names=["refl_port_2"],
+            # )
         else:
             cosine_similarity = compare_designs(
                 last_design_region_dict, current_design_region_dict
@@ -110,20 +148,25 @@ def bending_opt(device_id, operation_device):
                     filename_h5=filename_h5, filename_yml=filename_yml, step=step
                 )
                 last_design_region_dict = current_design_region_dict
-                opt.plot(
-                    eps_map=opt._eps_map,
-                    obj=results["breakdown"]["fwd_trans"]["value"],
-                    plot_filename="bending_opt_step_{}_fwd.png".format(step),
-                    field_key=("in_port_1", 1.55, 1),
-                    field_component="Ez",
-                    in_port_name="in_port_1",
-                    exclude_port_names=["refl_port_2"],
-                )
+                dumped_data = True
+                # opt.plot(
+                #     eps_map=opt._eps_map,
+                #     obj=results["breakdown"]["fwd_trans"]["value"],
+                #     plot_filename="bending_opt_step_{}_fwd.png".format(step),
+                #     field_key=("in_port_1", 1.55, 1),
+                #     field_component="Ez",
+                #     in_port_name="in_port_1",
+                #     exclude_port_names=["refl_port_2"],
+                # )
         # for p in opt.parameters():
         #     print(p.grad)
         # print_stat(list(opt.parameters())[0], f"step {step}: grad: ")
         optimizer.step()
         scheduler.step()
+        if dumped_data:
+            perturb_and_dump(step, perturb_scale=perturb_scale)
+            perturb_and_dump(step, perturb_scale=perturb_scale)
+            dumped_data = False
 
 
 def main():

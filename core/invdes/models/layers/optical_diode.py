@@ -144,7 +144,7 @@ class OpticalDiode(N_Ports):
         )
 
         norm_monitor_profiles = self.build_norm_sources(
-            source_modes=(1,3),
+            source_modes=(1,2),
             input_port_name="out_port_1",
             input_slice_name="out_port_1",
             wl_cen=self.sim_cfg["wl_cen"],

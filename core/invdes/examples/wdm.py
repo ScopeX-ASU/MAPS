@@ -31,11 +31,11 @@ if __name__ == "__main__":
     # first we need to instantiate the a optimization object
     sim_cfg = DefaultSimulationConfig()
 
-    mdm_region_size = (3, 3)
+    mdm_region_size = (6, 6)
     port_len = 1.8
 
-    input_port_width = 0.8
-    output_port_width = 0.8
+    input_port_width = 0.48
+    output_port_width = 0.48
 
     sim_cfg.update(
         dict(
@@ -49,7 +49,7 @@ if __name__ == "__main__":
             numerical_solver="solve_direct",
             use_autodiff=False,
             wl_cen=1.55,
-            wl_width=0.6,
+            wl_width=0.02,
             n_wl=2,
         )
     )

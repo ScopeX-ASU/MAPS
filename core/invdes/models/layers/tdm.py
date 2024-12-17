@@ -47,14 +47,14 @@ class TDM(N_Ports):
             out_port_1=dict(
                 type="box",
                 direction="x",
-                center=[(port_len[1] + box_size[0] / 2) / 2, box_size[1] / 3],
+                center=[(port_len[1] + box_size[0] / 2) / 2, 1*port_width[1]],
                 size=[port_len[1] + box_size[0] / 2, port_width[1]],
                 eps=eps_r_fn(wl_cen),
             ),
             out_port_2=dict(
                 type="box",
                 direction="x",
-                center=[(port_len[1] + box_size[0] / 2) / 2, -box_size[1] / 3],
+                center=[(port_len[1] + box_size[0] / 2) / 2, -1*port_width[1]],
                 size=[port_len[1] + box_size[0] / 2, port_width[1]],
                 eps=eps_r_fn(wl_cen),
             ),
@@ -150,7 +150,7 @@ class TDM(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
-            temp=270,
+            temp=300,
             solver=self.sim_cfg["solver"],
             plot=True,
         )
@@ -162,7 +162,7 @@ class TDM(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
-            temp=330,
+            temp=360,
             solver=self.sim_cfg["solver"],
             plot=True,
         )
@@ -174,7 +174,7 @@ class TDM(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
-            temp=270,
+            temp=300,
             solver=self.sim_cfg["solver"],
             plot=True,
         )
@@ -186,7 +186,7 @@ class TDM(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
-            temp=330,
+            temp=360,
             solver=self.sim_cfg["solver"],
             plot=True,
         )
@@ -198,7 +198,7 @@ class TDM(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
-            temp=270,
+            temp=300,
             solver=self.sim_cfg["solver"],
             plot=True,
         )
@@ -210,7 +210,7 @@ class TDM(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
-            temp=330,
+            temp=360,
             solver=self.sim_cfg["solver"],
             plot=True,
         )

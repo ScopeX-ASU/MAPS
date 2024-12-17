@@ -14,7 +14,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         rho_resolution=[20, 20],
                         # transform=[dict(type="mirror_symmetry", dims=[1])],
                         transform=[], # there is no symmetry in this design region
-                        init_method="random",
+                        init_method="ones",
                         binary_projection=dict(
                             fw_threshold=100,
                             bw_threshold=100,
@@ -46,7 +46,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="out_port_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[270],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -61,7 +61,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="out_port_2",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[330],
+                        temp=[360],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -76,7 +76,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="refl_port_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[270],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -91,7 +91,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="refl_port_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[330],
+                        temp=[360],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -107,7 +107,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="rad_monitor_xp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[270],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -122,7 +122,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="rad_monitor_xm",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[270],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -137,7 +137,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="rad_monitor_yp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[270],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -152,7 +152,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="rad_monitor_ym",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[270],
+                        temp=[300],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -167,7 +167,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="rad_monitor_xp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[330],
+                        temp=[360],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -182,7 +182,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="rad_monitor_xm",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[330],
+                        temp=[360],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -197,7 +197,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="rad_monitor_yp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[330],
+                        temp=[360],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -212,7 +212,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="rad_monitor_ym",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[330],
+                        temp=[360],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,

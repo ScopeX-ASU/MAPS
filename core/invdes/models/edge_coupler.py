@@ -57,7 +57,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         direction="x",
                     ),
                     fwd_intensity_shape=dict(
-                        weight=1,
+                        weight=5,
                         #### objective is evaluated at this port
                         in_port_name="in_port_1",
                         out_port_name="out_port_1",
@@ -71,7 +71,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         type="intensity_shape",  # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
                         shape_type="gaussian",
                         shape_cfg=dict(
-                            width=2.5,
+                            width=2.5 / 3,
                         ),
                         direction="x+",
                     ),

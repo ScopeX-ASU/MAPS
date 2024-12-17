@@ -37,6 +37,7 @@ class EigenmodeObjective(object):
         target_temps: Tuple[float],
         grid_step: float,
         energy: bool = True,
+        obj_type: str = "eigenmode",
     ):
         self.sims = sims
         self.s_params = s_params
@@ -52,6 +53,7 @@ class EigenmodeObjective(object):
         self.target_temps = target_temps
         self.grid_step = grid_step
         self.energy = energy
+        self.obj_type = obj_type
 
     def __call__(self, fields):
         s_list = []
@@ -127,10 +129,13 @@ class EigenmodeObjective(object):
                         s_list.append(s / norm_power)
                     else:
                         s_list.append(s / norm_power**0.5)
-                    self.s_params[(name, wl, out_mode, temp)] = {
-                        "s_p": s_p,
-                        "s_m": s_m,
-                    }
+                    if self.obj_type == "eigenmode":
+                        # only record the s parameters for eigenmode
+                        # we don't need to record the s parameters if we calculate the phase
+                        self.s_params[(name, wl, out_mode, temp)] = {
+                            "s_p": s_p / norm_power if self.energy else s_p / norm_power**0.5, # normalized by input power
+                            "s_m": s_m / norm_power if self.energy else s_m / norm_power**0.5, # normalized by input power
+                        }
         if isinstance(s_list[0], Tensor):
             return torch.mean(torch.stack(s_list))
         else:
@@ -153,6 +158,7 @@ class FluxNear2FarObjective(object):
         target_temps: Tuple[float],
         grid_step: float,
         eps_bg: float,
+        obj_type: str = "flux_near2far",
     ):
         self.sims = sims
         self.s_params = s_params
@@ -167,6 +173,7 @@ class FluxNear2FarObjective(object):
         self.target_temps = target_temps
         self.grid_step = grid_step
         self.eps_bg = eps_bg
+        self.obj_type = obj_type
 
     def __call__(self, fields):
         s_list = []
@@ -248,29 +255,6 @@ class FluxNear2FarObjective(object):
                     component="Ez",
                     decimation_factor=4,
                 )
-                # shifted_ez = get_farfields_GreenFunction(
-                #     nearfield_slices=[
-                #         self.port_slices[nearfield_slice_name]
-                #         for nearfield_slice_name in list(self.port_slices.keys())
-                #         if nearfield_slice_name.startswith("nearfield")
-                #     ],
-                #     nearfield_slices_info=[
-                #         self.port_slices_info[nearfield_slice_name]
-                #         for nearfield_slice_name in list(self.port_slices_info.keys())
-                #         if nearfield_slice_name.startswith("nearfield")
-                #     ],
-                #     Ez=ez_near[None, ..., None],
-                #     Hx=hx_near[None, ..., None],
-                #     Hy=hy_near[None, ..., None],
-                #     farfield_x=None,
-                #     farfield_slice_info=shifted_farfield_slice_info,
-                #     freqs=torch.tensor([1 / wl], device=ez_near.device),
-                #     eps=self.eps_bg,
-                #     mu=MU_0,
-                #     dL=grid_step,
-                #     component="Ez",
-                #     decimation_factor=4,
-                # )["Ez"][0, ..., 0]
                 ez = farfield["Ez"][0, ..., 0]
                 hx = farfield["Hx"][0, ..., 0]
                 hy = farfield["Hy"][0, ..., 0]
@@ -301,7 +285,7 @@ class FluxNear2FarObjective(object):
                 s = s / (ez.shape[0] if direction[0] == "x" else ez.shape[1])
 
                 s_list.append(s)
-                self.s_params[(name, wl, type, temp)] = {
+                self.s_params[(name, wl, self.obj_type, temp)] = {
                     "s": s,
                 }
         if isinstance(s_list[0], Tensor):
@@ -325,6 +309,7 @@ class FluxObjective(object):
         target_temps: Tuple[float],
         grid_step: float,
         minus_src: bool = False,
+        obj_type: str = "flux",
     ):
         self.sims = sims
         self.s_params = s_params
@@ -338,6 +323,7 @@ class FluxObjective(object):
         self.target_temps = target_temps
         self.grid_step = grid_step
         self.minus_src = minus_src
+        self.obj_type = obj_type
 
     def __call__(self, fields):
         s_list = []
@@ -391,9 +377,15 @@ class FluxObjective(object):
                     )  ## if it is larger than 1, then this slice must include source, we minus the power from source
 
                 s_list.append(s)
-                self.s_params[(name, wl, type, temp)] = {
-                    "s": s,
-                }
+                if self.minus_src: # which means that we are calculating the reflection
+                    self.s_params[(name, wl, self.obj_type, temp)] = {
+                        "s_m": s,
+                        "s_p": 1-s,
+                    }
+                else:
+                    self.s_params[(name, wl, self.obj_type, temp)] = {
+                        "s": s,
+                    }
         if isinstance(s_list[0], Tensor):
             return torch.mean(torch.stack(s_list))
         else:
@@ -418,6 +410,7 @@ class ShapeSimilarityObjective(object):
         grid_step: float,
         intensity: bool = True,
         similarity: str = "angular",
+        obj_type: str = "intensity_shape",
     ):
         self.sims = sims
         self.port_slices = port_slices
@@ -434,6 +427,7 @@ class ShapeSimilarityObjective(object):
         self.grid_step = grid_step
         self.intensity = intensity
         self.similarity = similarity
+        self.obj_type = obj_type
 
     def __call__(self, fields):
         (
@@ -512,6 +506,7 @@ class ShapeSimilarityNear2FarObjective(object):
         eps_bg: float,
         intensity: bool = True,
         similarity: str = "angular",
+        obj_type: str = "intensity_shape_near2far",
     ):
         self.sims = sims
         self.port_slices = port_slices
@@ -529,6 +524,7 @@ class ShapeSimilarityNear2FarObjective(object):
         self.eps_bg = eps_bg
         self.intensity = intensity
         self.similarity = similarity
+        self.obj_type = obj_type
 
     def __call__(self, fields):
         (
@@ -685,7 +681,7 @@ class ObjectiveFunc(object):
         del cfgs["_fusion_func"]
         ### build objective functions from solved fields to fom
         for name, cfg in cfgs.items():
-            type = cfg["type"]
+            obj_type = cfg["type"]
             in_port_name = cfg["in_port_name"]
             out_port_name = cfg["out_port_name"]
             in_mode = cfg["in_mode"]
@@ -696,7 +692,7 @@ class ObjectiveFunc(object):
             shape_type = cfg.get("shape_type", None)
             shape_cfg = cfg.get("shape_cfg", None)
 
-            if type == "eigenmode":
+            if obj_type == "eigenmode":
                 objfn = EigenmodeObjective(
                     sims=self.sims,
                     s_params=self.s_params,
@@ -711,8 +707,9 @@ class ObjectiveFunc(object):
                     target_wls=target_wls,
                     target_temps=target_temps,
                     grid_step=self.grid_step,
+                    obj_type=obj_type,
                 )
-            elif type in {"flux", "flux_minus_src"}:
+            elif obj_type in {"flux", "flux_minus_src"}:
                 objfn = FluxObjective(
                     sims=self.sims,
                     s_params=self.s_params,
@@ -726,9 +723,10 @@ class ObjectiveFunc(object):
                     target_temps=target_temps,
                     grid_step=self.grid_step,
                     minus_src=type == "flux_minus_src",
+                    obj_type=obj_type,
                 )
 
-            elif type in {"flux_near2far"}:
+            elif obj_type in {"flux_near2far"}:
                 objfn = FluxNear2FarObjective(
                     sims=self.sims,
                     s_params=self.s_params,
@@ -743,9 +741,10 @@ class ObjectiveFunc(object):
                     target_temps=target_temps,
                     grid_step=self.grid_step,
                     eps_bg=self.eps_bg,
+                    obj_type=obj_type,
                 )
 
-            elif type == "phase":
+            elif obj_type == "phase":
                 # this is to make a equal phase MMI
                 objfn = EigenmodeObjective(
                     sims=self.sims,
@@ -762,8 +761,9 @@ class ObjectiveFunc(object):
                     target_temps=target_temps,
                     grid_step=self.grid_step,
                     energy=False,
+                    obj_type=obj_type,
                 )
-            elif type == "intensity_shape":
+            elif obj_type == "intensity_shape":
                 objfn = ShapeSimilarityObjective(
                     sims=self.sims,
                     port_slices=self.port_slices,
@@ -780,9 +780,10 @@ class ObjectiveFunc(object):
                     shape_cfg=shape_cfg,
                     intensity=True,
                     similarity="angular",
+                    obj_type=obj_type,
                 )
 
-            elif type == "intensity_shape_near2far":
+            elif obj_type == "intensity_shape_near2far":
                 objfn = ShapeSimilarityNear2FarObjective(
                     sims=self.sims,
                     port_slices=self.port_slices,
@@ -800,6 +801,7 @@ class ObjectiveFunc(object):
                     eps_bg=self.eps_bg,
                     intensity=True,
                     similarity="angular",
+                    obj_type=obj_type,
                 )
             else:
                 raise ValueError("Invalid type")
