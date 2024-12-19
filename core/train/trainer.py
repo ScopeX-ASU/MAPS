@@ -312,13 +312,13 @@ class PredTrainer(object):
             aux_criterions = self.log_criterion
         regression_loss = criterion(
                 forward_field[:, -2:, ...], 
-                data['field_solutions']["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+                data['field_solutions']["field_solutions-wl-1.55-port-in_port_1-mode-1-temp-300"][:, -2:, ...],
                 torch.ones_like(forward_field[:, -2:, ...]).to(self.device)
             )
         if adjoint_field is not None:
             regression_loss = (regression_loss + criterion(
                 adjoint_field[:, -2:, ...],
-                data['fields_adj']["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
+                data['fields_adj']["fields_adj-wl-1.55-port-in_port_1-mode-1-temp-300"][:, -2:, ...],
                 torch.ones_like(adjoint_field[:, -2:, ...]).to(self.device)
             ))/2
         crietrion_meter.update(regression_loss.item())
@@ -365,30 +365,30 @@ class PredTrainer(object):
                     ht_m=data['ht_m']['ht_m-wl-1.55-port-out_port_1-mode-1'],
                     et_m=data['et_m']['et_m-wl-1.55-port-out_port_1-mode-1'],
                     monitor_slices=data['monitor_slices'], # 'port_slice-out_port_1_x', 'port_slice-out_port_1_y'
-                    target_SParam=data['s_params']['s_params-fwd_trans-1.55-1'],
+                    target_SParam=data['s_params']['s_params-port-fwd_trans-wl-1.55-type-1-temp-300'],
                 )
             elif name == "Hx_loss":
                 aux_loss = weight * aux_criterion(
                     forward_field[:, :2, ...],
-                    data['field_solutions']["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, :2, ...],
+                    data['field_solutions']["field_solutions-wl-1.55-port-in_port_1-mode-1-temp-300"][:, :2, ...],
                     torch.ones_like(forward_field[:, :2, ...]).to(self.device)
                 )
                 if adjoint_field is not None:
                     aux_loss = (aux_loss + weight * aux_criterion(
                         adjoint_field[:, :2, ...],
-                        data['fields_adj']["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, :2, ...],
+                        data['fields_adj']["fields_adj-wl-1.55-port-in_port_1-mode-1-temp-300"][:, :2, ...],
                         torch.ones_like(adjoint_field[:, :2, ...]).to(self.device)
                     ))/2
             elif name == "Hy_loss":
                 aux_loss = weight * aux_criterion(
                     forward_field[:, 2:4, ...],
-                    data['field_solutions']["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, 2:4, ...],
+                    data['field_solutions']["field_solutions-wl-1.55-port-in_port_1-mode-1-temp-300"][:, 2:4, ...],
                     torch.ones_like(forward_field[:, 2:4, ...]).to(self.device)
                 )
                 if adjoint_field is not None:
                     aux_loss = (aux_loss + weight * aux_criterion(
                         adjoint_field[:, 2:4, ...],
-                        data['fields_adj']["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, 2:4, ...],
+                        data['fields_adj']["fields_adj-wl-1.55-port-in_port_1-mode-1-temp-300"][:, 2:4, ...],
                         torch.ones_like(adjoint_field[:, 2:4, ...]).to(self.device)
                     ))/2
             aux_criterion_meter[name].update(aux_loss.item()) # record the aux loss first
@@ -401,12 +401,12 @@ class PredTrainer(object):
         adjoint_field = output['adjoint_field']
         plot_fields(
             fields=forward_field.clone().detach(),
-            ground_truth=data['field_solutions']["field_solutions-wl-1.55-port-in_port_1-mode-1"],
+            ground_truth=data['field_solutions']["field_solutions-wl-1.55-port-in_port_1-mode-1-temp-300"],
             filepath=filepath + f"_fwd.png",
         )
         if adjoint_field is not None:
             plot_fields(
                 fields=adjoint_field.clone().detach(),
-                ground_truth=data['fields_adj']["fields_adj-wl-1.55-port-in_port_1-mode-1"],
+                ground_truth=data['fields_adj']["fields_adj-wl-1.55-port-in_port_1-mode-1-temp-300"],
                 filepath=filepath + "_adj.png",
             )

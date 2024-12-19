@@ -81,15 +81,12 @@ def task_launcher(args):
             f"--optimizer.ALM_mu_growth={mu_growth}",
             f"--optimizer.ALM_constraint_tol={constraint_tol}",
 
-            # f"--model.name={alg}",
+            f"--model_fwd.type={alg}",
             f"--model_fwd.hidden_list={[128]}",
             f"--model_fwd.mode1={mode1}",
             f"--model_fwd.mode2={mode2}",
-            # f"--model.fourier_feature={fourier_feature}",
             f"--model_fwd.mapping_size={64}",
             f"--model_fwd.fno_block_only={fno_block_only}",
-            # f"--model.train_field={train_field}",
-            # f"--model.act_func=SINREN",
             f"--model_fwd.fourier_feature={fourier_feature}",
 
             f"--checkpoint.model_comment={suffix}",
@@ -106,11 +103,7 @@ if __name__ == '__main__':
     ensure_dir(root)
     # mlflow.set_experiment(configs.run.experiment)  # set experiments first
     tasks = [
-        # [0.0, "bending", "FNO2d", "fwd", False, "learnable", True, 33, 66, 27, "fwd_pred_w_S_loss", 0, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 1, 0.0, 1, 2, 1e-4, "none", "none", 8],
-        # [0.0, "bending", "FNO2d", "fwd", False, "learnable", True, 33, 66, 29, "fwd_pred_wo_S_loss", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
-        # [0.0, "bending", "FNO2d", "fwd", False, "learnable", True, 33, 66, 30, "test_fwd_time", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
-        # [0.0, "bending", "FNO2d", "fwd", False, "learnable", True, 33, 66, 31, "fwd_pred_S_loss_only", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
-        [0.0, "bending", "FNO2d", "fwd", False, "learnable", True, 33, 66, 32, "pure_fno", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
+        [0.0, "bending", "FNO2d", "fwd", False, "none", True, 33, 66, 33, "regular_fno", 0, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
     ]   
 
     with Pool(8) as p:

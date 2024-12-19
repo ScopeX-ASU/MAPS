@@ -47,14 +47,14 @@ class WDM(N_Ports):
             out_port_1=dict(
                 type="box",
                 direction="x",
-                center=[(port_len[1] + box_size[0] / 2) / 2, box_size[1] / 3],
+                center=[(port_len[1] + box_size[0] / 2) / 2, 1*port_width[1]],
                 size=[port_len[1] + box_size[0] / 2, port_width[1]],
                 eps=eps_r_fn(wl_cen),
             ),
             out_port_2=dict(
                 type="box",
                 direction="x",
-                center=[(port_len[1] + box_size[0] / 2) / 2, -box_size[1] / 3],
+                center=[(port_len[1] + box_size[0] / 2) / 2, -1*port_width[1]],
                 size=[port_len[1] + box_size[0] / 2, port_width[1]],
                 eps=eps_r_fn(wl_cen),
             ),

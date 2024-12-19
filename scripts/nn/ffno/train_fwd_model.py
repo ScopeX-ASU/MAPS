@@ -88,7 +88,6 @@ def task_launcher(args):
             f"--model_fwd.mapping_size={64}",
             f"--model_fwd.fno_block_only={fno_block_only}",
             f"--model_fwd.fourier_feature={fourier_feature}",
-            f"--model_fwd.s_param_only={False}",
 
             f"--checkpoint.model_comment={suffix}",
             f"--checkpoint.resume={False}" if checkpt_fwd == "none" else f"--checkpoint.resume={True}",
@@ -105,7 +104,8 @@ if __name__ == '__main__':
     # mlflow.set_experiment(configs.run.experiment)  # set experiments first
     tasks = [
         # [0.0, "bending", "FFNO2d", "fwd", False, "learnable", True, 33, 66, 2, "fwd_pred_S_loss_only", 1, 50, False, 0.002, "nmse", 1, 0.0, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
-        [0.0, "bending", "FFNO2d", "fwd", False, "learnable", True, 33, 66, 3, "fwd_pred", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
+        # [0.0, "bending", "FFNO2d", "fwd", False, "learnable", True, 33, 66, 3, "fwd_pred", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
+        [0.0, "bending", "FFNO2d", "fwd", False, "none", True, 66, 66, 4, "regular_ffno", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
     ]   
 
     with Pool(8) as p:

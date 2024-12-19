@@ -145,3 +145,53 @@ class postNorm(nn.Module):
             15 * s
         )  ## TODO not quite sure about if I could substrct the mean.
         return normalized_field
+
+@MODELS.register_module()
+class LayerNorm(nn.Module):
+    r"""LayerNorm implementation used in ConvNeXt
+    LayerNorm that supports two data formats: channels_last (default) or channels_first.
+    The ordering of the dimensions in the inputs. channels_last corresponds to inputs with
+    shape (batch_size, height, width, channels) while channels_first corresponds to inputs
+    with shape (batch_size, channels, height, width).
+    """
+
+    def __init__(
+        self,
+        normalized_shape,
+        dim=2,
+        eps=1e-6,
+        data_format="channels_last",
+        reshape_last_to_first=False,
+    ):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(normalized_shape))
+        self.bias = nn.Parameter(torch.zeros(normalized_shape))
+        self.eps = eps
+        self.data_format = data_format
+        if self.data_format not in ["channels_last", "channels_first"]:
+            raise NotImplementedError
+        self.normalized_shape = (normalized_shape,)
+        self.reshape_last_to_first = reshape_last_to_first
+        self.dim = dim
+
+    def forward(self, x):
+        if self.data_format == "channels_last":
+            return F.layer_norm(
+                x, self.normalized_shape, self.weight, self.bias, self.eps
+            )
+        elif self.data_format == "channels_first":
+            u = x.mean(1, keepdim=True)
+            s = (x - u).pow(2).mean(1, keepdim=True)
+            x = (x - u) / torch.sqrt(s + self.eps)
+            if self.dim == 3:
+                x = (
+                    self.weight[:, None, None, None] * x
+                    + self.bias[:, None, None, None]
+                )  # add one extra dimension to match conv2d but not 2d
+            elif self.dim == 2:
+                x = self.weight[:, None, None] * x + self.bias[:, None, None]
+            elif self.dim == 1:
+                # print("this is the shape of x", x.shape)
+                # print("this is the shape of weight", self.weight.shape)
+                x = self.weight[None, :] * x + self.bias[None, :]
+            return x

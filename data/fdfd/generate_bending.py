@@ -20,7 +20,7 @@ from core.invdes.models.layers import Bending
 from core.utils import set_torch_deterministic
 from thirdparty.ceviche.ceviche.constants import *
 
-from core.utils import DeterministicCtx
+from core.utils import DeterministicCtx, print_stat
 
 def compare_designs(design_regions_1, design_regions_2):
     similarity = []
@@ -31,7 +31,7 @@ def compare_designs(design_regions_1, design_regions_2):
     return torch.mean(torch.stack(similarity)).item()
 
 
-def bending_opt(device_id, operation_device):
+def bending_opt(device_id, operation_device, perturb_probs=[0.1, 0.3, 0.5]):
     sim_cfg = DefaultSimulationConfig()
 
     bending_region_size = (1.6, 1.6)
@@ -45,7 +45,7 @@ def bending_opt(device_id, operation_device):
             solver="ceviche_torch",
             border_width=[0, port_len, port_len, 0],
             resolution=50,
-            plot_root=f"./figs/test_mfs_bending_{device_id}",
+            plot_root=f"./figs/mfs_bending_{device_id}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -76,13 +76,12 @@ def bending_opt(device_id, operation_device):
     )
     last_design_region_dict = None
 
-    perturb_scale = 1e-2
-
-    def perturb_and_dump(step, perturb_scale=1e-2):
+    def perturb_and_dump(step, flip_prob=0.1, i=None):
         """
         Perturb parameters, perform forward and backward passes, and dump data.
         """
-        with DeterministicCtx(seed=42 + step):
+        assert i is not None, "The perturb_and_dump function requires an index i"
+        with DeterministicCtx(seed=42 + step + i):
             # Save the original parameters and optimizer state
             original_params = [p.clone().detach() for p in opt.parameters()]
             optimizer_state = optimizer.state_dict()
@@ -91,17 +90,35 @@ def bending_opt(device_id, operation_device):
                 # Perturb parameters with noise
                 with torch.no_grad():
                     for p in opt.parameters():
-                        p.data.add_(torch.randn_like(p) * perturb_scale)
+                        mask = torch.rand_like(p) < flip_prob
+                        p.data[mask] =  -1 * p.data[mask]
+                        # p.data.add_(torch.randn_like(p) * perturb_scale)
 
                 # Forward and backward pass (isolate computation graph)
                 optimizer.zero_grad(set_to_none=True)
                 results_perturbed = opt.forward(sharpness=1 + 2 * step)
+
+                print(f"Pert {step}:", end=" ")
+                for k, obj in results_perturbed["breakdown"].items():
+                    print(f"{k}: {obj['value']:.3f}", end=", ")
+                print()
+
                 (-results_perturbed["obj"]).backward()
 
                 # Dump data for the perturbed model
-                filename_h5 = f"./data/fdfd/bending/mfs_raw_test_1/bending_id-{device_id}_opt_step_{step}_perturbed.h5"
-                filename_yml = f"./data/fdfd/bending/mfs_raw_test_1/bending_id-{device_id}_perturbed.yml"
+                filename_h5 = f"./data/fdfd/bending/mfs_raw_test_1/bending_id-{device_id}_opt_step_{step}_perturbed_{i}.h5"
+                filename_yml = f"./data/fdfd/bending/mfs_raw_test_1/bending_id-{device_id}_perturbed_{i}.yml"
                 opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
+
+                opt.plot(
+                    eps_map=opt._eps_map,
+                    obj=results["breakdown"]["fwd_trans"]["value"],
+                    plot_filename=f"bending_opt_step_{step}_fwd_perturbed_{i}.png",
+                    field_key=("in_port_1", 1.55, 1, 300),
+                    field_component="Ez",
+                    in_port_name="in_port_1",
+                    exclude_port_names=["refl_port_2"],
+                )
 
             finally:
                 # Restore the original parameters and optimizer state
@@ -130,15 +147,15 @@ def bending_opt(device_id, operation_device):
             opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
             last_design_region_dict = current_design_region_dict
             dumped_data = True
-            # opt.plot(
-            #     eps_map=opt._eps_map,
-            #     obj=results["breakdown"]["fwd_trans"]["value"],
-            #     plot_filename="bending_opt_step_{}_fwd.png".format(step),
-            #     field_key=("in_port_1", 1.55, 1),
-            #     field_component="Ez",
-            #     in_port_name="in_port_1",
-            #     exclude_port_names=["refl_port_2"],
-            # )
+            opt.plot(
+                eps_map=opt._eps_map,
+                obj=results["breakdown"]["fwd_trans"]["value"],
+                plot_filename="bending_opt_step_{}_fwd.png".format(step),
+                field_key=("in_port_1", 1.55, 1, 300),
+                field_component="Ez",
+                in_port_name="in_port_1",
+                exclude_port_names=["refl_port_2"],
+            )
         else:
             cosine_similarity = compare_designs(
                 last_design_region_dict, current_design_region_dict
@@ -149,24 +166,25 @@ def bending_opt(device_id, operation_device):
                 )
                 last_design_region_dict = current_design_region_dict
                 dumped_data = True
-                # opt.plot(
-                #     eps_map=opt._eps_map,
-                #     obj=results["breakdown"]["fwd_trans"]["value"],
-                #     plot_filename="bending_opt_step_{}_fwd.png".format(step),
-                #     field_key=("in_port_1", 1.55, 1),
-                #     field_component="Ez",
-                #     in_port_name="in_port_1",
-                #     exclude_port_names=["refl_port_2"],
-                # )
+                opt.plot(
+                    eps_map=opt._eps_map,
+                    obj=results["breakdown"]["fwd_trans"]["value"],
+                    plot_filename="bending_opt_step_{}_fwd.png".format(step),
+                    field_key=("in_port_1", 1.55, 1, 300),
+                    field_component="Ez",
+                    in_port_name="in_port_1",
+                    exclude_port_names=["refl_port_2"],
+                )
         # for p in opt.parameters():
         #     print(p.grad)
         # print_stat(list(opt.parameters())[0], f"step {step}: grad: ")
         optimizer.step()
         scheduler.step()
         if dumped_data:
-            perturb_and_dump(step, perturb_scale=perturb_scale)
-            perturb_and_dump(step, perturb_scale=perturb_scale)
+            for i, prob in enumerate(perturb_probs):
+                perturb_and_dump(step, flip_prob=prob, i=i)
             dumped_data = False
+            # quit()
 
 
 def main():

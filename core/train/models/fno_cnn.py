@@ -30,95 +30,9 @@ from core.fdfd.fdfd import fdfd_ez
 from thirdparty.ceviche.ceviche.constants import *
 from einops import rearrange
 from .model_base import ModelBase, ConvBlock, LinearBlock
+from .layers.fourier_feature import LearnableFourierFeatures
 
 __all__ = ["FNO2d"]
-
-
-class LearnableFourierFeatures(nn.Module):
-    def __init__(self, pos_dim, f_dim, h_dim, d_dim, g_dim=1, gamma=1.0):
-        super(LearnableFourierFeatures, self).__init__()
-        assert (
-            f_dim % 2 == 0
-        ), "number of fourier feature dimensions must be divisible by 2."
-        assert (
-            d_dim % g_dim == 0
-        ), "number of D dimension must be divisible by the number of G dimension."
-        enc_f_dim = int(f_dim / 2)
-        dg_dim = int(d_dim / g_dim)
-        self.Wr = nn.Parameter(torch.randn([enc_f_dim, pos_dim]) * (gamma**2))
-        self.mlp = nn.Sequential(
-            nn.Linear(f_dim, h_dim), nn.GELU(), nn.Linear(h_dim, dg_dim)
-        )
-        self.div_term = np.sqrt(f_dim)
-
-    def forward(self, pos):
-        # input pos dim: (B L G M)
-        # output dim: (B L D)
-        # L stands for sequence length. all dimensions must be flattened to a single dimension.
-        XWr = torch.matmul(pos, self.Wr.T)
-        F = torch.cat([torch.cos(XWr), torch.sin(XWr)], dim=-1) / self.div_term
-        Y = self.mlp(F)
-        pos_enc = rearrange(Y, "b l g d -> b l (g d)")
-
-        return pos_enc
-
-class SpatialInterpolater(nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-
-    def forward(self, x: Tensor) -> Tensor:
-        x = F.interpolate(x, scale_factor=(2, 2), mode="bilinear", align_corners=False)
-        return x
-@MODELS.register_module()
-class LayerNorm(nn.Module):
-    r"""LayerNorm implementation used in ConvNeXt
-    LayerNorm that supports two data formats: channels_last (default) or channels_first.
-    The ordering of the dimensions in the inputs. channels_last corresponds to inputs with
-    shape (batch_size, height, width, channels) while channels_first corresponds to inputs
-    with shape (batch_size, channels, height, width).
-    """
-
-    def __init__(
-        self,
-        normalized_shape,
-        dim=2,
-        eps=1e-6,
-        data_format="channels_last",
-        reshape_last_to_first=False,
-    ):
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(normalized_shape))
-        self.bias = nn.Parameter(torch.zeros(normalized_shape))
-        self.eps = eps
-        self.data_format = data_format
-        if self.data_format not in ["channels_last", "channels_first"]:
-            raise NotImplementedError
-        self.normalized_shape = (normalized_shape,)
-        self.reshape_last_to_first = reshape_last_to_first
-        self.dim = dim
-
-    def forward(self, x):
-        if self.data_format == "channels_last":
-            return F.layer_norm(
-                x, self.normalized_shape, self.weight, self.bias, self.eps
-            )
-        elif self.data_format == "channels_first":
-            u = x.mean(1, keepdim=True)
-            s = (x - u).pow(2).mean(1, keepdim=True)
-            x = (x - u) / torch.sqrt(s + self.eps)
-            if self.dim == 3:
-                x = (
-                    self.weight[:, None, None, None] * x
-                    + self.bias[:, None, None, None]
-                )  # add one extra dimension to match conv2d but not 2d
-            elif self.dim == 2:
-                x = self.weight[:, None, None] * x + self.bias[:, None, None]
-            elif self.dim == 1:
-                # print("this is the shape of x", x.shape)
-                # print("this is the shape of weight", self.weight.shape)
-                x = self.weight[None, :] * x + self.bias[None, :]
-            return x
-
 
 @MODELS.register_module()
 class FNO2d(ModelBase):
@@ -150,6 +64,7 @@ class FNO2d(ModelBase):
         with_cp=False,
         mode1=20,
         mode2=20,
+        n_layers=4,
         fourier_feature="none",
         mapping_size=2,
         fno_block_only=False,
@@ -159,6 +74,7 @@ class FNO2d(ModelBase):
         # norm_cfg=dict(type="MyLayerNorm", data_format="channels_first"),
         norm_cfg=dict(type="LayerNorm", data_format="channels_first"),
         act_cfg=dict(type="GELU"),
+        incident_field_fwd=False,
         device=torch.device("cuda"),
     )
 
@@ -231,7 +147,7 @@ class FNO2d(ModelBase):
         elif self.fourier_feature == "none":
             pass
         else:
-            raise ValueError("fourier_feature only supports basic and gauss")
+            raise ValueError("fourier_feature only supports basic and gauss or none")
 
         omega = 2 * np.pi * C_0 / (1.55 * 1e-6)
         self.sim = fdfd_ez(
@@ -240,101 +156,6 @@ class FNO2d(ModelBase):
             eps_r=torch.randn((260, 260), device=self.device),  # random permittivity
             npml=(25, 25),
         )
-        self.padding = 9  # pad the domain if input is non-periodic
-
-    def _build_s_param_head(self):
-        s_param_head = nn.Sequential(
-            ConvBlock(
-                128,
-                256,
-                kernel_size=5,
-                padding=2,
-                stride=2,
-                act_cfg=self.act_cfg,
-                norm_cfg=self.norm_cfg,
-                device=self.device,
-            ),
-            ConvBlock(
-                256,
-                256,
-                kernel_size=5,
-                padding=2,
-                stride=2,
-                act_cfg=self.act_cfg,
-                norm_cfg=self.norm_cfg,
-                device=self.device,
-            ),
-            ConvBlock(
-                256,
-                256,
-                kernel_size=5,
-                padding=2,
-                stride=2,
-                act_cfg=self.act_cfg,
-                norm_cfg=self.norm_cfg,
-                device=self.device,
-            ),
-            ConvBlock(
-                256,
-                256*2,
-                kernel_size=5,
-                padding=2,
-                stride=2,
-                act_cfg=self.act_cfg,
-                norm_cfg=self.norm_cfg,
-                device=self.device,
-            ),
-            ConvBlock(
-                256*2,
-                256*2,
-                kernel_size=5,
-                padding=2,
-                stride=2,
-                act_cfg=self.act_cfg,
-                norm_cfg=self.norm_cfg,
-                device=self.device,
-            ),
-            ConvBlock(
-                256*2,
-                256*2,
-                kernel_size=5,
-                padding=2,
-                stride=2,
-                act_cfg=self.act_cfg,
-                norm_cfg=self.norm_cfg,
-                device=self.device,
-            ),
-            nn.Flatten(),
-            LinearBlock(
-                12800,
-                128,
-                bias=True,
-                norm_cfg=self.norm_cfg,
-                act_cfg=self.act_cfg,
-                dropout=0.3,
-                device=self.device,
-            ),
-            LinearBlock(
-                128,
-                64,
-                bias=True,
-                norm_cfg=self.norm_cfg,
-                act_cfg=self.act_cfg,
-                dropout=0.3,
-                device=self.device,
-            ),
-            LinearBlock(
-                64,
-                2,
-                bias=True,
-                norm_cfg=None,
-                act_cfg=None,
-                dropout=0.3,
-                device=self.device,
-            ),
-        )
-
-        self.s_param_head = s_param_head
 
     def _build_layers(self):
         hidden_dim = self.hidden_list[-1]
@@ -350,7 +171,7 @@ class FNO2d(ModelBase):
             FNOBlocks(
                 in_channels=hidden_dim,
                 out_channels=hidden_dim,
-                n_modes=(self.mode1 * 2, self.mode2 * 2),
+                n_modes=(self.mode1, self.mode2),
                 output_scaling_factor=None,
                 use_mlp=False,
                 mlp_dropout=0,
@@ -372,9 +193,10 @@ class FNO2d(ModelBase):
                 decomposition_kwargs=dict(),
                 joint_factorization=False,
                 SpectralConv=SpectralConv,
-                n_layers=4,
+                n_layers=self.n_layers,
             )
         )
+        fno_blocks = nn.Sequential(*fno_blocks)
 
         head = MLP(
             in_channels=hidden_dim,
@@ -384,25 +206,11 @@ class FNO2d(ModelBase):
             n_dim=2,
         )
 
-        # head = ConvBlock(
-        #     hidden_dim // 2 + hidden_dim,
-        #     self.out_channels,
-        #     kernel_size=1,
-        #     padding=0,
-        #     # norm_cfg=self.norm_cfg,
-        #     norm_cfg=None,
-        #     act_cfg=None,
-        #     device=self.device,
-        # )
-
         return lifting, fno_blocks, head
 
     def build_layers(self):
         self.lifting, self.fno_blocks, self.head = self._build_layers()
         # print("if nn have eps branch", hasattr(self, "has_eps_branch"), flush=True)
-
-        if getattr(self, "s_param_only", False):
-            self._build_s_param_head()
 
         if self.aux_head:
             hidden_list = [self.kernel_list[self.aux_head_idx]] + self.hidden_list
@@ -556,21 +364,19 @@ class FNO2d(ModelBase):
         eps,
         src,
     ):
-        incident_field_fwd = self.incident_field_from_src(src)
-        incident_field_fwd = torch.view_as_real(incident_field_fwd).permute(
-            0, 3, 1, 2
-        )  # B, 2, H, W
-        incident_field_fwd = incident_field_fwd / (
-            torch.abs(incident_field_fwd).amax(dim=(1, 2, 3), keepdim=True) + 1e-6
-        )
+        if self.incident_field_fwd:
+            incident_field_fwd = self.incident_field_from_src(src)
+            incident_field_fwd = torch.view_as_real(incident_field_fwd).permute(
+                0, 3, 1, 2
+            )  # B, 2, H, W
+            incident_field_fwd = incident_field_fwd / (
+                torch.abs(incident_field_fwd).amax(dim=(1, 2, 3), keepdim=True) + 1e-6
+            )
         src = torch.view_as_real(src.resolve_conj()).permute(0, 3, 1, 2)  # B, 2, H, W
         src = src / (torch.abs(src).amax(dim=(1, 2, 3), keepdim=True) + 1e-6)
 
         eps = eps / 12.11
         eps = eps.unsqueeze(1)  # B, 1, H, W
-
-        ## eps_branch
-        eps_1 = eps_2 = eps_0 = None
 
         if self.fourier_feature == "learnable":
             H = eps.shape[-2]
@@ -588,22 +394,20 @@ class FNO2d(ModelBase):
             eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1)
         else:
             enc_fwd = self.fourier_feature_mapping(eps)
-            eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1)
-
-        x_fwd = torch.cat((eps_enc_fwd, incident_field_fwd), dim=1)
+            eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1) if self.fourier_feature != "none" else eps
+        if self.incident_field_fwd:
+            x_fwd = torch.cat((eps_enc_fwd, incident_field_fwd), dim=1)
+        else:
+            x_fwd = torch.cat((eps_enc_fwd, src), dim=1)
 
         x_fwd = self.lifting(x_fwd)  # conv2d downsample
 
-        if eps_0 is not None:
-            x_fwd = x_fwd * eps_0
+        x1_fwd = self.fno_blocks(x_fwd)  # fno block
 
-        x1_fwd = self.fno_blocks[0](x_fwd)  # fno block
-
-        if hasattr(self, "s_param_head"):
-            s_param = self.s_param_head(x1_fwd) * 1e-8
-            return s_param
         forward_Ez_field = self.head(x1_fwd)  # 1x1 conv
+
         if len(forward_Ez_field.shape) == 3:
+            raise ValueError("forward_Ez_field should have 4 dimensions")
             forward_Ez_field = forward_Ez_field.unsqueeze(0)
 
         return forward_Ez_field

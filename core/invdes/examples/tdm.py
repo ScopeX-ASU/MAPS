@@ -24,7 +24,7 @@ from core.invdes.invdesign import InvDesign
 
 sys.path.pop(0)
 if __name__ == "__main__":
-    gpu_id = 0
+    gpu_id = 1
     torch.cuda.set_device(gpu_id)
     operation_device = torch.device("cuda:" + str(gpu_id))
     torch.backends.cudnn.benchmark = True
@@ -32,7 +32,7 @@ if __name__ == "__main__":
     # first we need to instantiate the a optimization object
     sim_cfg = DefaultSimulationConfig()
 
-    mdm_region_size = (3, 2)
+    mdm_region_size = (6, 6)
     port_len = 1.8
 
     input_port_width = 0.48
