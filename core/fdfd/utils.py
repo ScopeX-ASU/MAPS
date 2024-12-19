@@ -155,6 +155,7 @@ def sparse_mv(A, x):
     return values.squeeze(-1)
 
 
+@torch.compile
 def hankel(n: int, x: Tensor, kind=1):
     ## hankel function J + iY
     # dtype = x.dtype
@@ -316,7 +317,7 @@ def get_farfields(
     far_fields = {"Ex": 0, "Ey": 0, "Ez": 0, "Hx": 0, "Hy": 0, "Hz": 0}
     for name, nearfield_region in nearfield_regions.items():
         nearfield_slice = nearfield_region["slice"]
-        direction = nearfield_region["weight"] # +1 or -1, similar to meep NearRegion
+        direction = nearfield_region["weight"]  # +1 or -1, similar to meep NearRegion
         f0 = fields[..., *nearfield_slice, :]  # [bs, s, nf]
         center = nearfield_region["center"]
         size = nearfield_region["size"]
@@ -324,7 +325,10 @@ def get_farfields(
             n_src_points = nearfield_slice[1].shape[0]
 
             xs_y = torch.linspace(
-                center[1] - size[1] / 2, center[1] + size[1] / 2, n_src_points, device=fields.device
+                center[1] - size[1] / 2,
+                center[1] + size[1] / 2,
+                n_src_points,
+                device=fields.device,
             )
             xs_x = torch.empty_like(xs_y).fill_(center[0])
         else:

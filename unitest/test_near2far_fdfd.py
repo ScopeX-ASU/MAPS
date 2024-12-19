@@ -30,6 +30,7 @@ from core.invdes.models.layers import MetaLens
 from core.utils import set_torch_deterministic
 import numpy as np
 import copy
+from pyutils.general import TimerCtx
 
 
 def test_near2far():
@@ -163,33 +164,55 @@ def test_near2far():
     #     dL=device.grid_step,
     #     component="Ez",
     # )["Ez"][0, ..., 0]
-
-    with torch.inference_mode():
-        Ez_farfield_region = get_farfields_GreenFunction(
-            nearfield_slices=[
-                device.port_monitor_slices[f"nearfield_{i}"] for i in range(1, 4)
-            ],
-            nearfield_slices_info=[
-                device.port_monitor_slices_info[f"nearfield_{i}"] for i in range(1, 4)
-            ],
-            Ez=Ez[None, ..., None],
-            Hx=Hx[None, ..., None],
-            Hy=Hy[None, ..., None],
-            farfield_x=None,
-            farfield_slice_info=device.port_monitor_slices_info["farfield_region"],
-            freqs=torch.tensor([1 / wl], device=Ez.device),
-            eps=device.eps_bg,
-            mu=MU_0,
-            dL=device.grid_step,
-            component="Ez",
-            decimation_factor=4,
-        )["Ez"][0, ..., 0]
+    for _ in range(2):
+        with torch.inference_mode():
+            Ez_farfield_region = get_farfields_GreenFunction(
+                nearfield_slices=[
+                    device.port_monitor_slices[f"nearfield_{i}"] for i in range(1, 4)
+                ],
+                nearfield_slices_info=[
+                    device.port_monitor_slices_info[f"nearfield_{i}"] for i in range(1, 4)
+                ],
+                Ez=Ez[None, ..., None],
+                Hx=Hx[None, ..., None],
+                Hy=Hy[None, ..., None],
+                farfield_x=None,
+                farfield_slice_info=device.port_monitor_slices_info["farfield_region"],
+                freqs=torch.tensor([1 / wl], device=Ez.device),
+                eps=device.eps_bg,
+                mu=MU_0,
+                dL=device.grid_step,
+                component="Ez",
+                decimation_factor=4,
+            )
+    with TimerCtx() as t:
+        with torch.inference_mode():
+            Ez_farfield_region = get_farfields_GreenFunction(
+                nearfield_slices=[
+                    device.port_monitor_slices[f"nearfield_{i}"] for i in range(1, 4)
+                ],
+                nearfield_slices_info=[
+                    device.port_monitor_slices_info[f"nearfield_{i}"] for i in range(1, 4)
+                ],
+                Ez=Ez[None, ..., None],
+                Hx=Hx[None, ..., None],
+                Hy=Hy[None, ..., None],
+                farfield_x=None,
+                farfield_slice_info=device.port_monitor_slices_info["farfield_region"],
+                freqs=torch.tensor([1 / wl], device=Ez.device),
+                eps=device.eps_bg,
+                mu=MU_0,
+                dL=device.grid_step,
+                component="Ez",
+                decimation_factor=4,
+            )["Ez"][0, ..., 0]
+    print(f"near2far region runtime: {t.interval} s")
 
     farfield_region = device.port_monitor_slices["farfield_region"]
-    print(farfield_region)
-    print(device.port_monitor_slices_info["farfield_region"])
+    # print(farfield_region)
+    # print(device.port_monitor_slices_info["farfield_region"])
     fig, ax = plt.subplots(2, 1, figsize=(5, 5))
-    print(Ez.shape, Ez_farfield_region.shape)
+    # print(Ez.shape, Ez_farfield_region.shape)
     Ez_farfield_region = torch.cat(
         [Ez[: farfield_region.x[0, 0]], Ez_farfield_region], dim=0
     )

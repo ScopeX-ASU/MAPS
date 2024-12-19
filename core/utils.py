@@ -68,13 +68,28 @@ shape_dict = {
 }
 
 
+@torch.compile
+# @torch.compile(options={"triton.cudagraphs": True}, fullgraph=True)
+def trapezoid_1d(integrand: Tensor, dx: float, dim: int = -1) -> Tensor:
+    return torch.sum(integrand, dim=dim) * dx  # more efficient for uniform grid
+    # slice1 = [slice(None)] * integrand.ndim
+    # slice2 = [slice(None)] * integrand.ndim
+    # slice1[dim] = slice(1, None)
+    # slice2[dim] = slice(None, -1)
+    # return torch.sum(
+    #     (integrand[tuple(slice1)] + integrand[tuple(slice2)]), dim=dim
+    # ) * (dx / 2)
+
+
 def sph_2_car_field(
-    f_r: float,
-    f_phi: float,
-    f_theta: float,
-    phi: float,
-    theta: float = None,
-) -> Tuple[complex, complex, complex]:
+    f_r: Tensor,
+    f_phi: Tensor,
+    f_theta: Tensor,
+    phi: Tensor,
+    theta: Tensor = None,
+    sin_phi: Tensor = None,
+    cos_phi: Tensor = None,
+) -> Tuple[Tensor, Tensor, Tensor]:
     """Convert vector field components in spherical coordinates to cartesian.
 
     Parameters
@@ -95,8 +110,10 @@ def sph_2_car_field(
     Tuple[float, float, float]
         x, y, and z components of the vector field in cartesian coordinates.
     """
-    sin_phi = torch.sin(phi)
-    cos_phi = torch.cos(phi)
+    if sin_phi is None:
+        sin_phi = torch.sin(phi)
+    if cos_phi is None:
+        cos_phi = torch.cos(phi)
 
     if theta is None:
         f_x = f_r * cos_phi - f_phi * sin_phi
@@ -115,6 +132,7 @@ def sph_2_car_field(
     return f_x, f_y, f_z
 
 
+@torch.compile
 def car_2_sph(x: float, y: float, z: float = None) -> Tuple[float, float, float]:
     """Convert Cartesian to spherical coordinates.
 
@@ -142,9 +160,7 @@ def car_2_sph(x: float, y: float, z: float = None) -> Tuple[float, float, float]
     return r, phi, theta
 
 
-car_2_sph = torch.compile(car_2_sph)
-
-
+@torch.compile
 def sph_2_car(r: float, phi: float, theta: float = None) -> Tuple[float, float, float]:
     """Convert spherical to Cartesian coordinates.
 
