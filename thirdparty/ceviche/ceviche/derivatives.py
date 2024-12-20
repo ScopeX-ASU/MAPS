@@ -215,10 +215,14 @@ def create_sfactor_f(omega, dL, N, N_pml, dw):
     """S-factor profile for forward derivative matrix"""
     sfactor_array = np.ones(N, dtype=np.complex128)
     for i in range(N):
-        if i <= N_pml:
-            sfactor_array[i] = s_value(dL * (N_pml - i + 0.5), dw, omega)
-        elif i > N - N_pml:
-            sfactor_array[i] = s_value(dL * (i - (N - N_pml) - 0.5), dw, omega)
+        # if i <= N_pml: # 3.5, 2.5, 1.5, 0.5 000000
+        #     sfactor_array[i] = s_value(dL * (N_pml - i + 0.5), dw, omega)
+        # elif i > N - N_pml: # 00000 0.5, 1.5
+        #     sfactor_array[i] = s_value(dL * (i - (N - N_pml) - 0.5), dw, omega)
+        if i < N_pml: # left NPML 2.5 1.5 0.5 0000
+            sfactor_array[i] = s_value(dL * (N_pml - i - 0.5), dw, omega)
+        elif i >= N - N_pml: # right NPML 00000 0.5 1.5 2.5
+            sfactor_array[i] = s_value(dL * (i - (N - N_pml) + 0.5), dw, omega)
     return sfactor_array
 
 
@@ -226,10 +230,14 @@ def create_sfactor_b(omega, dL, N, N_pml, dw):
     """S-factor profile for backward derivative matrix"""
     sfactor_array = np.ones(N, dtype=np.complex128)
     for i in range(N):
-        if i <= N_pml:
-            sfactor_array[i] = s_value(dL * (N_pml - i + 1), dw, omega)
-        elif i > N - N_pml:
-            sfactor_array[i] = s_value(dL * (i - (N - N_pml) - 1), dw, omega)
+        # if i <= N_pml: # 4 3 2 1 00000
+        #     sfactor_array[i] = s_value(dL * (N_pml - i + 1), dw, omega)
+        # elif i > N - N_pml: # 0000 0 1
+        #     sfactor_array[i] = s_value(dL * (i - (N - N_pml) - 1), dw, omega)
+        if i < N_pml: # left NPML 3 2 1 0000
+            sfactor_array[i] = s_value(dL * (N_pml - i), dw, omega)
+        elif i > N - N_pml: # right NPML - 1  00000 1 2
+            sfactor_array[i] = s_value(dL * (i - (N - N_pml)), dw, omega)
     return sfactor_array
 
 

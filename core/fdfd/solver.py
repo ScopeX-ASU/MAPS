@@ -1,8 +1,8 @@
 """
 Date: 2024-10-10 19:50:23
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-10-10 19:50:53
-FilePath: /MAPS/core/models/fdfd/solver.py
+LastEditTime: 2024-12-20 04:51:02
+FilePath: /MAPS/core/fdfd/solver.py
 """
 
 import cupy as cp
@@ -301,7 +301,8 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         if Pl is not None and Pr is not None:
             A = Pl @ A @ Pr
             b = Pl @ b
-            symmetry = False  # pardiso symmetric mode is wrong
+            symmetry = True 
+            
         else:
             symmetry = False
         # with TimerCtx() as t:
@@ -323,14 +324,19 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             x = torch.view_as_complex(x)
             x = x.flatten()
         elif numerical_solver == "solve_iterative":
-            fwd_solver = neural_solver["fwd_solver"]
+            if neural_solver is not None:
+                fwd_solver = neural_solver["fwd_solver"]
+                solver_type = "iterative_nn"
+            else:
+                fwd_solver = None
+                solver_type = "iterative"
             x = solve_linear(
                 A,
                 b,
-                solver_type="iterative_nn",
+                solver_type=solver_type,
                 neural_solver=fwd_solver,
                 eps=eps,
-                iterative_method="lgmres",  # or other methods
+                iterative_method="bicgstab" if symmetry else "lgmres",  # or other methods
                 symmetry=symmetry,
                 maxiter=1000,
                 rtol=1e-2,
@@ -388,7 +394,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             if Pl is not None and Pr is not None:
                 A_t = Pr.T @ A_t @ Pl.T
                 adj_src = Pr.T @ adj_src
-                symmetry = False  # pardiso symmetric mode is wrong
+                symmetry = True 
             else:
                 symmetry = False
             if numerical_solver == "solve_direct":

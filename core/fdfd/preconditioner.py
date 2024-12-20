@@ -1,8 +1,8 @@
 """
 Date: 2024-11-15 23:38:50
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-11-16 15:05:21
-FilePath: /MAPS/core/models/fdfd/preconditioner.py
+LastEditTime: 2024-12-20 04:50:46
+FilePath: /MAPS/core/fdfd/preconditioner.py
 """
 
 import numpy as np
@@ -11,15 +11,16 @@ import scipy.sparse as sp
 ## sc-pml and the nonuniform grid are both examples of diagonal scaling operators...we can symmetrize them both
 
 
-def create_symmetrizer(Sxb, Syb):
+def create_symmetrizer(sxf, syf):
     """
     #usage should be symmetrized_A = Pl@A@Pr
     https://github.com/zhaonat/py-maxwell-fd3d/blob/main/pyfd3d/preconditioner.py
     """
-    sxb = Sxb.flatten(order="F")
-    syb = Syb.flatten(order="F")
 
-    numerator = np.sqrt((sxb * syb))
+    sxf = sxf[:, None]
+    syf = syf[None, :]
+
+    numerator = np.sqrt((syf * sxf)).flatten()
 
     M = len(numerator)
 

@@ -274,7 +274,7 @@ class fdfd_ez(fdfd_ez_ceviche):
         neural_solver=None,
         numerical_solver="solve_direct",
         use_autodiff: bool = False,
-        sym_precond: bool = False,
+        sym_precond: bool = True,
     ):
         self.power = power
         self.A = None
@@ -326,11 +326,10 @@ class fdfd_ez(fdfd_ez_ceviche):
         Nx_pml, Ny_pml = self.npml
 
         # Create the sfactor in each direction and for 'f' and 'b'
-        sxb = create_sfactor("b", self.omega, self.dL, Nx, Nx_pml)
-        syb = create_sfactor("b", self.omega, self.dL, Ny, Ny_pml)
+        sxf = create_sfactor("f", self.omega, self.dL, Nx, Nx_pml)
+        syf = create_sfactor("f", self.omega, self.dL, Ny, Ny_pml)
 
-        [Sxb, Syb] = np.meshgrid(sxb, syb, indexing="ij")
-        self.Pl, self.Pr = create_symmetrizer(Sxb, Syb)
+        self.Pl, self.Pr = create_symmetrizer(sxf, syf)
 
     def _make_A(self, eps_vec: torch.Tensor):
         return super()._make_A(eps_vec.detach().cpu().numpy())
