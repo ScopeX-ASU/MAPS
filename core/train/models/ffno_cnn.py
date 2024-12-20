@@ -247,9 +247,10 @@ class FFNO2d(ModelBase):
         aug_path=True,
         ffn=True,
         ffn_dwconv=True,
-        fourier_feature="learnable",
+        fourier_feature="none",
         pos_encoding="none",
         mapping_size=2,
+        incident_field_fwd=False,
         device=torch.device("cuda"),
     )
 
@@ -333,127 +334,10 @@ class FFNO2d(ModelBase):
         )
         self.padding = 9  # pad the domain if input is non-periodic
 
-    def _build_s_param_head(self):
-        s_param_head = nn.Sequential(
-            ConvBlock(
-                32,
-                64,
-                kernel_size=5,
-                padding=2,
-                stride=2,
-                act_cfg=self.act_cfg,
-                norm_cfg=self.norm_cfg,
-                device=self.device,
-            ),
-            ConvBlock(
-                64,
-                64,
-                kernel_size=5,
-                padding=2,
-                stride=2,
-                act_cfg=self.act_cfg,
-                norm_cfg=self.norm_cfg,
-                device=self.device,
-            ),
-            ConvBlock(
-                64,
-                64,
-                kernel_size=5,
-                padding=2,
-                stride=2,
-                act_cfg=self.act_cfg,
-                norm_cfg=self.norm_cfg,
-                device=self.device,
-            ),
-            ConvBlock(
-                64,
-                64*2,
-                kernel_size=5,
-                padding=2,
-                stride=2,
-                act_cfg=self.act_cfg,
-                norm_cfg=self.norm_cfg,
-                device=self.device,
-            ),
-            ConvBlock(
-                64*2,
-                64*2,
-                kernel_size=5,
-                padding=2,
-                stride=2,
-                act_cfg=self.act_cfg,
-                norm_cfg=self.norm_cfg,
-                device=self.device,
-            ),
-            ConvBlock(
-                64*2,
-                64*2,
-                kernel_size=5,
-                padding=2,
-                stride=2,
-                act_cfg=self.act_cfg,
-                norm_cfg=self.norm_cfg,
-                device=self.device,
-            ),
-            nn.Flatten(),
-            LinearBlock(
-                512,
-                192,
-                bias=True,
-                norm_cfg=self.norm_cfg,
-                act_cfg=self.act_cfg,
-                dropout=0.3,
-                device=self.device,
-            ),
-            LinearBlock(
-                192,
-                64,
-                bias=True,
-                norm_cfg=self.norm_cfg,
-                act_cfg=self.act_cfg,
-                dropout=0.3,
-                device=self.device,
-            ),
-            LinearBlock(
-                64,
-                2,
-                bias=True,
-                norm_cfg=None,
-                act_cfg=None,
-                dropout=0.3,
-                device=self.device,
-            ),
-        )
-
-        self.s_param_head = s_param_head 
-
     def build_layers(self):
-        if getattr(self, "s_param_only", False):
-            self._build_s_param_head()
-
-        self.stem = nn.Sequential(
-            ConvBlock(
-                self.in_channels,
-                self.dim,
-                kernel_size=5,
-                padding=2,
-                stride=2,
-                act_cfg=self.act_cfg,
-                device=self.device,
-            ),
-            ConvBlock(
-                self.dim,
-                self.dim,
-                kernel_size=5,
-                padding=2,
-                stride=2,
-                act_cfg=None,
-                device=self.device,
-            ),
-        )
+        self.stem = nn.Conv2d(self.in_channels, self.dim, 1)
         kernel_list = [self.dim] + self.kernel_list
         drop_path_rates = np.linspace(0, self.drop_path_rate, len(kernel_list[:-1]))
-        print("this is the mode list: ", self.mode_list, flush=True)
         features = [
             FFNO2dBlock(
                 inc,
@@ -492,22 +376,9 @@ class FFNO2d(ModelBase):
         head += [
             ConvBlock(
                 hidden_list[-1],
-                2*self.out_channels,
-                kernel_size=4,
-                padding=1,
-                stride=2,
-                conv_cfg=dict(type="ConvTranspose2d", padding_mode="zeros"),
-                act_cfg=self.act_cfg,
-                norm_cfg=self.norm_cfg,
-                device=self.device,
-            ), 
-            ConvBlock(
-                2*self.out_channels,
                 self.out_channels,
-                kernel_size=4,
-                padding=1,
-                stride=2,
-                conv_cfg=dict(type="ConvTranspose2d", padding_mode="zeros"),
+                kernel_size=1,
+                padding=0,
                 act_cfg=None,
                 norm_cfg=None,
                 device=self.device,
@@ -570,6 +441,20 @@ class FFNO2d(ModelBase):
                 dist = max(dist_to_left, dist_to_right, dist_to_top, dist_to_bottom)
                 if dist > 0:
                     self.pml_mask[i, j] = torch.exp(-damping_factor * dist)
+
+    def fourier_feature_mapping(self, x: Tensor) -> Tensor:
+        if self.fourier_feature == "none":
+            return x
+        else:
+            x = x.permute(0, 2, 3, 1)  # B, H, W, 1
+            x_proj = (
+                2.0 * torch.pi * x
+            ) @ self.B.T  # Matrix multiplication and scaling # B, H, W, mapping_size
+            x_proj = torch.cat(
+                [torch.sin(x_proj), torch.cos(x_proj)], dim=-1
+            )  # B, H, W, 2 * mapping_size
+            x_proj = x_proj.permute(0, 3, 1, 2)  # B, 2 * mapping_size, H, W
+            return x_proj
 
     def set_trainable_permittivity(self, mode: bool = True) -> None:
         self.trainable_permittivity = mode
@@ -639,20 +524,19 @@ class FFNO2d(ModelBase):
         eps,
         src,
     ):
-        incident_field_fwd = self.incident_field_from_src(src)
-        incident_field_fwd = torch.view_as_real(incident_field_fwd).permute(
-            0, 3, 1, 2
-        )  # B, 2, H, W
-        incident_field_fwd = incident_field_fwd / (
-            torch.abs(incident_field_fwd).amax(dim=(1, 2, 3), keepdim=True) + 1e-6
-        )
+        if self.incident_field_fwd is True:
+            incident_field_fwd = self.incident_field_from_src(src)
+            incident_field_fwd = torch.view_as_real(incident_field_fwd).permute(
+                0, 3, 1, 2
+            )  # B, 2, H, W
+            incident_field_fwd = incident_field_fwd / (
+                torch.abs(incident_field_fwd).amax(dim=(1, 2, 3), keepdim=True) + 1e-6
+            )
         src = torch.view_as_real(src.resolve_conj()).permute(0, 3, 1, 2)  # B, 2, H, W
         src = src / (torch.abs(src).amax(dim=(1, 2, 3), keepdim=True) + 1e-6)
 
         eps = eps / 12.11
         eps = eps.unsqueeze(1)  # B, 1, H, W
-
-        eps_1 = eps_2 = eps_0 = None
 
         if self.fourier_feature == "learnable":
             H = eps.shape[-2]
@@ -670,23 +554,16 @@ class FFNO2d(ModelBase):
             eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1)
         else:
             enc_fwd = self.fourier_feature_mapping(eps)
-            eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1)
-
-        x_fwd = torch.cat((eps_enc_fwd, incident_field_fwd), dim=1)
+            eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1) if self.fourier_feature != "none" else eps
+        if self.incident_field_fwd:
+            x_fwd = torch.cat((eps_enc_fwd, incident_field_fwd), dim=1)
+        else:
+            x_fwd = torch.cat((eps_enc_fwd, src), dim=1)
 
         x_fwd = self.stem(x_fwd)  # conv2d downsample
 
-        if eps_0 is not None:
-            x_fwd = x_fwd * eps_0
-
         x1_fwd = self.features(x_fwd)  # ffno block
-        if hasattr(self, "s_param_head"):
-            s_param = self.s_param_head(x1_fwd) * 1e-8
-            return s_param
+
         forward_Ez_field = self.head(x1_fwd)  # 1x1 conv
-        # print("this is the forward_Ez_field shape: ", forward_Ez_field.shape, flush=True)
-        # quit()
-        if len(forward_Ez_field.shape) == 3:
-            forward_Ez_field = forward_Ez_field.unsqueeze(0)
 
         return forward_Ez_field

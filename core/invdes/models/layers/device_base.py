@@ -855,7 +855,6 @@ class N_Ports(BaseDevice):
         wl_cen: float = 1.55,
         wl_width: float = 0,
         n_wl: int = 1,
-        temp: float = 300,
         grid_step=None,
         power_scales: dict = None,
         source_modes: Tuple[int] = (1,),
@@ -865,10 +864,12 @@ class N_Ports(BaseDevice):
         mode_profiles = {}
         for wl in np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl):
             for source_mode in source_modes:
-                current_eps = get_temp_related_eps(eps, wl, temp)
+                # there is no need to calculate the modes for different temperatures
+                # since the eps is only modulated at active region
+                # current_eps = get_temp_related_eps(eps, wl, temp)
                 omega = 2 * np.pi * C_0 / (wl * 1e-6)
                 ht_m, et_m, _, mode = insert_mode(
-                    omega, dl, slice.x, slice.y, current_eps, m=source_mode
+                    omega, dl, slice.x, slice.y, eps, m=source_mode
                 )
                 if power_scales is not None:
                     power_scale = power_scales[(wl, source_mode)]
@@ -877,7 +878,7 @@ class N_Ports(BaseDevice):
                     mode = mode * power_scale
                 else:
                     power_scale = 1
-                mode_profiles[(wl, source_mode, temp)] = [mode, ht_m, et_m, power_scale]
+                mode_profiles[(wl, source_mode)] = [mode, ht_m, et_m, power_scale]
         return mode_profiles
 
     def insert_plane_wave(
@@ -887,7 +888,6 @@ class N_Ports(BaseDevice):
         wl_cen: float = 1.55,
         wl_width: float = 0,
         n_wl: int = 1,
-        temp: float = 300,
         grid_step=None,
         power_scales: dict = None,
         direction: str = "x+",
@@ -919,7 +919,7 @@ class N_Ports(BaseDevice):
             else:
                 power_scale = 1
 
-            source_profiles[(wl, mode, temp)] = [source, ht_m, et_m, power_scale]
+            source_profiles[(wl, mode)] = [source, ht_m, et_m, power_scale]
         return source_profiles
 
     def create_simulation(self, omega, dl, eps, NPML, solver="ceviche"):
@@ -984,13 +984,13 @@ class N_Ports(BaseDevice):
         grid_step = grid_step or self.grid_step
         fields = {}
         if solver in {"ceviche", "ceviche_torch"}:
-            for (wl, mode, temp), (source, _, _, _) in source_profiles.items():
+            for (wl, mode), (source, _, _, _) in source_profiles.items():
                 # current_eps = get_temp_related_eps(eps, wl, temp)
                 current_eps = eps
                 Hx, Hy, Ez = self.solve_ceviche(
                     current_eps, source, wl=wl, grid_step=grid_step, solver=solver
                 )
-                fields[(wl, mode, temp)] = {"Hx": Hx, "Hy": Hy, "Ez": Ez}
+                fields[(wl, mode)] = {"Hx": Hx, "Hy": Hy, "Ez": Ez}
             return fields
         else:
             raise ValueError(f"Solver {solver} not supported")
@@ -1004,7 +1004,6 @@ class N_Ports(BaseDevice):
         wl_cen=1.55,
         wl_width=0,
         n_wl=1,
-        temp=300,
         solver="ceviche",
         power: float = 1e-8,
         source_type: str = "mode",
@@ -1033,7 +1032,6 @@ class N_Ports(BaseDevice):
                     wl_cen=wl_cen,
                     wl_width=wl_width,
                     n_wl=n_wl,
-                    temp=temp,
                     power_scales=power_scales,
                     source_modes=source_modes,
                 )  # {(wl, mode): [source, ht_m, et_m, scale], ...}
@@ -1055,7 +1053,6 @@ class N_Ports(BaseDevice):
                     wl_cen=wl_cen,
                     wl_width=wl_width,
                     n_wl=n_wl,
-                    temp=temp,
                     power_scales=power_scales,
                     direction=direction,
                 )

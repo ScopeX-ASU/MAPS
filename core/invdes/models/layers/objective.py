@@ -86,9 +86,9 @@ class EigenmodeObjective(object):
             for out_mode in out_modes:
                 for temp in target_temps:
                     src, ht_m, et_m, norm_p = self.port_profiles[out_port_name][
-                        (wl, out_mode, temp)
+                        (wl, out_mode)
                     ]
-                    norm_power = self.port_profiles[in_port_name][(wl, in_mode, temp)][
+                    norm_power = self.port_profiles[in_port_name][(wl, in_mode)][
                         3
                     ]
                     monitor_slice = self.port_slices[out_port_name]
@@ -101,7 +101,7 @@ class EigenmodeObjective(object):
                     if isinstance(ht_m, Tensor) and ht_m.device != ez.device:
                         ht_m = ht_m.to(ez.device)
                         et_m = et_m.to(ez.device)
-                        self.port_profiles[out_port_name][(wl, out_mode, temp)] = [
+                        self.port_profiles[out_port_name][(wl, out_mode)] = [
                             src.to(ez.device),
                             ht_m,
                             et_m,
@@ -200,7 +200,7 @@ class FluxNear2FarObjective(object):
         for wl, _ in self.sims.items():
             for temp in target_temps:
                 # monitor_slice = self.port_slices[out_port_name]
-                norm_power = self.port_profiles[in_port_name][(wl, in_mode, temp)][3]
+                norm_power = self.port_profiles[in_port_name][(wl, in_mode)][3]
                 # this is how ez, hx and hy are calculated in regular simulation
                 field = fields[(in_port_name, wl, in_mode, temp)]
                 hx_near, hy_near, ez_near = (
@@ -350,7 +350,7 @@ class FluxObjective(object):
         for wl, _ in self.sims.items():
             for temp in target_temps:
                 monitor_slice = self.port_slices[out_port_name]
-                norm_power = self.port_profiles[in_port_name][(wl, in_mode, temp)][3]
+                norm_power = self.port_profiles[in_port_name][(wl, in_mode)][3]
                 field = fields[(in_port_name, wl, in_mode, temp)]
                 hx, hy, ez = (
                     field["Hx"],
@@ -652,6 +652,7 @@ class ObjectiveFunc(object):
         self.breakdown = {}
         self.solutions = {}
         self.verbose = verbose
+        self.obj_cfgs = dict()
 
     def switch_solver(self, neural_solver, numerical_solver, use_autodiff=False):
         for simulation in self.sims.values():
@@ -679,6 +680,7 @@ class ObjectiveFunc(object):
         self._obj_fusion_func = cfgs["_fusion_func"]
         cfgs = deepcopy(cfgs)
         del cfgs["_fusion_func"]
+        self.obj_cfgs.update(cfgs)
         ### build objective functions from solved fields to fom
         for name, cfg in cfgs.items():
             obj_type = cfg["type"]
@@ -722,7 +724,7 @@ class ObjectiveFunc(object):
                     name=name,
                     target_temps=target_temps,
                     grid_step=self.grid_step,
-                    minus_src=type == "flux_minus_src",
+                    minus_src=obj_type == "flux_minus_src",
                     obj_type=obj_type,
                 )
 
@@ -847,40 +849,45 @@ class ObjectiveFunc(object):
     ) -> Tuple[dict, Tensor]:
         self.solutions = {}
         self.As = {}
+        temperatures = []
+        for _, cfg in self.obj_cfgs.items():
+            temperatures = temperatures + cfg["temp"]
+        temperatures = set(temperatures)
         for port_name, port_profile in self.port_profiles.items():
-            for (wl, mode, temp), (source, _, _, norm_power) in port_profile.items():
+            for (wl, mode), (source, _, _, norm_power) in port_profile.items():
                 ## here the source is already normalized during norm_run to make sure it has target power
                 ## here is the key part that build the common "eps to field" autograd graph
                 ## later on, multiple "field to fom" autograd graph(s) will be built inside of multiple obj_fn's
 
                 ## temperature is effective only when there is active region defined
-                if getattr(self.device, "active_region_masks", None) is not None:
-                    control_cfgs = {
-                        name: {"T": temp}
-                        for name in self.device.active_region_masks.keys()
+                for temp in temperatures:
+                    if getattr(self.device, "active_region_masks", None) is not None:
+                        control_cfgs = {
+                            name: {"T": temp}
+                            for name in self.device.active_region_masks.keys()
+                        }
+
+                        self.sims[wl].eps_r = self.device.apply_active_modulation(
+                            permittivity, control_cfgs
+                        )
+                    else:
+                        self.sims[wl].eps_r = permittivity
+                    ## eps_r: permittivity tensor, denormalized
+
+                    # self.sims[wl].eps_r = get_temp_related_eps(
+                    #     eps=permittivity,
+                    #     temp=temp,
+                    #     temp_0=300,
+                    #     eps_r_0=Si_eps(wl),
+                    #     dn_dT=1.8e-4,
+                    # )
+                    Hx, Hy, Ez = self.sims[wl].solve(source, port_name=port_name, mode=mode)
+                    self.solutions[(port_name, wl, mode, temp)] = {
+                        "Hx": Hx,
+                        "Hy": Hy,
+                        "Ez": Ez,
                     }
-
-                    self.sims[wl].eps_r = self.device.apply_active_modulation(
-                        permittivity, control_cfgs
-                    )
-                else:
-                    self.sims[wl].eps_r = permittivity
-                ## eps_r: permittivity tensor, denormalized
-
-                # self.sims[wl].eps_r = get_temp_related_eps(
-                #     eps=permittivity,
-                #     temp=temp,
-                #     temp_0=300,
-                #     eps_r_0=Si_eps(wl),
-                #     dn_dT=1.8e-4,
-                # )
-                Hx, Hy, Ez = self.sims[wl].solve(source, port_name=port_name, mode=mode)
-                self.solutions[(port_name, wl, mode, temp)] = {
-                    "Hx": Hx,
-                    "Hy": Hy,
-                    "Ez": Ez,
-                }
-                self.As[(wl, temp)] = self.sims[wl].A
+                    self.As[(wl, temp)] = self.sims[wl].A
 
         self.breakdown = {}
         for name, obj in self.Js.items():

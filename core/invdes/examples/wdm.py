@@ -54,6 +54,21 @@ if __name__ == "__main__":
         )
     )
 
+    def fom_func(breakdown):
+        ## maximization fom
+        fom = 0
+        for key, obj in breakdown.items():
+            if key in {"wl1_trans", "wl2_trans"}:
+                continue
+            fom = fom + obj["weight"] * obj["value"]
+
+        ## add extra temp mul
+        product = breakdown["wl1_trans"]["value"] * breakdown["wl2_trans"]["value"] * 5
+        fom = fom + product
+        return fom, {"trans_product": {"weight": 5, "value": product}}
+
+    obj_cfgs = dict(_fusion_func=fom_func)
+
     device = WDM(
         sim_cfg=sim_cfg,
         box_size=mdm_region_size,

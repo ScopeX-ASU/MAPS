@@ -1013,8 +1013,10 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
                 ez = Ez[i, j].flatten()
                 # omega = 2 * np.pi * C_0 / (self.wl_list[j] * 1e-6)
                 wl = round(self.wl_list[j].item()*100)/100
-                entries = As[f'A-wl-{wl}-entries_a'][i]
-                indices = As[f'A-wl-{wl}-indices_a'][i]
+                # print("this is the key of As", list(As.keys()), flush=True)
+                # quit()
+                entries = As[f'A-wl-({wl}, 300)-entries_a'][i]
+                indices = As[f'A-wl-({wl}, 300)-indices_a'][i]
                 # b = source[i, j].flatten() * (1j * omega)
                 # print("this is the shape of the indices", indices.shape, flush=True) # this is the shape of the indices torch.Size([2, 405600])
                 # assert len(indices.shape) == 3

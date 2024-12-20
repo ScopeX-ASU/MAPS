@@ -13,8 +13,9 @@ from einops import einsum
 from torch import Tensor
 
 from core.fdfd.utils import hankel
-from core.utils import car_2_sph, sph_2_car_field
+from core.utils import car_2_sph, sph_2_car_field, trapezoid_1d
 from thirdparty.ceviche.ceviche.constants import C_0, EPSILON_0, MU_0
+from pyutils.general import TimerCtx
 
 
 # https://digitalcommons.calpoly.edu/cgi/viewcontent.cgi?article=1264&context=phy_fac
@@ -163,8 +164,8 @@ def get_farfields_GreenFunction(
             far_xs = np.array(far_xs.item())
         if not isinstance(far_ys, np.ndarray):
             far_ys = np.array(far_ys.item())
-        far_xs = torch.from_numpy(far_xs).to(Ez.device).float()
-        far_ys = torch.from_numpy(far_ys).to(Ez.device).float()
+        far_xs = torch.from_numpy(far_xs.astype(np.float32)).to(Ez.device)
+        far_ys = torch.from_numpy(far_ys.astype(np.float32)).to(Ez.device)
         if len(far_xs.shape) == 0:  # vertical farfield slice
             far_xs = far_xs.reshape([1]).repeat(len(far_ys))
             # print(far_xs, far_ys)
@@ -191,8 +192,8 @@ def get_farfields_GreenFunction(
         if not isinstance(near_ys, np.ndarray):
             near_ys = np.array(near_ys.item())
 
-        xs = torch.from_numpy(near_xs).to(Ez.device).float()
-        ys = torch.from_numpy(near_ys).to(Ez.device).float()
+        xs = torch.from_numpy(near_xs.astype(np.float32)).to(Ez.device)
+        ys = torch.from_numpy(near_ys.astype(np.float32)).to(Ez.device)
         direction = nearfield_slice_info["direction"]  # e.g., x+, x-, y+, y-
         if len(xs.shape) == 0:  # vertical monitor
             xs = xs.reshape([1]).expand_as(ys)
@@ -201,6 +202,7 @@ def get_farfields_GreenFunction(
             ys = ys.reshape([1]).expand_as(xs)
             xs = torch.stack((xs, ys), dim=-1)  # [num_src_points, 2]
 
+        # with TimerCtx() as t:
         hx, hy, ez = GreenFunctionProjection(
             x=far_xs,
             freqs=freqs,
@@ -214,6 +216,8 @@ def get_farfields_GreenFunction(
             near_monitor_direction=direction,
             decimation_factor=decimation_factor,
         )
+        #     torch.cuda.synchronize()
+        # print(f"GreenFunctionProjection time: {t.interval} s")
         far_fields["Ez"] += ez.reshape(-1, *farfield_shape, len(freqs))  # [bs, n, nf]
         far_fields["Hx"] += hx.reshape(-1, *farfield_shape, len(freqs))  # [bs, n, nf]
         far_fields["Hy"] += hy.reshape(-1, *farfield_shape, len(freqs))  # [bs, n, nf]
@@ -221,6 +225,7 @@ def get_farfields_GreenFunction(
     return far_fields
 
 
+# @torch.compile
 def GreenFunctionProjection(
     x: Tensor,  # far field location, um (x,y)
     freqs: Tensor,  # freqs = 1/lambda
@@ -235,10 +240,10 @@ def GreenFunctionProjection(
     decimation_factor: int = 1,  # subsampling rate on near field source
 ):
     if decimation_factor > 1:
-        Ez = Ez[:, decimation_factor // 2 :: decimation_factor, :]
-        Hx = Hx[:, decimation_factor // 2 :: decimation_factor, :]
-        Hy = Hy[:, decimation_factor // 2 :: decimation_factor, :]
-        x0 = x0[decimation_factor // 2 :: decimation_factor, :]
+        Ez = Ez[:, decimation_factor // 2 :: decimation_factor, :].contiguous()
+        Hx = Hx[:, decimation_factor // 2 :: decimation_factor, :].contiguous()
+        Hy = Hy[:, decimation_factor // 2 :: decimation_factor, :].contiguous()
+        x0 = x0[decimation_factor // 2 :: decimation_factor, :].contiguous()
         dL = dL * decimation_factor
 
     dtype = Ez.dtype
@@ -248,7 +253,7 @@ def GreenFunctionProjection(
     Hx = Hx.cfloat()
     Hy = Hy.cfloat()
 
-    i_omega = -1j * (2.0 * np.pi * C_0) * freqs  # [nf]
+    i_omega = -2j * (np.pi * C_0) * freqs  # [nf]
     k = 2 * np.pi * eps_r**0.5 * freqs  # wave number # [nf]
     epsilon = EPSILON_0 * eps_r
 
@@ -312,38 +317,53 @@ def GreenFunctionProjection(
     # d2G_dr2 = dG_dr * tmp + G / r_obs.square()  # [n, s, nf]
 
     ## this is exact hankel function implementation, more accurate!
-    kr = k * r_obs  # [n, s, nf]
-    H0 = hankel(0, kr, kind=2)
-    H1 = hankel(1, kr, kind=2)
-    G = 1j / 4 * H0
-    dG_dr = -1j / 4 * k * H1
-    d2G_dr2 = -1j / 4 * k.square() * H0 + 1j * k / (4 * r_obs) * H1
+
+    G, dG_dr, d2G_dr2 = _green_functions(k, r_obs)
 
     # operations between unit vectors and currents
-    def r_x_current(current: Tuple[Tensor, ...]) -> Tuple[Tensor, ...]:
+    @torch.compile
+    def r_x_current(
+        current: Tuple[Tensor, ...], is_2d: bool = True
+    ) -> Tuple[Tensor, ...]:
         """Cross product between the r unit vector and the current."""
-        return [
-            sin_theta * sin_phi * current[2] - cos_theta * current[1],
-            cos_theta * current[0] - sin_theta * cos_phi * current[2],
-            sin_theta * cos_phi * current[1] - sin_theta * sin_phi * current[0],
-        ]
+        if is_2d:
+            return [
+                sin_phi * current[2],
+                -cos_phi * current[2],
+                cos_phi * current[1] - sin_phi * current[0],
+            ]
+        else:
+            return [
+                sin_theta * sin_phi * current[2] - cos_theta * current[1],
+                cos_theta * current[0] - sin_theta * cos_phi * current[2],
+                sin_theta * cos_phi * current[1] - sin_theta * sin_phi * current[0],
+            ]
 
-    def r_dot_current(current: Tuple[Tensor, ...]) -> Tensor:
+    @torch.compile
+    def r_dot_current(current: Tuple[Tensor, ...], is_2d: bool = True) -> Tensor:
         """Dot product between the r unit vector and the current."""
-        return (
-            sin_theta * cos_phi * current[0]
-            + sin_theta * sin_phi * current[1]
-            + cos_theta * current[2]
-        )
+        if is_2d:
+            return cos_phi * current[0] + sin_phi * current[1]
+        else:
+            return (
+                sin_theta * cos_phi * current[0]
+                + sin_theta * sin_phi * current[1]
+                + cos_theta * current[2]
+            )
 
-    def r_dot_current_dtheta(current: Tuple[Tensor, ...]) -> Tensor:
+    @torch.compile
+    def r_dot_current_dtheta(current: Tuple[Tensor, ...], is_2d: bool = True) -> Tensor:
         """Theta derivative of the dot product between the r unit vector and the current."""
-        return (
-            cos_theta * cos_phi * current[0]
-            + cos_theta * sin_phi * current[1]
-            - sin_theta * current[2]
-        )
+        if is_2d:
+            return -current[2]
+        else:
+            return (
+                cos_theta * cos_phi * current[0]
+                + cos_theta * sin_phi * current[1]
+                - sin_theta * current[2]
+            )
 
+    @torch.compile
     def r_dot_current_dphi_div_sin_theta(current: Tuple[Tensor, ...]) -> Tensor:
         """Phi derivative of the dot product between the r unit vector and the current,
         analytically divided by sin theta."""
@@ -354,15 +374,16 @@ def GreenFunctionProjection(
     ) -> Tuple[Tensor, ...]:
         """Gradient of the product of the gradient of the Green's function and the dot product
         between the r unit vector and the current."""
+        dG_dr_by_r = dG_dr / r_obs
         temp = [
             d2G_dr2 * r_dot_current(current),
-            dG_dr * r_dot_current_dtheta(current) / r_obs,
-            dG_dr * r_dot_current_dphi_div_sin_theta(current) / r_obs,
+            dG_dr_by_r * r_dot_current_dtheta(current),
+            dG_dr_by_r * r_dot_current_dphi_div_sin_theta(current),
         ]
         # convert to Cartesian coordinates
         # return surface.monitor.sph_2_car_field(temp[0], temp[1], temp[2], theta_obs, phi_obs)
         return sph_2_car_field(
-            temp[0], temp[2], temp[1], phi_obs, theta_obs
+            temp[0], temp[2], temp[1], phi_obs, theta_obs, sin_phi=sin_phi, cos_phi=cos_phi
         )  # fx, fy, fz
 
     def potential_terms(current: Tuple[Tensor, ...], const: complex):
@@ -402,15 +423,6 @@ def GreenFunctionProjection(
     # e.g., direciont = "x", sum over y (dim=3)
     # e_x = self.trapezoid(e_x_integrand, (pts[idx_u], pts[idx_v]), (idx_u, idx_v))
     # e_y = self.trapezoid(e_y_integrand, (pts[idx_u], pts[idx_v]), (idx_u, idx_v))
-    def trapezoid_1d(integrand, dx, dim=-1):
-        slice1 = [slice(None)] * integrand.ndim
-        slice2 = [slice(None)] * integrand.ndim
-        slice1[dim] = slice(1, None)
-        slice2[dim] = slice(None, -1)
-        return torch.sum(integrand, dim=dim) * dx  # more efficient for uniform grid
-        # return torch.sum(
-        #     (integrand[tuple(slice1)] + integrand[tuple(slice2)]), dim=dim
-        # ) * (dx / 2)
 
     e_z = trapezoid_1d(e_z_integrand, dx=dL, dim=-2).to(dtype)
     h_x = trapezoid_1d(h_x_integrand, dx=dL, dim=-2).to(dtype)
@@ -418,3 +430,14 @@ def GreenFunctionProjection(
     # h_z = self.trapezoid(h_z_integrand, (pts[idx_u], pts[idx_v]), (idx_u, idx_v))
 
     return h_x, h_y, e_z
+
+
+@torch.compile
+def _green_functions(k, r_obs):
+    kr = k * r_obs  # [n, s, nf]
+    H0 = hankel(0, kr, kind=2)
+    H1 = hankel(1, kr, kind=2)
+    G = 0.25j * H0
+    dG_dr = -0.25j * k * H1
+    d2G_dr2 = -0.25j * k.square() * H0 + 0.25j * k / r_obs * H1
+    return G, dG_dr, d2G_dr2

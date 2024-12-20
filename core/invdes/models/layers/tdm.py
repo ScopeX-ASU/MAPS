@@ -118,13 +118,13 @@ class TDM(N_Ports):
             rel_loc=0.21,
             rel_width=rel_width,
         )
-        mode1_out_slice = self.build_port_monitor_slice(
+        temp1_out_slice = self.build_port_monitor_slice(
             port_name="out_port_1",
             slice_name="out_port_1",
             rel_loc=0.8,
             rel_width=rel_width,
         )
-        mode3_out_slice = self.build_port_monitor_slice(
+        temp2_out_slice = self.build_port_monitor_slice(
             port_name="out_port_2",
             slice_name="out_port_2",
             rel_loc=0.8,
@@ -135,58 +135,32 @@ class TDM(N_Ports):
         return (
             src_slice,
             refl_slice,
-            mode1_out_slice,
-            mode3_out_slice,
+            temp1_out_slice,
+            temp2_out_slice,
             radiation_monitor,
         )
 
     def norm_run(self, verbose: bool = True):
         if verbose:
             logger.info("Start normalization run ...")
-        temp1_norm_source_profiles = self.build_norm_sources(
+        norm_source_profiles = self.build_norm_sources(
             source_modes=(1,),
             input_port_name="in_port_1",
             input_slice_name="in_port_1",
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
-            temp=300,
             solver=self.sim_cfg["solver"],
             plot=True,
         )
 
-        temp2_norm_source_profiles = self.build_norm_sources(
-            source_modes=(1,),
-            input_port_name="in_port_1",
-            input_slice_name="in_port_1",
-            wl_cen=self.sim_cfg["wl_cen"],
-            wl_width=self.sim_cfg["wl_width"],
-            n_wl=self.sim_cfg["n_wl"],
-            temp=360,
-            solver=self.sim_cfg["solver"],
-            plot=True,
-        )
-
-        temp1_norm_refl_profiles_1 = self.build_norm_sources(
+        norm_refl_profiles_1 = self.build_norm_sources(
             source_modes=(1,),
             input_port_name="in_port_1",
             input_slice_name="refl_port_1",
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
-            temp=300,
-            solver=self.sim_cfg["solver"],
-            plot=True,
-        )
-
-        temp2_norm_refl_profiles_1 = self.build_norm_sources(
-            source_modes=(1,),
-            input_port_name="in_port_1",
-            input_slice_name="refl_port_1",
-            wl_cen=self.sim_cfg["wl_cen"],
-            wl_width=self.sim_cfg["wl_width"],
-            n_wl=self.sim_cfg["n_wl"],
-            temp=360,
             solver=self.sim_cfg["solver"],
             plot=True,
         )
@@ -198,7 +172,6 @@ class TDM(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
-            temp=300,
             solver=self.sim_cfg["solver"],
             plot=True,
         )
@@ -210,16 +183,13 @@ class TDM(N_Ports):
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
-            temp=360,
             solver=self.sim_cfg["solver"],
             plot=True,
         )
 
         return (
-            temp1_norm_source_profiles,
-            temp2_norm_source_profiles,
-            temp1_norm_refl_profiles_1,
-            temp2_norm_refl_profiles_1,
+            norm_source_profiles,
+            norm_refl_profiles_1,
             temp1_norm_monitor_profiles,
             temp2_norm_monitor_profiles,
         )

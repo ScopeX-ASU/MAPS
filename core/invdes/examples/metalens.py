@@ -75,7 +75,7 @@ if __name__ == "__main__":
         device=operation_device,
     )
 
-    hr_device = device.copy(resolution=100)
+    hr_device = device.copy(resolution=50)
 
     # def fom_func(breakdown):
     #     ## maximization fom
