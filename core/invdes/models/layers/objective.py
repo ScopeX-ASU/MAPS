@@ -159,6 +159,7 @@ class FluxNear2FarObjective(object):
         grid_step: float,
         eps_bg: float,
         obj_type: str = "flux_near2far",
+        total_farfield_region_solutions: dict = None,
     ):
         self.sims = sims
         self.s_params = s_params
@@ -174,6 +175,7 @@ class FluxNear2FarObjective(object):
         self.grid_step = grid_step
         self.eps_bg = eps_bg
         self.obj_type = obj_type
+        self.total_farfield_region_solutions = total_farfield_region_solutions
 
     def __call__(self, fields):
         s_list = []
@@ -232,32 +234,68 @@ class FluxNear2FarObjective(object):
                         extended_farfield_slice_info["ys"] = np.concatenate(
                             [ys[0:1] - grid_step, ys], axis=0
                         )
-                farfield = get_farfields_GreenFunction(
-                    nearfield_slices=[
-                        self.port_slices[nearfield_slice_name]
-                        for nearfield_slice_name in list(self.port_slices.keys())
-                        if nearfield_slice_name.startswith("nearfield")
-                    ],
-                    nearfield_slices_info=[
-                        self.port_slices_info[nearfield_slice_name]
-                        for nearfield_slice_name in list(self.port_slices_info.keys())
-                        if nearfield_slice_name.startswith("nearfield")
-                    ],
-                    Ez=ez_near[None, ..., None],
-                    Hx=hx_near[None, ..., None],
-                    Hy=hy_near[None, ..., None],
-                    farfield_x=None,
-                    farfield_slice_info=self.port_slices_info[out_port_name],
-                    freqs=torch.tensor([1 / wl], device=ez_near.device),
-                    eps=self.eps_bg,
-                    mu=MU_0,
-                    dL=self.grid_step,
-                    component="Ez",
-                    decimation_factor=4,
-                )
-                ez = farfield["Ez"][0, ..., 0]
-                hx = farfield["Hx"][0, ..., 0]
-                hy = farfield["Hy"][0, ..., 0]
+                if out_port_name == "total_farfield_region":
+                    with torch.no_grad():
+                        farfield = get_farfields_GreenFunction(
+                            nearfield_slices=[
+                                self.port_slices[nearfield_slice_name]
+                                for nearfield_slice_name in list(self.port_slices.keys())
+                                if nearfield_slice_name.startswith("nearfield")
+                            ],
+                            nearfield_slices_info=[
+                                self.port_slices_info[nearfield_slice_name]
+                                for nearfield_slice_name in list(self.port_slices_info.keys())
+                                if nearfield_slice_name.startswith("nearfield")
+                            ],
+                            Ez=ez_near[None, ..., None],
+                            Hx=hx_near[None, ..., None],
+                            Hy=hy_near[None, ..., None],
+                            farfield_x=None,
+                            farfield_slice_info=self.port_slices_info[out_port_name],
+                            freqs=torch.tensor([1 / wl], device=ez_near.device),
+                            eps=self.eps_bg,
+                            mu=MU_0,
+                            dL=self.grid_step,
+                            component="Ez",
+                            decimation_factor=4,
+                        )
+                    ez = farfield["Ez"][0, ..., 0]
+                    hx = farfield["Hx"][0, ..., 0]
+                    hy = farfield["Hy"][0, ..., 0]
+                    self.total_farfield_region_solutions[(in_port_name, wl, in_mode, temp)] = {
+                        "Ez": ez,
+                        "Hx": hx,
+                        "Hy": hy,
+                    }
+                    return torch.tensor(0.0).to(ez.device)
+                else:
+                    farfield = get_farfields_GreenFunction(
+                        nearfield_slices=[
+                            self.port_slices[nearfield_slice_name]
+                            for nearfield_slice_name in list(self.port_slices.keys())
+                            if nearfield_slice_name.startswith("nearfield")
+                        ],
+                        nearfield_slices_info=[
+                            self.port_slices_info[nearfield_slice_name]
+                            for nearfield_slice_name in list(self.port_slices_info.keys())
+                            if nearfield_slice_name.startswith("nearfield")
+                        ],
+                        Ez=ez_near[None, ..., None],
+                        Hx=hx_near[None, ..., None],
+                        Hy=hy_near[None, ..., None],
+                        farfield_x=None,
+                        farfield_slice_info=self.port_slices_info[out_port_name],
+                        freqs=torch.tensor([1 / wl], device=ez_near.device),
+                        eps=self.eps_bg,
+                        mu=MU_0,
+                        dL=self.grid_step,
+                        component="Ez",
+                        decimation_factor=4,
+                    )
+                    ez = farfield["Ez"][0, ..., 0]
+                    hx = farfield["Hx"][0, ..., 0]
+                    hy = farfield["Hy"][0, ..., 0]
+                
                 if direction[0] == "x":  # Yee grid average
                     ez = (ez[:-1] + ez[1:]) / 2
                     hx = hx[1:]
@@ -507,6 +545,7 @@ class ShapeSimilarityNear2FarObjective(object):
         intensity: bool = True,
         similarity: str = "angular",
         obj_type: str = "intensity_shape_near2far",
+        total_farfield_region_solutions:dict = None,
     ):
         self.sims = sims
         self.port_slices = port_slices
@@ -525,6 +564,7 @@ class ShapeSimilarityNear2FarObjective(object):
         self.intensity = intensity
         self.similarity = similarity
         self.obj_type = obj_type
+        self.total_farfield_region_solutions = total_farfield_region_solutions
 
     def __call__(self, fields):
         (
@@ -651,6 +691,7 @@ class ObjectiveFunc(object):
         self.dJ = None  # backward from fom to permittivity
         self.breakdown = {}
         self.solutions = {}
+        self.total_farfield_region_solutions = {}
         self.verbose = verbose
         self.obj_cfgs = dict()
 
@@ -744,6 +785,7 @@ class ObjectiveFunc(object):
                     grid_step=self.grid_step,
                     eps_bg=self.eps_bg,
                     obj_type=obj_type,
+                    total_farfield_region_solutions=self.total_farfield_region_solutions,
                 )
 
             elif obj_type == "phase":
@@ -804,6 +846,7 @@ class ObjectiveFunc(object):
                     intensity=True,
                     similarity="angular",
                     obj_type=obj_type,
+                    total_farfield_region_solutions=self.total_farfield_region_solutions,
                 )
             else:
                 raise ValueError("Invalid type")

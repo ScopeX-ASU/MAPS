@@ -328,6 +328,11 @@ class BaseOptimization(nn.Module):
     ):
         # print("this is the kyes of self.objective.solutions", list(self.objective.solutions.keys()), flush=True)
         Ez = self.objective.solutions[field_key][field_component]
+        extended_Ez = self.objective.total_farfield_region_solutions.get(field_key, {}).get(field_component, None)
+        if extended_Ez is not None:
+            Ez = torch.cat((Ez, extended_Ez), dim=0)
+            x_shift_coord = extended_Ez.shape[0] * self.device.grid_step
+            x_shift_idx = extended_Ez.shape[0]
         monitors = []
         for name, m in self.device.port_monitor_slices.items():
             if name in exclude_port_names:
@@ -338,14 +343,26 @@ class BaseOptimization(nn.Module):
                 color = "g"
             else:
                 color = "b"
+            # if isinstance(m, np.ndarray):
+            #     m = torch.from_numpy(m).to(self.operation_device)
+            #     if extended_Ez is not None:
+            #         m = m.cpu().numpy()
+            #     else:
+            #         extended_m = torch.zeros_like(extended_Ez)
+            #         m = torch.cat((m, extended_m), dim=0)
             monitors.append((m, color))
         eps_map = eps_map if eps_map is not None else self._eps_map
+        if extended_Ez is not None:
+            extended_eps_map = torch.ones_like(extended_Ez, dtype=torch.float64) * self.device.eps_bg
+            eps_map = torch.cat((eps_map, extended_eps_map), dim=0)
         obj = obj if obj is not None else self._obj
         if isinstance(obj, Tensor):
             obj = obj.item()
         if isinstance(Ez, ArrayBox):
             Ez = Ez._value
         design_region_center = np.mean(np.array([cfg["center"] for cfg in self.device.design_region_cfgs.values()]), axis=0)
+        if extended_Ez is not None:
+            design_region_center = design_region_center - x_shift_coord
         plot_eps_field(
             Ez,
             eps_map.detach().cpu().numpy(),
@@ -357,7 +374,9 @@ class BaseOptimization(nn.Module):
             title=f"|{field_component}|^2: {field_key}, FoM: {obj:.3f}",
             field_stat="abs_real",
             zoom_eps_factor=2,
-            zoom_eps_center=design_region_center
+            zoom_eps_center=design_region_center,
+            x_shift_coord=x_shift_coord if extended_Ez is not None else 0,
+            x_shift_idx=x_shift_idx if extended_Ez is not None else 0,
         )
 
     def dump_gds_files(self, filename):

@@ -644,6 +644,8 @@ def plot_eps_field(
     NPML=[0, 0],
     field_stat: str = "abs",  # "abs" or "real" or "abs_real"
     title: str = None,
+    x_shift_coord: int = 0,
+    x_shift_idx: int = 0,
 ):
     if isinstance(Ez, torch.Tensor):
         Ez = Ez.data.cpu().numpy()
@@ -660,12 +662,12 @@ def plot_eps_field(
     tick_fontsize = base_fontsize * 0.5
     field_stat = field_stat.lower().split("_")
     fig, ax = plt.subplots(
-        1,
         len(field_stat) + 1,
+        1,
         constrained_layout=True,
         figsize=(
-            7 * Ez.shape[0] / 600 * (len(field_stat) + 1) / 2,
-            1.7 * Ez.shape[1] / 300,
+            7 * Ez.shape[0] / 600 / 2,
+            1.7 * Ez.shape[1] / 300 * (len(field_stat) + 1),
         ),
         gridspec_kw={"wspace": 0.3},
     )
@@ -753,7 +755,7 @@ def plot_eps_field(
         if title is not None:
             # ax[0].set_title(title, fontsize=9, y=1.05)
             # ax[0].set_title(title, fontsize=title_fontsize, y=1.05)
-            fig.suptitle(title, fontsize=title_fontsize, y=0.95, ha="center")
+            fig.suptitle(title, fontsize=title_fontsize, y=1.2, ha="center")
 
         xlabel = np.linspace(-x_width / 2, x_width / 2, 5)
         ylabel = np.linspace(-y_height / 2, y_height / 2, 5)

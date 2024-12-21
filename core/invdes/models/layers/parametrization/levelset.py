@@ -11,7 +11,7 @@ from typing import Tuple
 import torch
 from torch import Tensor, nn
 from torch.types import Device
-
+import h5py
 
 from .base_parametrization import BaseParametrization
 from .utils import HeavisideProjection
@@ -224,6 +224,13 @@ class LeveSetParameterization(BaseParametrization):
     def _reset_parameters_levelset(
         self, weight_dict, param_cfg, region_cfg, init_method: str = "random"
     ):
+        init_file_path = param_cfg.get("initialization_file", None)
+        if init_file_path is not None:
+            assert init_method == "grating_1d", "Only grating_1d init method is supported with given initialization file"
+            with h5py.File(init_file_path, "r") as f:
+                level_set_knots = f["Si_width"][:]
+                level_set_knots = torch.tensor(level_set_knots, device=self.operation_device) * 1e6
+                # print("this is the shape of level_set_knots", level_set_knots.shape, flush=True)
         if init_method == "random":
             nn.init.normal_(weight_dict["ls_knots"], mean=0, std=0.01)
         elif init_method == "ones":
@@ -240,13 +247,15 @@ class LeveSetParameterization(BaseParametrization):
         elif init_method == "grating_1d":
             weight = weight_dict["ls_knots"]
             weight.data.fill_(-0.2)
+            # print("this is the shape of weight.data", weight.data.shape, flush=True) #(66, 66)
+            # quit()
             rho_res = self.cfgs["rho_resolution"]
             if weight.shape[0] == 1:
                 rho_res = rho_res[1]
                 n_gratings = weight.shape[1] // 2 # 0 1 0 1 0, 2 gratings
-                grating_widths = torch.linspace(0, 2 / rho_res, n_gratings)
+                grating_widths = torch.linspace(0, 2 / rho_res, n_gratings) if init_file_path is None else level_set_knots.squeeze()
                 ## (rho_res - width/2) / (width/2) = 0.2 / knots
-                weight.data[:, 1::2] = 0.2 * grating_widths / 2 / (rho_res - grating_widths / 2)
+                weight.data[:, 1::2] = 0.2 * grating_widths / 2 / (1 / rho_res - grating_widths / 2)
             elif weight.shape[1] == 1:
                 rho_res = rho_res[0]
                 n_gratings = weight.shape[0] // 2 # 0 1 0 1 0, 2 gratings

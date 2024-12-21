@@ -26,10 +26,14 @@ from core.invdes.models import (
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import MetaLens
 from core.utils import set_torch_deterministic
+from pyutils.config import Config
 
 sys.path.pop(0)
 if __name__ == "__main__":
     gpu_id = 0
+    # gpu_id = 1
+    # gpu_id = 2
+    # gpu_id = 3
     torch.cuda.set_device(gpu_id)
     operation_device = torch.device("cuda:" + str(gpu_id))
     torch.backends.cudnn.benchmark = True
@@ -43,8 +47,14 @@ if __name__ == "__main__":
     # input_port_width = 0.8
     # output_port_width = 0.8
 
-    wl = 0.832
-
+    wl = 0.850
+    initialization_file = "core/invdes/initialization/Si_metalens1D_for_850nm_FL30um.mat"
+    # initialization_file = "core/invdes/initialization/Si_metalens1D_for_850nm_FL50um.mat"
+    # initialization_file = "core/invdes/initialization/Si_metalens1D_for_850nm_FL60um.mat"
+    # initialization_file = "core/invdes/initialization/Si_metalens1D_for_850nm_FL80um.mat"
+    # initialization_file = "core/invdes/initialization/Si_metalens1D_for_850nm_FL30um_EDOF4.mat"
+    # initialization_file = "core/invdes/initialization/Si_metalens1D_for_850nm_FL30um_EDOF5.mat"
+    # initialization_file = "core/invdes/initialization/Si_metalens1D_for_850nm_FL100um.mat"
     sim_cfg.update(
         dict(
             # solver="ceviche",
@@ -54,28 +64,42 @@ if __name__ == "__main__":
             neural_solver=None,
             border_width=[0, 0, 0, 0],
             PML=[0.5, 0.5],
-            resolution=50,
+            resolution=100,
             wl_cen=wl,
-            plot_root="./figs/metalens_near2far",
+            plot_root="./figs/metalens_near2far_FL30_init",
+            # plot_root="./figs/metalens_near2far_FL50",
+            # plot_root="./figs/metalens_near2far_FL60",
+            # plot_root="./figs/metalens_near2far_FL80",
+            # plot_root="./figs/metalens_near2far_FL30_EDOF4",
+            # plot_root="./figs/metalens_near2far_FL30_EDOF5",
+            # plot_root="./figs/metalens_near2far_FL100",
         )
     )
 
     device = MetaLens(
         material_bg="Air",
         sim_cfg=sim_cfg,
+        # aperture=20,
         aperture=20,
-        port_len=(1.5, 41),
+        port_len=(1.5, 2),
         port_width=(22.2, 2),
         substrate_depth=0,
         ridge_height_max=0.75,
         nearfield_dx=0.3,
         nearfield_size=21,
-        farfield_dxs=((20, 50),),
+        # farfield_dxs=((20, 50),),
+        farfield_dxs=((30, 37.2),),
+        # farfield_dxs=((50, 70),),
+        # farfield_dxs=((60, 89),),
+        # farfield_dxs=((80, 131),),
+        # farfield_dxs=((30, 100),),
+        # farfield_dxs=((30, 140),),
+        # farfield_dxs=((100, 180),),
         farfield_sizes=(2,),
         device=operation_device,
     )
 
-    hr_device = device.copy(resolution=50)
+    hr_device = device.copy(resolution=100)
 
     # def fom_func(breakdown):
     #     ## maximization fom
@@ -99,9 +123,18 @@ if __name__ == "__main__":
         hr_device=hr_device,
         sim_cfg=sim_cfg,
         operation_device=operation_device,
+        initialization_file=initialization_file,
     ).to(operation_device)
     invdesign = InvDesign(
         devOptimization=opt,
+        sharp_scheduler=Config(
+            name="sharpness",
+            init_sharp=256,
+            final_sharp=256,
+        ),
+        run=Config(
+            n_epochs=1,
+        ),
     )
     invdesign.optimize(
         plot=True,

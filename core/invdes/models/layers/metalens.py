@@ -59,6 +59,7 @@ class MetaLens(N_Ports):
         self.substrate_depth = substrate_depth
         self.eps_bg = eps_bg_fn(wl_cen)
         self.resolution = sim_cfg["resolution"]
+        self.max_port_width = max(port_width)
 
         port_cfgs = dict(
             in_port_1=dict(
@@ -194,6 +195,10 @@ class MetaLens(N_Ports):
         surface_x = (
             self.port_cfgs["out_port_1"]["center"][0]
             - self.port_cfgs["out_port_1"]["size"][0] / 2
+        ) # this is the x coordinate of the right edge of the metalens
+        out_port_end = (
+            self.port_cfgs["out_port_1"]["center"][0]
+            + self.port_cfgs["out_port_1"]["size"][0] / 2
         )
         farfield_regions = [
             self.build_farfield_region(
@@ -209,7 +214,49 @@ class MetaLens(N_Ports):
                 zip(self.farfield_dxs, self.farfield_sizes), 1
             )
         ]
+        maximum_x_coord = [
+            (surface_x + farfield_dx[1]) for farfield_dx in self.farfield_dxs
+        ]
+        maximum_x_coord = max(maximum_x_coord) + 1 # add additional 1 to leave some margin
+        total_farfield_region = self.build_farfield_region(
+                region_name="total_farfield_region",
+                direction="x+",
+                center=(
+                    (out_port_end + maximum_x_coord) / 2,
+                    0,
+                ),
+                size=(
+                    maximum_x_coord - out_port_end, 
+                    max(self.box_size[1] + self.sim_cfg["border_width"][2] + self.sim_cfg["border_width"][3], self.max_port_width)
+                ),
+        )
 
+        farfield_rad_trans_yp_region = self.build_farfield_region(
+                region_name="rad_trans_farfield_yp",
+                direction="y",
+                center=(
+                    (out_port_end + maximum_x_coord) / 2,
+                    max(self.box_size[1] + self.sim_cfg["border_width"][2] + self.sim_cfg["border_width"][3], self.max_port_width) / 2 - self.sim_cfg["PML"][1] - 0.1,
+                ),
+                size=(
+                    maximum_x_coord - out_port_end - 0.5, 
+                    2 * self.grid_step,
+                ),
+        )
+        
+
+        farfield_rad_trans_ym_region = self.build_farfield_region(
+                region_name="rad_trans_farfield_ym",
+                direction="y",
+                center=(
+                    (out_port_end + maximum_x_coord) / 2,
+                    -max(self.box_size[1] + self.sim_cfg["border_width"][2] + self.sim_cfg["border_width"][3], self.max_port_width) / 2 + self.sim_cfg["PML"][1] + 0.1,
+                ),
+                size=(
+                    maximum_x_coord - out_port_end - 0.5, 
+                    2 * self.grid_step,
+                ),
+        )
         return (
             src_slice,
             nearfield_slice_1,
@@ -220,6 +267,9 @@ class MetaLens(N_Ports):
             radiation_monitor,
             # farfield_radiation_monitor,
             farfield_regions,
+            total_farfield_region,
+            farfield_rad_trans_yp_region,
+            farfield_rad_trans_ym_region,
         )
 
     def norm_run(self, verbose: bool = True):

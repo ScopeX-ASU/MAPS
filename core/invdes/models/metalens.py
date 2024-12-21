@@ -21,7 +21,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                     PML=[0.8, 0.8],
                     cell_size=None,
                     resolution=50,
-                    wl_cen=0.832,
+                    wl_cen=0.85,
                     wl_width=0,
                     n_wl=1,
                     plot_root="./figs/metalens",
@@ -34,7 +34,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="farfield_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         temp=[300],
-                        wl=[0.832],
+                        wl=[0.85],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(1,),
                         type="flux_near2far",
@@ -47,7 +47,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                     #     out_port_name="farfield_2",
                     #     #### objective is evaluated at all points by sweeping the wavelength and modes
                     #     temp=[300],
-                    #     wl=[0.832],
+                    #     wl=[0.85],
                     #     in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                     #     out_modes=(1,),
                     #     type="flux_near2far",
@@ -59,7 +59,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                     #     in_port_name="in_port_1",
                     #     out_port_name="farfield_3",
                     #     temp=[300],
-                    #     wl=[0.832],
+                    #     wl=[0.85],
                     #     in_mode=1,
                     #     out_modes=(1,),
                     #     type="flux_near2far",
@@ -70,7 +70,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                     #     in_port_name="in_port_1",
                     #     out_port_name="farfield_4",
                     #     temp=[300],
-                    #     wl=[0.832],
+                    #     wl=[0.85],
                     #     in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                     #     out_modes=(1,),
                     #     type="flux_near2far",
@@ -83,7 +83,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                     #     out_port_name="farfield_5",
                     #     #### objective is evaluated at all points by sweeping the wavelength and modes
                     #     temp=[300],
-                    #     wl=[0.832],
+                    #     wl=[0.85],
                     #     in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                     #     out_modes=(1,),
                     #     type="flux_near2far",
@@ -96,7 +96,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="refl_port_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         temp=[300],
-                        wl=[0.832],
+                        wl=[0.85],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
@@ -111,13 +111,29 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="rad_monitor_yp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         temp=[300],
-                        wl=[0.832],
+                        wl=[0.85],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
                         ),  # can evaluate on multiple output modes and get average transmission
                         # type="flux_near2far",
                         type="flux",
+                        direction="y",
+                    ),
+                    rad_trans_farfield_yp=dict(
+                        weight=-0.2,
+                        #### objective is evaluated at this port
+                        in_port_name="in_port_1",
+                        out_port_name="rad_trans_farfield_yp",
+                        #### objective is evaluated at all points by sweeping the wavelength and modes
+                        temp=[300],
+                        wl=[0.85],
+                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        out_modes=(
+                            1,
+                        ),  # can evaluate on multiple output modes and get average transmission
+                        # type="flux_near2far",
+                        type="flux_near2far",
                         direction="y",
                     ),
                     rad_trans_ym=dict(
@@ -127,13 +143,29 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="rad_monitor_ym",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         temp=[300],
-                        wl=[0.832],
+                        wl=[0.85],
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             1,
                         ),  # can evaluate on multiple output modes and get average transmission
                         # type="flux_near2far",
                         type="flux",
+                        direction="y",
+                    ),
+                    rad_trans_farfield_ym=dict(
+                        weight=-0.2,
+                        #### objective is evaluated at this port
+                        in_port_name="in_port_1",
+                        out_port_name="rad_trans_farfield_ym",
+                        #### objective is evaluated at all points by sweeping the wavelength and modes
+                        temp=[300],
+                        wl=[0.85],
+                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        out_modes=(
+                            1,
+                        ),  # can evaluate on multiple output modes and get average transmission
+                        # type="flux_near2far",
+                        type="flux_near2far",
                         direction="y",
                     ),
                     # rad_trans_xp=dict(
@@ -143,7 +175,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                     #     out_port_name="rad_monitor_xp",
                     #     #### objective is evaluated at all points by sweeping the wavelength and modes
                     #     temp=[300],
-                    #     wl=[0.832],
+                    #     wl=[0.85],
                     #     in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                     #     out_modes=(
                     #         1,
@@ -156,10 +188,10 @@ class DefaultConfig(DefaultOptimizationConfig):
                     #     weight=-0.2,
                     #    #### objective is evaluated at this port
                     #     in_port_name="in_port_1",
-                    #     out_port_name="rad_monitor_xp_minus",
+                    #     out_port_name="rad_monitor_xp",
                     #     #### objective is evaluated at all points by sweeping the wavelength and modes
                     #     temp = [300],
-                    #     wl=[0.832],
+                    #     wl=[0.85],
                     #     in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                     #     out_modes=(
                     #         1,
@@ -175,7 +207,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_port_name="farfield_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
-                        wl=[0.832],
+                        wl=[0.85],
                         temp=[300],
                         out_modes=(
                             1,
@@ -185,6 +217,20 @@ class DefaultConfig(DefaultOptimizationConfig):
                         shape_cfg=dict(
                             width=0.85, # sigma, 2.355 * sigma = FWHM = 2 um for gaussian, sigma = 0.85 um
                         ),
+                        direction="x+",
+                    ),
+
+                    tot_ff_reg_plt=dict(
+                        weight=0,
+                        #### objective is evaluated at this port
+                        in_port_name="in_port_1",
+                        out_port_name="total_farfield_region",
+                        #### objective is evaluated at all points by sweeping the wavelength and modes
+                        temp=[300],
+                        wl=[0.85],
+                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        out_modes=(1,),
+                        type="flux_near2far",
                         direction="x+",
                     ),
                 ),
@@ -201,12 +247,13 @@ class MetaLensOptimization(BaseOptimization):
         sim_cfg: dict = dict(),
         obj_cfgs=dict(),
         operation_device=torch.device("cuda:0"),
+        initialization_file=None,
     ):
         design_region_param_cfgs = dict()
         for region_name in device.design_region_cfgs.keys():
             design_region_param_cfgs[region_name] = dict(
                 method="levelset",
-                rho_resolution=[0, 10],
+                rho_resolution=[0, 1/0.15],
                 # transform=[dict(type="mirror_symmetry", dims=[1]), dict(type="blur", mfs=0.1, resolutions=[310, 310])],
                 transform=[dict(type="mirror_symmetry", dims=[1])],
                 init_method="grating_1d",
@@ -215,6 +262,7 @@ class MetaLensOptimization(BaseOptimization):
                     bw_threshold=100,
                     mode="regular",
                 ),
+                initialization_file=initialization_file,
             )
 
         cfgs = DefaultConfig()  ## this is default configurations

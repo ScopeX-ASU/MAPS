@@ -238,7 +238,13 @@ def GreenFunctionProjection(
     dL: float,  # grid size, um, used in nearfield integral
     near_monitor_direction: str = "x+",
     decimation_factor: int = 1,  # subsampling rate on near field source
+    maximum_batch_size: int = 75000,
 ):
+    x_copy = x.clone()
+    num_iter = x_copy.shape[0] // maximum_batch_size + 1
+    far_field_ez = []
+    far_field_hx = []
+    far_field_hy = []
     if decimation_factor > 1:
         Ez = Ez[:, decimation_factor // 2 :: decimation_factor, :].contiguous()
         Hx = Hx[:, decimation_factor // 2 :: decimation_factor, :].contiguous()
@@ -256,178 +262,187 @@ def GreenFunctionProjection(
     i_omega = -2j * (np.pi * C_0) * freqs  # [nf]
     k = 2 * np.pi * eps_r**0.5 * freqs  # wave number # [nf]
     epsilon = EPSILON_0 * eps_r
+    for i in range(num_iter):
+        x = x_copy[i * maximum_batch_size : (i + 1) * maximum_batch_size] if i < num_iter - 1 else x_copy[i * maximum_batch_size :]
 
-    # transform the coordinate system so that the origin is at the source point
-    # then the observation points in the new system are:
-    r = x[..., None, :] - x0[None, ...]  # distance vector # [n, s, 2]
+        # transform the coordinate system so that the origin is at the source point
+        # then the observation points in the new system are:
+        r = x[..., None, :] - x0[None, ...]  # distance vector # [n, s, 2]
 
-    # tangential source components to use
+        # tangential source components to use
 
-    if near_monitor_direction.startswith("x"):
-        # n = torch.tensor([1.0, 0.0, 0.0], dtype=x.dtype, device=x.device) # surface normal
-        # surface equivalence theory
-        # J = n x H = nx.*Hy - ny.*Hx
-        if near_monitor_direction[-1] == "+":
-            # [0, -Hz, Hy]
-            J = (0, 0, Hy[..., None, :, :])  # [bs, s, nf] -> [bs, 1, s, nf]
-            # M = -n x E
-            # (0, Ez, -Ey)
-            M = (0, Ez[..., None, :, :], 0)
+        if near_monitor_direction.startswith("x"):
+            # n = torch.tensor([1.0, 0.0, 0.0], dtype=x.dtype, device=x.device) # surface normal
+            # surface equivalence theory
+            # J = n x H = nx.*Hy - ny.*Hx
+            if near_monitor_direction[-1] == "+":
+                # [0, -Hz, Hy]
+                J = (0, 0, Hy[..., None, :, :])  # [bs, s, nf] -> [bs, 1, s, nf]
+                # M = -n x E
+                # (0, Ez, -Ey)
+                M = (0, Ez[..., None, :, :], 0)
+            else:
+                # [0, Hz, -Hy]
+                J = (0, 0, -Hy[..., None, :, :])
+                # M = -n x E
+                # (0, -Ez, Ey)
+                M = (0, -Ez[..., None, :, :], 0)
+
+        elif near_monitor_direction.startswith("y"):
+            # n = torch.tensor([0.0, 1.0, 0.0], dtype=x.dtype, device=x.device) # surface normal
+            if near_monitor_direction[-1] == "+":
+                # [Hz, 0, -Hx]
+                J = (0, 0, -Hx[..., None, :, :])
+                # M = -n x E
+                # (-Ez, 0, Ex)
+                M = (-Ez[..., None, :, :], 0, 0)
+            else:
+                # [-Hz, 0, Hx]
+                J = (0, 0, Hx[..., None, :, :])
+                # M = -n x E
+                # (Ez, 0, -Ex)
+                M = (Ez[..., None, :, :], 0, 0)
+
         else:
-            # [0, Hz, -Hy]
-            J = (0, 0, -Hy[..., None, :, :])
-            # M = -n x E
-            # (0, -Ez, Ey)
-            M = (0, -Ez[..., None, :, :], 0)
+            raise ValueError("Invalid near_monitor_direction")
 
-    elif near_monitor_direction.startswith("y"):
-        # n = torch.tensor([0.0, 1.0, 0.0], dtype=x.dtype, device=x.device) # surface normal
-        if near_monitor_direction[-1] == "+":
-            # [Hz, 0, -Hx]
-            J = (0, 0, -Hx[..., None, :, :])
-            # M = -n x E
-            # (-Ez, 0, Ex)
-            M = (-Ez[..., None, :, :], 0, 0)
-        else:
-            # [-Hz, 0, Hx]
-            J = (0, 0, Hx[..., None, :, :])
-            # M = -n x E
-            # (Ez, 0, -Ex)
-            M = (Ez[..., None, :, :], 0, 0)
+        r_obs, phi_obs, theta_obs = car_2_sph(
+            x=r[..., 0:1], y=r[..., 1:2], z=None
+        )  # [n, s, 1]
 
-    else:
-        raise ValueError("Invalid near_monitor_direction")
+        # angle terms
+        sin_theta = 1  # sin(theta_obs), theta = 90
+        cos_theta = 0  # cos(theta_obs), theta = 90
+        sin_phi = torch.sin(phi_obs)  # [n, s, 1]
+        cos_phi = torch.cos(phi_obs)  # [n, s, 1]
 
-    r_obs, phi_obs, theta_obs = car_2_sph(
-        x=r[..., 0:1], y=r[..., 1:2], z=None
-    )  # [n, s, 1]
+        # Green's function and terms related to its derivatives
+        ### this is tidy3d implementation, have some approximation or error?
+        # ikr = -1j * k * r_obs  # [n, s, nf]
+        # G = torch.exp(ikr) / (4.0 * np.pi * r_obs)  # [n, s, nf]
+        # tmp = (ikr - 1.0) / r_obs
+        # dG_dr = G * tmp  # [n, s, nf]
+        # d2G_dr2 = dG_dr * tmp + G / r_obs.square()  # [n, s, nf]
 
-    # angle terms
-    sin_theta = 1  # sin(theta_obs), theta = 90
-    cos_theta = 0  # cos(theta_obs), theta = 90
-    sin_phi = torch.sin(phi_obs)  # [n, s, 1]
-    cos_phi = torch.cos(phi_obs)  # [n, s, 1]
+        ## this is exact hankel function implementation, more accurate!
 
-    # Green's function and terms related to its derivatives
-    ### this is tidy3d implementation, have some approximation or error?
-    # ikr = -1j * k * r_obs  # [n, s, nf]
-    # G = torch.exp(ikr) / (4.0 * np.pi * r_obs)  # [n, s, nf]
-    # tmp = (ikr - 1.0) / r_obs
-    # dG_dr = G * tmp  # [n, s, nf]
-    # d2G_dr2 = dG_dr * tmp + G / r_obs.square()  # [n, s, nf]
+        G, dG_dr, d2G_dr2 = _green_functions(k, r_obs)
 
-    ## this is exact hankel function implementation, more accurate!
+        # operations between unit vectors and currents
+        @torch.compile
+        def r_x_current(
+            current: Tuple[Tensor, ...], is_2d: bool = True
+        ) -> Tuple[Tensor, ...]:
+            """Cross product between the r unit vector and the current."""
+            if is_2d:
+                return [
+                    sin_phi * current[2],
+                    -cos_phi * current[2],
+                    cos_phi * current[1] - sin_phi * current[0],
+                ]
+            else:
+                return [
+                    sin_theta * sin_phi * current[2] - cos_theta * current[1],
+                    cos_theta * current[0] - sin_theta * cos_phi * current[2],
+                    sin_theta * cos_phi * current[1] - sin_theta * sin_phi * current[0],
+                ]
 
-    G, dG_dr, d2G_dr2 = _green_functions(k, r_obs)
+        @torch.compile
+        def r_dot_current(current: Tuple[Tensor, ...], is_2d: bool = True) -> Tensor:
+            """Dot product between the r unit vector and the current."""
+            if is_2d:
+                return cos_phi * current[0] + sin_phi * current[1]
+            else:
+                return (
+                    sin_theta * cos_phi * current[0]
+                    + sin_theta * sin_phi * current[1]
+                    + cos_theta * current[2]
+                )
 
-    # operations between unit vectors and currents
-    @torch.compile
-    def r_x_current(
-        current: Tuple[Tensor, ...], is_2d: bool = True
-    ) -> Tuple[Tensor, ...]:
-        """Cross product between the r unit vector and the current."""
-        if is_2d:
-            return [
-                sin_phi * current[2],
-                -cos_phi * current[2],
-                cos_phi * current[1] - sin_phi * current[0],
+        @torch.compile
+        def r_dot_current_dtheta(current: Tuple[Tensor, ...], is_2d: bool = True) -> Tensor:
+            """Theta derivative of the dot product between the r unit vector and the current."""
+            if is_2d:
+                return -current[2]
+            else:
+                return (
+                    cos_theta * cos_phi * current[0]
+                    + cos_theta * sin_phi * current[1]
+                    - sin_theta * current[2]
+                )
+
+        @torch.compile
+        def r_dot_current_dphi_div_sin_theta(current: Tuple[Tensor, ...]) -> Tensor:
+            """Phi derivative of the dot product between the r unit vector and the current,
+            analytically divided by sin theta."""
+            return -sin_phi * current[0] + cos_phi * current[1]
+
+        def grad_Gr_r_dot_current(
+            current: Tuple[Tensor, ...],
+        ) -> Tuple[Tensor, ...]:
+            """Gradient of the product of the gradient of the Green's function and the dot product
+            between the r unit vector and the current."""
+            dG_dr_by_r = dG_dr / r_obs
+            temp = [
+                d2G_dr2 * r_dot_current(current),
+                dG_dr_by_r * r_dot_current_dtheta(current),
+                dG_dr_by_r * r_dot_current_dphi_div_sin_theta(current),
             ]
-        else:
-            return [
-                sin_theta * sin_phi * current[2] - cos_theta * current[1],
-                cos_theta * current[0] - sin_theta * cos_phi * current[2],
-                sin_theta * cos_phi * current[1] - sin_theta * sin_phi * current[0],
-            ]
+            # convert to Cartesian coordinates
+            # return surface.monitor.sph_2_car_field(temp[0], temp[1], temp[2], theta_obs, phi_obs)
+            return sph_2_car_field(
+                temp[0], temp[2], temp[1], phi_obs, theta_obs, sin_phi=sin_phi, cos_phi=cos_phi
+            )  # fx, fy, fz
 
-    @torch.compile
-    def r_dot_current(current: Tuple[Tensor, ...], is_2d: bool = True) -> Tensor:
-        """Dot product between the r unit vector and the current."""
-        if is_2d:
-            return cos_phi * current[0] + sin_phi * current[1]
-        else:
-            return (
-                sin_theta * cos_phi * current[0]
-                + sin_theta * sin_phi * current[1]
-                + cos_theta * current[2]
-            )
+        def potential_terms(current: Tuple[Tensor, ...], const: complex):
+            """Assemble vector potential and its derivatives."""
+            r_x_c = r_x_current(current)
+            pot = [const * item * G for item in current]
+            curl_pot = [const * item * dG_dr for item in r_x_c]
+            grad_div_pot = grad_Gr_r_dot_current(current)
+            grad_div_pot = [const * item for item in grad_div_pot]
+            return pot, curl_pot, grad_div_pot
 
-    @torch.compile
-    def r_dot_current_dtheta(current: Tuple[Tensor, ...], is_2d: bool = True) -> Tensor:
-        """Theta derivative of the dot product between the r unit vector and the current."""
-        if is_2d:
-            return -current[2]
-        else:
-            return (
-                cos_theta * cos_phi * current[0]
-                + cos_theta * sin_phi * current[1]
-                - sin_theta * current[2]
-            )
+        # magnetic vector potential terms
+        A, curl_A, grad_div_A = potential_terms(J, MU_0)
 
-    @torch.compile
-    def r_dot_current_dphi_div_sin_theta(current: Tuple[Tensor, ...]) -> Tensor:
-        """Phi derivative of the dot product between the r unit vector and the current,
-        analytically divided by sin theta."""
-        return -sin_phi * current[0] + cos_phi * current[1]
+        # electric vector potential terms
+        F, curl_F, grad_div_F = potential_terms(M, epsilon)
 
-    def grad_Gr_r_dot_current(
-        current: Tuple[Tensor, ...],
-    ) -> Tuple[Tensor, ...]:
-        """Gradient of the product of the gradient of the Green's function and the dot product
-        between the r unit vector and the current."""
-        dG_dr_by_r = dG_dr / r_obs
-        temp = [
-            d2G_dr2 * r_dot_current(current),
-            dG_dr_by_r * r_dot_current_dtheta(current),
-            dG_dr_by_r * r_dot_current_dphi_div_sin_theta(current),
-        ]
-        # convert to Cartesian coordinates
-        # return surface.monitor.sph_2_car_field(temp[0], temp[1], temp[2], theta_obs, phi_obs)
-        return sph_2_car_field(
-            temp[0], temp[2], temp[1], phi_obs, theta_obs, sin_phi=sin_phi, cos_phi=cos_phi
-        )  # fx, fy, fz
+        # assemble the electric field components (Taflove 8.24, 8.27)
+        # e_x_integrand, e_y_integrand, e_z_integrand = (
+        #     i_omega * (a + grad_div_a / (k**2)) - curl_f / epsilon
+        #     for a, grad_div_a, curl_f in zip(A, grad_div_A, curl_F)
+        # )
+        e_z_integrand = i_omega * (A[2] + grad_div_A[2] / (k**2)) - curl_F[2] / epsilon
 
-    def potential_terms(current: Tuple[Tensor, ...], const: complex):
-        """Assemble vector potential and its derivatives."""
-        r_x_c = r_x_current(current)
-        pot = [const * item * G for item in current]
-        curl_pot = [const * item * dG_dr for item in r_x_c]
-        grad_div_pot = grad_Gr_r_dot_current(current)
-        grad_div_pot = [const * item for item in grad_div_pot]
-        return pot, curl_pot, grad_div_pot
+        # assemble the magnetic field components (Taflove 8.25, 8.28)
+        # h_x_integrand, h_y_integrand, h_z_integrand = (
+        #     i_omega * (f + grad_div_f / (k**2)) + curl_a / MU_0
+        #     for f, grad_div_f, curl_a in zip(F, grad_div_F, curl_A)
+        # )  # [bs, n, s, nf]
 
-    # magnetic vector potential terms
-    A, curl_A, grad_div_A = potential_terms(J, MU_0)
+        h_x_integrand, h_y_integrand = (
+            i_omega * (f + grad_div_f / (k**2)) + curl_a / MU_0
+            for f, grad_div_f, curl_a in zip(F[:2], grad_div_F[:2], curl_A[:2])
+        )  # [bs, n, s, nf]
 
-    # electric vector potential terms
-    F, curl_F, grad_div_F = potential_terms(M, epsilon)
+        # integrate over the surface, sum over tagential dimensions
+        # e.g., direciont = "x", sum over y (dim=3)
+        # e_x = self.trapezoid(e_x_integrand, (pts[idx_u], pts[idx_v]), (idx_u, idx_v))
+        # e_y = self.trapezoid(e_y_integrand, (pts[idx_u], pts[idx_v]), (idx_u, idx_v))
 
-    # assemble the electric field components (Taflove 8.24, 8.27)
-    # e_x_integrand, e_y_integrand, e_z_integrand = (
-    #     i_omega * (a + grad_div_a / (k**2)) - curl_f / epsilon
-    #     for a, grad_div_a, curl_f in zip(A, grad_div_A, curl_F)
-    # )
-    e_z_integrand = i_omega * (A[2] + grad_div_A[2] / (k**2)) - curl_F[2] / epsilon
+        e_z = trapezoid_1d(e_z_integrand, dx=dL, dim=-2).to(dtype)
+        h_x = trapezoid_1d(h_x_integrand, dx=dL, dim=-2).to(dtype)
+        h_y = trapezoid_1d(h_y_integrand, dx=dL, dim=-2).to(dtype)
+        # h_z = self.trapezoid(h_z_integrand, (pts[idx_u], pts[idx_v]), (idx_u, idx_v))
+        far_field_ez.append(e_z)
+        far_field_hx.append(h_x)
+        far_field_hy.append(h_y)
 
-    # assemble the magnetic field components (Taflove 8.25, 8.28)
-    # h_x_integrand, h_y_integrand, h_z_integrand = (
-    #     i_omega * (f + grad_div_f / (k**2)) + curl_a / MU_0
-    #     for f, grad_div_f, curl_a in zip(F, grad_div_F, curl_A)
-    # )  # [bs, n, s, nf]
-
-    h_x_integrand, h_y_integrand = (
-        i_omega * (f + grad_div_f / (k**2)) + curl_a / MU_0
-        for f, grad_div_f, curl_a in zip(F[:2], grad_div_F[:2], curl_A[:2])
-    )  # [bs, n, s, nf]
-
-    # integrate over the surface, sum over tagential dimensions
-    # e.g., direciont = "x", sum over y (dim=3)
-    # e_x = self.trapezoid(e_x_integrand, (pts[idx_u], pts[idx_v]), (idx_u, idx_v))
-    # e_y = self.trapezoid(e_y_integrand, (pts[idx_u], pts[idx_v]), (idx_u, idx_v))
-
-    e_z = trapezoid_1d(e_z_integrand, dx=dL, dim=-2).to(dtype)
-    h_x = trapezoid_1d(h_x_integrand, dx=dL, dim=-2).to(dtype)
-    h_y = trapezoid_1d(h_y_integrand, dx=dL, dim=-2).to(dtype)
-    # h_z = self.trapezoid(h_z_integrand, (pts[idx_u], pts[idx_v]), (idx_u, idx_v))
+    h_x = torch.cat(far_field_hx, dim=1)
+    h_y = torch.cat(far_field_hy, dim=1)
+    e_z = torch.cat(far_field_ez, dim=1)
 
     return h_x, h_y, e_z
 

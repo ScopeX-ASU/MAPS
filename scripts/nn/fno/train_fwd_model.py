@@ -103,7 +103,7 @@ if __name__ == '__main__':
     ensure_dir(root)
     # mlflow.set_experiment(configs.run.experiment)  # set experiments first
     tasks = [
-        [0.0, "bending", "FNO2d", "fwd", False, "none", True, 33, 66, 33, "regular_fno", 0, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
+        [0.0, "bending", "FNO2d", "fwd", False, "none", True, 66, 132, 34, "regular_fno", 0, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
     ]   
 
     with Pool(8) as p:
