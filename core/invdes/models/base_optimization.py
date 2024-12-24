@@ -372,7 +372,7 @@ class BaseOptimization(nn.Module):
             y_height=self.device.cell_size[1],
             NPML=self.device.NPML,
             title=f"|{field_component}|^2: {field_key}, FoM: {obj:.3f}",
-            field_stat="abs_real",
+            field_stat="intensity_real",
             zoom_eps_factor=2,
             zoom_eps_center=design_region_center,
             x_shift_coord=x_shift_coord if extended_Ez is not None else 0,
@@ -469,7 +469,7 @@ class BaseOptimization(nn.Module):
                         f"field_solutions-wl-{wl}-port-{port_name}-mode-{mode}-temp-{temp}",
                         data=store_fields,
                     )  # 3d numpy array
-                for wl, A in self.objective.As.items():
+                for (wl, temp), A in self.objective.As.items():
                     Alist = []
                     for item in A:
                         if isinstance(item, Tensor):
@@ -482,8 +482,8 @@ class BaseOptimization(nn.Module):
                             raise ValueError(
                                 f"A is not a tensor, arraybox or numpy array, the type is {type(item)}"
                             )
-                    f.create_dataset(f"A-wl-{wl}-entries_a", data=Alist[0])
-                    f.create_dataset(f"A-wl-{wl}-indices_a", data=Alist[1])
+                    f.create_dataset(f"A-wl-{wl}-temp-{temp}-entries_a", data=Alist[0])
+                    f.create_dataset(f"A-wl-{wl}-temp-{temp}-indices_a", data=Alist[1])
                 for (
                     port_name,
                     wl,

@@ -434,7 +434,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                 adj = Pl.T @ adj
             if not isinstance(adj, torch.Tensor):
                 adj = torch.from_numpy(adj).to(torch.complex128).to(eps_diag.device)
-
+            solver_instance.adj_field[(port_name, mode)] = adj
             grad_epsilon = -adj.mul_(x).to(eps_diag.device).real
             ## this grad_epsilon = adj * x in ceviche
 
@@ -454,6 +454,7 @@ class SparseSolveTorch(torch.nn.Module):
         super(SparseSolveTorch, self).__init__()
         self.shape = shape
         self.adj_src = {}  # now the adj_src is a dictionary in which the key is (port_name, mode) with same wl, different wl have different simulation objects
+        self.adj_field = {}
         self.neural_solver = neural_solver
         self.numerical_solver = numerical_solver
         self.use_autodiff = use_autodiff

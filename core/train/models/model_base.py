@@ -216,7 +216,7 @@ class ModelBase(nn.Module):
         **kwargs,
     ) -> None:
         super().__init__()
-        self.load_cfgs(**kwargs)
+        # self.load_cfgs(**kwargs)
 
     def load_cfgs(self, **cfgs):
         # Start with default configurations

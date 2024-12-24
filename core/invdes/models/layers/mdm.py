@@ -105,7 +105,7 @@ class MDM(N_Ports):
             rel_loc=0.8,
             rel_width=rel_width,
         )
-        mode3_out_slice = self.build_port_monitor_slice(
+        mode2_out_slice = self.build_port_monitor_slice(
             port_name="out_port_2",
             slice_name="out_port_2",
             rel_loc=0.8,
@@ -113,13 +113,13 @@ class MDM(N_Ports):
         )
         self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=rel_width)
         radiation_monitor = self.build_radiation_monitor(monitor_name="rad_monitor")
-        return src_slice, refl_slice, mode1_out_slice, mode3_out_slice, radiation_monitor
+        return src_slice, refl_slice, mode1_out_slice, mode2_out_slice, radiation_monitor
 
     def norm_run(self, verbose: bool = True):
         if verbose:
             logger.info("Start normalization run ...")
         norm_source_profiles = self.build_norm_sources(
-            source_modes=(1, 3),
+            source_modes=(1, 2),
             input_port_name="in_port_1",
             input_slice_name="in_port_1",
             wl_cen=self.sim_cfg["wl_cen"],
@@ -130,7 +130,7 @@ class MDM(N_Ports):
         )
 
         norm_refl_profiles_1 = self.build_norm_sources(
-            source_modes=(1, 3),
+            source_modes=(1, 2),
             input_port_name="in_port_1",
             input_slice_name="refl_port_1",
             wl_cen=self.sim_cfg["wl_cen"],
@@ -151,8 +151,8 @@ class MDM(N_Ports):
             plot=True,
         )
 
-        mode3_norm_monitor_profiles = self.build_norm_sources(
-            source_modes=(3,),
+        mode2_norm_monitor_profiles = self.build_norm_sources(
+            source_modes=(2,),
             input_port_name="out_port_2",
             input_slice_name="out_port_2",
             wl_cen=self.sim_cfg["wl_cen"],
@@ -166,5 +166,5 @@ class MDM(N_Ports):
             norm_source_profiles,
             norm_refl_profiles_1,
             mode1_norm_monitor_profiles,
-            mode3_norm_monitor_profiles,
+            mode2_norm_monitor_profiles,
         )

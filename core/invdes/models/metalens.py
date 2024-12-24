@@ -254,6 +254,7 @@ class MetaLensOptimization(BaseOptimization):
             design_region_param_cfgs[region_name] = dict(
                 method="levelset",
                 rho_resolution=[0, 1/0.15],
+                interpolation="bilinear",
                 # transform=[dict(type="mirror_symmetry", dims=[1]), dict(type="blur", mfs=0.1, resolutions=[310, 310])],
                 transform=[dict(type="mirror_symmetry", dims=[1])],
                 init_method="grating_1d",

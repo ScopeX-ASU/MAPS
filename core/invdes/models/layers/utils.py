@@ -676,6 +676,8 @@ def plot_eps_field(
             plot_abs(Ez, outline=None, ax=ax[i], cbar=True, font_size=label_fontsize)
         elif stat == "real":
             plot_real(Ez, outline=None, ax=ax[i], cbar=True, font_size=label_fontsize)
+        elif stat == "intensity":
+            plot_abs(np.abs(Ez)**2, outline=None, ax=ax[i], cbar=True, font_size=label_fontsize)
         plot_abs(
             eps.astype(np.float64),
             ax=ax[i],
@@ -825,9 +827,13 @@ def plot_eps_field(
     ax[-1].set_aspect("equal")
     # ax[1].set_xticks(xticks, xlabel)
     # ax[1].set_yticks(yticks, ylabel)
-
+    area = Ez.shape[0] * Ez.shape[1]
+    if area > 2000**2:
+        dpi = 400
+    else:
+        dpi = 600
     if filepath is not None:
-        fig.savefig(filepath, dpi=600, bbox_inches="tight")
+        fig.savefig(filepath, dpi=dpi, bbox_inches="tight")
     plt.close()
 
 

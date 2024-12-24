@@ -15,12 +15,66 @@ import h5py
 
 from .base_parametrization import BaseParametrization
 from .utils import HeavisideProjection
+import torch.nn.functional as F
 
 __all__ = ["LeveSetParameterization"]
 
 
+# class LevelSetInterp(object):
+#     """This class implements the level set surface using Gaussian radial basis functions."""
+
+#     def __init__(
+#         self,
+#         x0: Tensor = None,
+#         y0: Tensor = None,
+#         z0: Tensor = None,
+#         sigma: float = 0.02,
+#         interpolation: str = "gaussian",
+#         device: Device = torch.device("cuda:0"),
+#     ):
+#         ## z0 is a tensor: first dimension is x-axis, second dimension is y-axis
+#         # Input data.
+#         x0 = x0.to(device)
+#         y0 = y0.to(device)
+#         z0 = z0.to(device)
+#         self.n_phi = z0.shape
+#         x, y = torch.meshgrid(x0, y0, indexing="ij")
+#         xy0 = torch.column_stack((x.reshape(-1), y.reshape(-1)))
+#         self.xy0 = xy0
+#         self.z0 = z0
+#         self.sig = sigma
+#         self.interpolation = interpolation # TODO
+#         self.device = device
+
+#         # Builds the level set interpolation model.
+#         if self.interpolation == "gaussian":
+#             self.build_gaussian_model()
+
+#     def build_gaussian_model(self):
+#         gauss_kernel = self.gaussian(self.xy0, self.xy0)
+#         self.model = torch.matmul(torch.linalg.inv(gauss_kernel), self.z0.flatten())
+
+#     def gaussian(self, xyi, xyj):
+#         # TODO no need to recalculate the distance matrix
+#         dist_sq = (xyi[:, 1].reshape(-1, 1) - xyj[:, 1].reshape(1, -1)).square_() + (
+#             xyi[:, 0].reshape(-1, 1) - xyj[:, 0].reshape(1, -1)
+#         ).square_()
+#         # return torch.exp(-dist_sq / (2 * self.sig**2))
+#         return dist_sq.mul_(-1 / (2 * self.sig**2)).exp_()
+#         # return dist_sq.mul_(-1 / (2 * 0.03**2)).exp_()
+
+#     def get_ls(self, x1, y1, shape):
+#         xx, yy = torch.meshgrid(x1, y1, indexing="ij")
+#         xx = xx.to(self.device)
+#         yy = yy.to(self.device)
+#         xy1 = torch.column_stack((xx.reshape(-1), yy.reshape(-1)))
+#         # ls = self.gaussian(self.xy0, xy1).T @ self.model
+#         ls = self.gaussian(xy1, self.xy0) @ self.model
+#         ls = ls.reshape(shape)
+#         return ls  ## level set surface with the same shape as z0
+
 class LevelSetInterp(object):
-    """This class implements the level set surface using Gaussian radial basis functions."""
+    """This class implements the level set surface using various interpolation methods."""
 
     def __init__(
         self,
@@ -28,6 +82,7 @@ class LevelSetInterp(object):
         y0: Tensor = None,
         z0: Tensor = None,
         sigma: float = 0.02,
+        interpolation: str = "gaussian",
         device: Device = torch.device("cuda:0"),
     ):
         ## z0 is a tensor: first dimension is x-axis, second dimension is y-axis
@@ -41,32 +96,114 @@ class LevelSetInterp(object):
         self.xy0 = xy0
         self.z0 = z0
         self.sig = sigma
+        self.interpolation = interpolation
         self.device = device
 
         # Builds the level set interpolation model.
+        if self.interpolation == "gaussian":
+            self.build_gaussian_model()
+        elif self.interpolation == "linear":
+            self.build_linear_model()
+        elif self.interpolation == "bilinear":
+            self.build_bilinear_model()
+
+    def build_gaussian_model(self):
         gauss_kernel = self.gaussian(self.xy0, self.xy0)
         self.model = torch.matmul(torch.linalg.inv(gauss_kernel), self.z0.flatten())
-
-        # Solve gauss_kernel @ model = z0
-        # self.model = torch.linalg.solve(gauss_kernel, self.z0) # sees more stable
 
     def gaussian(self, xyi, xyj):
         dist_sq = (xyi[:, 1].reshape(-1, 1) - xyj[:, 1].reshape(1, -1)).square_() + (
             xyi[:, 0].reshape(-1, 1) - xyj[:, 0].reshape(1, -1)
         ).square_()
-        # return torch.exp(-dist_sq / (2 * self.sig**2))
         return dist_sq.mul_(-1 / (2 * self.sig**2)).exp_()
-        # return dist_sq.mul_(-1 / (2 * 0.03**2)).exp_()
+
+    def build_linear_model(self):
+        # For linear interpolation, no precomputed model is required.
+        pass
+
+    def build_bilinear_model(self):
+        # For bilinear interpolation, no precomputed model is required.
+        pass
+
+
+    def handle_constant_dimension(self, x1, y1):
+        """Handle cases where one dimension of z0 has only one knot."""
+        if self.n_phi[0] == 1:  # Single knot along the x-axis
+            # Interpolate along the y-axis
+            z_values = self.z0[0, :].unsqueeze(0).unsqueeze(0)  # Shape: [1, 1, 134]
+            z_interpolated = F.interpolate(z_values, size=(len(y1),), mode="linear", align_corners=True)
+            z_const = z_interpolated.squeeze(0).repeat(len(x1), 1)  # Repeat along x-axis
+
+        elif self.n_phi[1] == 1:  # Single knot along the y-axis
+            # Interpolate along the x-axis
+            z_values = self.z0[:, 0].unsqueeze(0).unsqueeze(0)  # Shape: [1, 1, 134]
+            z_interpolated = F.interpolate(z_values, size=(len(x1),), mode="linear", align_corners=True)
+            z_const = z_interpolated.squeeze(0).repeat(1, len(y1))  # Repeat along y-axis
+
+        else:
+            z_const = None  # No constant dimension
+        return z_const
+
+    def linear_interpolate(self, x1, y1):
+        # Perform 1D linear interpolation for each axis independently.
+        x0 = self.xy0[:, 0].unique(sorted=True)
+        y0 = self.xy0[:, 1].unique(sorted=True)
+        z0 = self.z0.reshape(len(x0), len(y0))
+
+        x_idx = torch.searchsorted(x0, x1.clamp(min=x0.min(), max=x0.max()))
+        y_idx = torch.searchsorted(y0, y1.clamp(min=y0.min(), max=y0.max()))
+
+        x0_1 = x0[x_idx - 1]
+        x0_2 = x0[x_idx]
+        y0_1 = y0[y_idx - 1]
+        y0_2 = y0[y_idx]
+
+        z_x1_y1 = z0[x_idx - 1, y_idx - 1]
+        z_x2_y1 = z0[x_idx, y_idx - 1]
+        z_x1_y2 = z0[x_idx - 1, y_idx]
+        z_x2_y2 = z0[x_idx, y_idx]
+
+        wx1 = (x0_2 - x1) / (x0_2 - x0_1)
+        wx2 = (x1 - x0_1) / (x0_2 - x0_1)
+        wy1 = (y0_2 - y1) / (y0_2 - y0_1)
+        wy2 = (y1 - y0_1) / (y0_2 - y0_1)
+
+        return (
+            wx1 * wy1 * z_x1_y1
+            + wx2 * wy1 * z_x2_y1
+            + wx1 * wy2 * z_x1_y2
+            + wx2 * wy2 * z_x2_y2
+        )
+
+    def bilinear_interpolate(self, x1, y1):
+        # Use bilinear interpolation, equivalent to linear in 2D.
+        return self.linear_interpolate(x1, y1)
 
     def get_ls(self, x1, y1, shape):
         xx, yy = torch.meshgrid(x1, y1, indexing="ij")
         xx = xx.to(self.device)
         yy = yy.to(self.device)
-        xy1 = torch.column_stack((xx.reshape(-1), yy.reshape(-1)))
-        # ls = self.gaussian(self.xy0, xy1).T @ self.model
-        ls = self.gaussian(xy1, self.xy0) @ self.model
-        ls = ls.reshape(shape)
-        return ls  ## level set surface with the same shape as z0
+
+        # Handle the constant dimension case
+        z_const = self.handle_constant_dimension(x1, y1)
+        if z_const is not None:
+            return z_const  # Return the constant level set surface with interpolation
+
+        if self.interpolation == "gaussian":
+            xy1 = torch.column_stack((xx.reshape(-1), yy.reshape(-1)))
+            ls = self.gaussian(xy1, self.xy0) @ self.model
+            ls = ls.reshape(shape)
+        elif self.interpolation == "linear":
+            ls = self.linear_interpolate(xx.flatten(), yy.flatten())
+            ls = ls.reshape(shape)
+        elif self.interpolation == "bilinear":
+            ls = self.bilinear_interpolate(xx.flatten(), yy.flatten())
+            ls = ls.reshape(shape)
+        else:
+            raise ValueError(f"Unsupported interpolation type: {self.interpolation}")
+
+        return ls  # Level set surface with the same shape as z0
+
 
 
 class GetLevelSetEps(nn.Module):
@@ -247,15 +384,13 @@ class LeveSetParameterization(BaseParametrization):
         elif init_method == "grating_1d":
             weight = weight_dict["ls_knots"]
             weight.data.fill_(-0.2)
-            # print("this is the shape of weight.data", weight.data.shape, flush=True) #(66, 66)
-            # quit()
             rho_res = self.cfgs["rho_resolution"]
             if weight.shape[0] == 1:
                 rho_res = rho_res[1]
                 n_gratings = weight.shape[1] // 2 # 0 1 0 1 0, 2 gratings
                 grating_widths = torch.linspace(0, 2 / rho_res, n_gratings) if init_file_path is None else level_set_knots.squeeze()
                 ## (rho_res - width/2) / (width/2) = 0.2 / knots
-                weight.data[:, 1::2] = 0.2 * grating_widths / 2 / (1 / rho_res - grating_widths / 2)
+                weight.data[:, 1::2] = 0.2 * grating_widths / 2 / (1 / rho_res - grating_widths / 2) # 1, 134
             elif weight.shape[1] == 1:
                 rho_res = rho_res[0]
                 n_gratings = weight.shape[0] // 2 # 0 1 0 1 0, 2 gratings
@@ -310,7 +445,8 @@ class LeveSetParameterization(BaseParametrization):
             raise ValueError(f"Unsupported initialization method: {init_method}")
 
     def _build_permittivity(self, weights, rho, phi, n_phi, sharpness: float):
-        sigma = 1 / max(self.cfgs["rho_resolution"])
+        sigma = getattr(self.cfgs, "sigma", 1 / max(self.cfgs["rho_resolution"]))
+        interpolation = getattr(self.cfgs, "interpolation", "gaussian")
         design_param = weights["ls_knots"]
         ### to avoid all knots becoming unreasonable large to make it stable
         ### also to avoid most knots concentrating near threshold, otherwise, binarization will not work
@@ -320,10 +456,11 @@ class LeveSetParameterization(BaseParametrization):
             y0=rho[1],
             z0=design_param,
             sigma=sigma,
+            interpolation=interpolation,
             device=design_param.device,
         )
 
-        phi = phi_model.get_ls(x1=phi[0], y1=phi[1], shape=n_phi)
+        phi = phi_model.get_ls(x1=phi[0], y1=phi[1], shape=n_phi) # [76, 2001]
 
         ## This is used to constrain the value to be [0, 1] for heaviside input
         phi = torch.tanh(phi) * 0.5

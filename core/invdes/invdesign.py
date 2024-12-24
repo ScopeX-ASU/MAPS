@@ -127,7 +127,7 @@ class InvDesign:
                     self.devOptimization.plot(
                         eps_map=self.devOptimization._eps_map,
                         obj=results["breakdown"][objs[j]]["value"],
-                        plot_filename=plot_filename + f"_{i}" + f"_{objs[j]}.png",
+                        plot_filename=plot_filename + f"_{i}" + f"_{objs[j]}.jpg",
                         # field_key=("in_port_1", 1.55, 1),
                         field_key=field_keys[j],
                         field_component="Ez",

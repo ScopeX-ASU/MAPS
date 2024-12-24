@@ -30,7 +30,7 @@ from thirdparty.ceviche.ceviche.constants import *
 from einops import rearrange
 from .model_base import ModelBase, ConvBlock, LinearBlock
 
-__all__ = ["FNO2d"]
+__all__ = ["MyFNO2d"]
 
 
 class LearnableFourierFeatures(nn.Module):

@@ -73,7 +73,9 @@ class UNet(ModelBase):
         act_func="GELU",
         domain_size=[20, 100],  # computation domain in unit of um
         grid_step=1.550 / 20,  # grid step size in unit of um, typically 1/20 or 1/30 of the wavelength
-        pml_width=0,
+        img_size=512,  # image size
+        img_res=50,  # image resolution
+        pml_width=0.5,
         pml_permittivity=0 + 0j,
         buffer_width=0.5,
         buffer_permittivity=-1e-10 + 0j,
@@ -113,6 +115,7 @@ class UNet(ModelBase):
         output shape: (batchsize, x=s, y=s, c=1)
         """
         self.build_layers()
+        self.build_pml_mask()
 
     def load_cfgs(
         self,
@@ -168,164 +171,13 @@ class UNet(ModelBase):
         self.sim = fdfd_ez(
             omega=omega,
             dL=2e-8,
-            eps_r=torch.randn((260, 260), device=self.device),  # random permittivity
-            npml=(25, 25),
+            eps_r=torch.randn((self.img_size, self.img_size), device=self.device),  # random permittivity
+            npml=(
+                round(self.pml_width * self.img_res),
+                round(self.pml_width * self.img_res),
+            ),
         )
         self.padding = 9  # pad the domain if input is non-periodic
-
-    # def __init__(
-    #     self,
-    #     in_channels: int = 1,
-    #     out_channels: int = 2,
-    #     dim: int = 16,
-    #     act_func: Optional[str] = "GELU",
-    #     domain_size: Tuple[float] = [20, 100],  # computation domain in unit of um
-    #     grid_step: float = 1.550
-    #     / 20,  # grid step size in unit of um, typically 1/20 or 1/30 of the wavelength
-    #     pml_width: float = 0,
-    #     pml_permittivity: complex = 0 + 0j,
-    #     buffer_width: float = 0.5,
-    #     buffer_permittivity: complex = -1e-10 + 0j,
-    #     dropout_rate: float = 0.0,
-    #     drop_path_rate: float = 0.0,
-    #     device: Device = torch.device("cuda:0"),
-    #     eps_min: float = 2.085136,
-    #     eps_max: float = 12.3,
-    #     aux_head: bool = False,
-    #     aux_head_idx: int = 1,
-    #     pos_encoding: str = "exp",
-    #     with_cp=False,
-    # ):
-    #     super().__init__()
-
-    #     """
-    #     The overall network. It contains 4 layers of the Fourier layer.
-    #     1. Lift the input to the desire channel dimension by self.fc0 .
-    #     2. 4 layers of the integral operators u' = (W + K)(u).
-    #         W defined by self.w; K defined by self.conv .
-    #     3. Project from the channel space to the output space by self.fc1 and self.fc2 .
-
-    #     input: the solution of the coefficient function and locations (a(x, y), x, y)
-    #     input shape: (batchsize, x=s, y=s, c=3)
-    #     output: the solution
-    #     output shape: (batchsize, x=s, y=s, c=1)
-    #     """
-    #     self.in_channels = in_channels
-    #     self.out_channels = out_channels
-    #     # assert (
-    #     #     out_channels % 2 == 0
-    #     # ), f"The output channels must be even number larger than 2, but got {out_channels}"
-    #     self.dim = dim
-    #     self.act_func = act_func
-    #     self.domain_size = domain_size
-    #     self.grid_step = grid_step
-    #     self.domain_size_pixel = [round(i / grid_step) for i in domain_size]
-    #     self.buffer_width = buffer_width
-    #     self.buffer_permittivity = buffer_permittivity
-    #     self.pml_width = pml_width
-    #     self.pml_permittivity = pml_permittivity
-    #     self.dropout_rate = dropout_rate
-    #     self.drop_path_rate = drop_path_rate
-    #     self.eps_min = eps_min
-    #     self.eps_max = eps_max
-    #     self.aux_head = aux_head
-    #     self.aux_head_idx = aux_head_idx
-    #     self.pos_encoding = pos_encoding
-    #     self.with_cp = with_cp
-    #     if pos_encoding == "none":
-    #         pass
-    #     elif pos_encoding == "linear":
-    #         self.in_channels += 2
-    #     elif pos_encoding == "exp":
-    #         self.in_channels += 4
-    #     elif pos_encoding == "exp3":
-    #         self.in_channels += 6
-    #     elif pos_encoding == "exp4":
-    #         self.in_channels += 8
-    #     elif pos_encoding in {"exp_full", "exp_full_r"}:
-    #         self.in_channels += 7
-    #     else:
-    #         raise ValueError(f"pos_encoding only supports linear and exp, but got {pos_encoding}")
-
-    #     self.device = device
-
-    #     self.padding = 9  # pad the domain if input is non-periodic
-    #     self.build_layers()
-    #     self.reset_parameters()
-
-    #     self.set_trainable_permittivity(False)
-
-    def _build_s_param_head(self):
-        self.s_param_head = nn.Sequential(
-            ConvBlock(
-                2,
-                4,
-                kernel_size=5,
-                stride=2,
-                padding=1,
-                act_cfg=self.act_cfg,
-                norm_cfg=self.norm_cfg,
-            ),
-            ConvBlock(
-                4,
-                8,
-                kernel_size=5,
-                stride=2,
-                padding=1,
-                act_cfg=self.act_cfg,
-                norm_cfg=self.norm_cfg,
-            ),
-            ConvBlock(
-                8,
-                16,
-                kernel_size=5,
-                stride=2,
-                padding=1,
-                act_cfg=self.act_cfg,
-                norm_cfg=self.norm_cfg,
-            ),
-            ConvBlock(
-                16,
-                32,
-                kernel_size=5,
-                stride=2,
-                padding=1,
-                act_cfg=self.act_cfg,
-                norm_cfg=self.norm_cfg,
-            ),
-            ConvBlock(
-                32,
-                64,
-                kernel_size=5,
-                stride=2,
-                padding=1,
-                act_cfg=self.act_cfg,
-                norm_cfg=self.norm_cfg,
-            ),
-            nn.Flatten(),
-            LinearBlock(
-                3136,
-                1024,
-                act_cfg=self.act_cfg,
-                norm_cfg=self.norm_cfg,
-                dropout=0.3,
-            ),
-            LinearBlock(
-                1024,
-                96,
-                act_cfg=self.act_cfg,
-                norm_cfg=self.norm_cfg,
-                dropout=0.3,
-            ),
-            LinearBlock(
-                96,
-                2,
-                act_cfg=None,
-                norm_cfg=None,
-                dropout=0.3,
-            ),
-        )
-
 
     def build_layers(self):
         dim = self.dim
@@ -347,14 +199,13 @@ class UNet(ModelBase):
         self.drop_out = nn.Dropout2d(self.dropout_rate)
         self.conv_last = nn.Conv2d(dim, self.out_channels, 1)
 
-        # Simulation grid size
-        grid_size = (260, 260)  # Adjust to your simulation grid size
-        pml_thickness = 25
+    def build_pml_mask(self):
+        pml_thickness = self.pml_width * self.img_res
 
-        if getattr(self, "s_param_only", False):
-            self._build_s_param_head()
-
-        self.pml_mask = torch.ones(grid_size).to(self.device)
+        self.pml_mask = torch.ones((
+            self.img_size,
+            self.img_size,
+        )).to(self.device)
 
         # Define the damping factor for exponential decay
         damping_factor = torch.tensor(
@@ -365,13 +216,13 @@ class UNet(ModelBase):
         )  # adjust this to control decay rate
 
         # Apply exponential decay in the PML regions
-        for i in range(grid_size[0]):
-            for j in range(grid_size[1]):
+        for i in range(self.img_size):
+            for j in range(self.img_size):
                 # Calculate distance from each edge
                 dist_to_left = max(0, pml_thickness - i)
-                dist_to_right = max(0, pml_thickness - (grid_size[0] - i - 1))
+                dist_to_right = max(0, pml_thickness - (self.img_size - i - 1))
                 dist_to_top = max(0, pml_thickness - j)
-                dist_to_bottom = max(0, pml_thickness - (grid_size[1] - j - 1))
+                dist_to_bottom = max(0, pml_thickness - (self.img_size - j - 1))
 
                 # Calculate the damping factor based on the distance to the nearest edge
                 dist = max(dist_to_left, dist_to_right, dist_to_top, dist_to_bottom)
@@ -401,86 +252,16 @@ class UNet(ModelBase):
             x_proj = x_proj.permute(0, 3, 1, 2)  # B, 2 * mapping_size, H, W
             return x_proj
 
-    def incident_field_from_src(self, src: Tensor) -> Tensor:
-        if self.train_field == "fwd":
-            mode = src[:, int(0.4 * src.shape[-2] / 2), :]
-            mode = mode.unsqueeze(1).repeat(1, src.shape[-2], 1)
-            source_index = int(0.4 * src.shape[-2] / 2)
-            resolution = (
-                2e-8  # hardcode here since the we are now using resolution of 50px/um
-            )
-            epsilon = Si_eps(1.55)
-            lambda_0 = (
-                1.55e-6  # wavelength is hardcode here since we are now using 1.55um
-            )
-            k = (2 * torch.pi / lambda_0) * torch.sqrt(torch.tensor(epsilon)).to(
-                src.device
-            )
-            x_coords = torch.arange(src.shape[-2]).float().to(src.device)
-            distances = torch.abs(x_coords - source_index) * resolution
-            phase_shifts = (k * distances).unsqueeze(1)
-            mode = mode * torch.exp(1j * phase_shifts)
-
-        elif self.train_field == "adj":
-            # in the adjoint mode, there are two sources and we need to calculate the incident field for each of them
-            # then added together as the incident field
-            mode_x = src[:, int(0.41 * src.shape[-2] / 2), :]
-            mode_x = mode_x.unsqueeze(1).repeat(1, src.shape[-2], 1)
-            source_index = int(0.41 * src.shape[-2] / 2)
-            resolution = (
-                2e-8  # hardcode here since the we are now using resolution of 50px/um
-            )
-            epsilon = Si_eps(1.55)
-            lambda_0 = (
-                1.55e-6  # wavelength is hardcode here since we are now using 1.55um
-            )
-            k = (2 * torch.pi / lambda_0) * torch.sqrt(torch.tensor(epsilon)).to(
-                src.device
-            )
-            x_coords = torch.arange(src.shape[-2]).float().to(src.device)
-            distances = torch.abs(x_coords - source_index) * resolution
-            phase_shifts = (k * distances).unsqueeze(1)
-            mode_x = mode_x * torch.exp(1j * phase_shifts)
-
-            mode_y = src[
-                :, :, -int(0.4 * src.shape[-1] / 2)
-            ]  # not quite sure with this index, need to plot it out to check
-            mode_y = mode_y.unsqueeze(-1).repeat(1, 1, src.shape[-1])
-            source_index = src.shape[-1] - int(0.4 * src.shape[-1] / 2)
-            resolution = 2e-8
-            epsilon = Si_eps(1.55)
-            lambda_0 = 1.55e-6
-            k = (2 * torch.pi / lambda_0) * torch.sqrt(torch.tensor(epsilon)).to(
-                src.device
-            )
-            y_coords = torch.arange(src.shape[-1]).float().to(src.device)
-            distances = torch.abs(y_coords - source_index) * resolution
-            phase_shifts = (k * distances).unsqueeze(0)
-            mode_y = mode_y * torch.exp(1j * phase_shifts)
-
-            mode = mode_x + mode_y  # superposition of two sources
-        return mode
-
     def forward(
         self,
         eps,
         src,
     ):
-        incident_field_fwd = self.incident_field_from_src(src)
-        incident_field_fwd = torch.view_as_real(incident_field_fwd).permute(
-            0, 3, 1, 2
-        )  # B, 2, H, W
-        incident_field_fwd = incident_field_fwd / (
-            torch.abs(incident_field_fwd).amax(dim=(1, 2, 3), keepdim=True) + 1e-6
-        )
         src = torch.view_as_real(src.resolve_conj()).permute(0, 3, 1, 2)  # B, 2, H, W
-        src = src / (torch.abs(src).amax(dim=(1, 2, 3), keepdim=True) + 1e-6)
+        src = src / (torch.abs(src).amax(dim=(1, 2, 3), keepdim=True) + 1e-6) # normalize src to [-1, 1]
 
-        eps = eps / 12.11
+        eps = (eps - torch.min(eps)) / (torch.max(eps) - torch.min(eps)) # normalize eps to [0, 1]
         eps = eps.unsqueeze(1)  # B, 1, H, W
-
-        ## eps_branch
-        eps_1 = eps_2 = eps_0 = None
 
         if self.fourier_feature == "learnable":
             H = eps.shape[-2]
@@ -498,13 +279,9 @@ class UNet(ModelBase):
             eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1)
         else:
             enc_fwd = self.fourier_feature_mapping(eps)
-            eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1)
+            eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1) if self.fourier_feature != "none" else eps
         
-        x_fwd = torch.cat((eps_enc_fwd, incident_field_fwd), dim=1)
-
-        # rip the surrounding 2 px off
-        # should be ok since it's almost all zero
-        x_fwd = x_fwd[:, :, 2:-2, 2:-2]
+        x_fwd = torch.cat((eps_enc_fwd, src), dim=1)
 
         conv1 = self.dconv_down1(x_fwd)
         x = self.maxpool(conv1)
@@ -530,14 +307,6 @@ class UNet(ModelBase):
 
         x = self.dconv_up1(x)
 
-        
         x = self.conv_last(x)  # [bs, outc, h, w] real
-
-        # pad zeros to the surrounding 2 px back
-        x = F.pad(x, (2, 2, 2, 2), "constant", 0)
-
-        if hasattr(self, "s_param_head"):
-            s_param = self.s_param_head(x) * 1e-8
-            return s_param
         
         return x

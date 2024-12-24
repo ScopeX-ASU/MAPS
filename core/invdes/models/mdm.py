@@ -13,8 +13,11 @@ class DefaultConfig(DefaultOptimizationConfig):
                         method="levelset",
                         rho_resolution=[20, 20],
                         # transform=[dict(type="mirror_symmetry", dims=[1])],
-                        transform=[], # there is no symmetry in this design region
-                        init_method="random",
+                        transform=[
+                            dict(type="blur", mfs=0.1, resolutions=[50, 50], dim="xy"),
+                            dict(type="binarize"),
+                        ], # there is no symmetry in this design region
+                        init_method="ones",
                         binary_projection=dict(
                             fw_threshold=100,
                             bw_threshold=100,
@@ -54,7 +57,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         type="eigenmode",
                         direction="x+",
                     ),
-                    mode3_trans=dict(
+                    mode2_trans=dict(
                         weight=1,
                         #### objective is evaluated at this port
                         in_port_name="in_port_1",
@@ -62,9 +65,9 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
-                        in_mode=3,  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode=2,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            3,
+                            2,
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="eigenmode",
                         direction="x+",
@@ -84,7 +87,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         type="flux_minus_src",
                         direction="x",
                     ),
-                    mode3_refl_trans=dict(
+                    mode2_refl_trans=dict(
                         weight=-1,
                         #### objective is evaluated at this port
                         in_port_name="in_port_1",
@@ -92,9 +95,9 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
-                        in_mode=3,  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode=2,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            3,
+                            2,
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux_minus_src",
                         direction="x",
@@ -160,7 +163,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         type="flux",
                         direction="y",
                     ),
-                    mode3_rad_trans_xp=dict(
+                    mode2_rad_trans_xp=dict(
                         weight=-2,
                         #### objective is evaluated at this port
                         in_port_name="in_port_1",
@@ -168,14 +171,14 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
-                        in_mode=3,  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode=2,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            3,
+                            2,
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux",
                         direction="x",
                     ),
-                    mode3_rad_trans_xm=dict(
+                    mode2_rad_trans_xm=dict(
                         weight=-2,
                         #### objective is evaluated at this port
                         in_port_name="in_port_1",
@@ -183,14 +186,14 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
-                        in_mode=3,  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode=2,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            3,
+                            2,
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux",
                         direction="x",
                     ),
-                    mode3_rad_trans_yp=dict(
+                    mode2_rad_trans_yp=dict(
                         weight=-2,
                         #### objective is evaluated at this port
                         in_port_name="in_port_1",
@@ -198,14 +201,14 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
-                        in_mode=3,  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode=2,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            3,
+                            2,
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux",
                         direction="y",
                     ),
-                    mode3_rad_trans_ym=dict(
+                    mode2_rad_trans_ym=dict(
                         weight=-2,
                         #### objective is evaluated at this port
                         in_port_name="in_port_1",
@@ -213,9 +216,9 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
-                        in_mode=3,  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode=2,  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            3,
+                            2,
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux",
                         direction="y",

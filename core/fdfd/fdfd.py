@@ -462,9 +462,14 @@ class fdfd_ez(fdfd_ez_ceviche):
                 J_adj = self.solver.adj_src[key] / 1j / self.omega  # b_adj --> J_adj
                 # print("this is the state of the J_adj")
                 # print_stat(torch.abs(J_adj))
-                hx_adj, hy_adj, ez_adj = self.solve(
-                    J_adj, "adj", "adj"
-                )  # J_adj --> Hx_adj, Hy_adj, Ez_adj
+                ez_adj = self.solver.adj_field[key]
+                hx_adj, hy_adj = self._Ez_to_Hx_Hy(ez_adj) # no need to solve the adjoint field again
+                ez_adj = ez_adj.reshape(self.shape)
+                hx_adj = hx_adj.reshape(self.shape)
+                hy_adj = hy_adj.reshape(self.shape)
+                # hx_adj, hy_adj, ez_adj = self.solve(
+                #     J_adj, "adj", "adj"
+                # )  # J_adj --> Hx_adj, Hy_adj, Ez_adj
                 total_flux = torch.tensor(
                     [
                         0.0,

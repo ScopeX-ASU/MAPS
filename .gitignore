@@ -169,3 +169,5 @@ cython_debug/
 /data/fdfd/bending/*
 /plot/*
 *.csv
+*.png
+data/fdfd/mdm/raw/*.yml

@@ -64,7 +64,7 @@ if __name__ == "__main__":
             neural_solver=None,
             border_width=[0, 0, 0, 0],
             PML=[0.5, 0.5],
-            resolution=100,
+            resolution=200,
             wl_cen=wl,
             plot_root="./figs/metalens_near2far_FL30_init",
             # plot_root="./figs/metalens_near2far_FL50",
@@ -80,7 +80,7 @@ if __name__ == "__main__":
         material_bg="Air",
         sim_cfg=sim_cfg,
         # aperture=20,
-        aperture=20,
+        aperture=20.1,
         port_len=(1.5, 2),
         port_width=(22.2, 2),
         substrate_depth=0,
@@ -99,7 +99,7 @@ if __name__ == "__main__":
         device=operation_device,
     )
 
-    hr_device = device.copy(resolution=100)
+    hr_device = device.copy(resolution=200)
 
     # def fom_func(breakdown):
     #     ## maximization fom
