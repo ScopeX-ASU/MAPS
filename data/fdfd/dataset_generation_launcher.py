@@ -29,7 +29,7 @@ if __name__ == "__main__":
     # taskid_begin, taskid_end = (8, 16)
     # taskid_begin, taskid_end = (16, 24)
     # taskid_begin, taskid_end = (94, 98)
-    task_list = [61, 64]
+    task_list = [0]
 
     # Manager's queue allows inter-process communication for tasks
     manager = Manager()

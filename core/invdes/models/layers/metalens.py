@@ -67,7 +67,7 @@ class MetaLens(N_Ports):
                 direction="x",
                 center=[-size_x / 2 + port_len[0] / 2 + 0.5 / self.resolution, 0],
                 size=[port_len[0] + 1 / self.resolution, port_width[0]],
-                eps=eps_r_fn(wl_cen),
+                eps=eps_bg_fn(wl_cen),
             ),
             out_port_1=dict(
                 type="box",

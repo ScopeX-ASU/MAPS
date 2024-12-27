@@ -238,7 +238,7 @@ def GreenFunctionProjection(
     dL: float,  # grid size, um, used in nearfield integral
     near_monitor_direction: str = "x+",
     decimation_factor: int = 1,  # subsampling rate on near field source
-    maximum_batch_size: int = 75000,
+    maximum_batch_size: int = 5000,
 ):
     x_copy = x.clone()
     num_iter = x_copy.shape[0] // maximum_batch_size + 1
@@ -447,7 +447,7 @@ def GreenFunctionProjection(
     return h_x, h_y, e_z
 
 
-@torch.compile
+# @torch.compile
 def _green_functions(k, r_obs):
     kr = k * r_obs  # [n, s, nf]
     H0 = hankel(0, kr, kind=2)

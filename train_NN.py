@@ -33,7 +33,7 @@ import datetime
 import random
 import numpy as np
 import matplotlib.pyplot as plt
-from core.utils import print_stat, plot_fields, cal_adj_src_from_fwd_field, cal_total_field_adj_src_from_fwd_field
+from core.utils import print_stat, plot_fields, cal_total_field_adj_src_from_fwd_field
 from ceviche.constants import *
 from core.train.models.utils import from_Ez_to_Hx_Hy
 

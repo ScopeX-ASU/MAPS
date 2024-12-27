@@ -83,14 +83,13 @@ def task_launcher(args):
 
             # f"--model.name={alg}",
             f"--model_fwd.hidden_list={[128]}",
-            f"--model_fwd.mode1={mode1}",
-            f"--model_fwd.mode2={mode2}",
-            # f"--model.fourier_feature={fourier_feature}",
             f"--model_fwd.mapping_size={64}",
-            f"--model_fwd.fno_block_only={fno_block_only}",
-            # f"--model.train_field={train_field}",
-            # f"--model.act_func=SINREN",
             f"--model_fwd.fourier_feature={fourier_feature}",
+
+            f"--model_fwd.temp={[300] * 2}",
+            f"--model_fwd.wl={[1.55] * 2}",
+            f"--model_fwd.mode={[1, 2]}",
+            f"--model_fwd.in_out_port_name={[['in_port_1', f'out_port_{i}'] for i in range(1, 3)]}",
 
             f"--checkpoint.model_comment={suffix}",
             f"--checkpoint.resume={False}" if checkpt_fwd == "none" else f"--checkpoint.resume={True}",
@@ -106,7 +105,7 @@ if __name__ == '__main__':
     ensure_dir(root)
     # mlflow.set_experiment(configs.run.experiment)  # set experiments first
     tasks = [
-        [0.0, "bending", "UNet", "fwd", False, "learnable", True, 33, 66, 0, "pure_unet", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
+        [0.0, "mdm", "UNet", "fwd", False, "none", True, 33, 66, 1, "test_unet", 2, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
     ]   
 
     with Pool(8) as p:

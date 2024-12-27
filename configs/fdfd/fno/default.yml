@@ -18,7 +18,6 @@ aux_criterion:
     norm: False
   maxwell_residual_loss:
     weight: 0.0
-    using_ALM: False
 
 log_criterion:
   curl_loss:
@@ -27,7 +26,7 @@ log_criterion:
     weight: 0.0
     norm: False
   maxwell_residual_loss:
-    using_ALM: False
+    weight: 0.0
 
 optimizer:
   name: adam
@@ -62,27 +61,6 @@ checkpoint:
 
 model:
   type: "FNO2d"
-  # name: "fno3d"
-  # out_channels: 100
-  # dim: 32
-  # kernel_list: [64, 64, 64, 64, 64, 64]
-  # kernel_size_list: [1, 1, 1, 1, 1, 1]
-  # hidden_list: [256]
-  # padding_list: [0, 0, 0, 0, 0, 0]
-  # mode_list: [[80, 80]]
-  # act_func: GELU
-  # act_thres: 100
-  # domain_size: [8, 38.4] # um
-  # grid_step: 0.1 # um
-  # buffer_width: 0.0 # um
-  # dropout_rate: 0.1
-  # drop_path_rate: 0.2
-  # norm: bn
-  # wavelength: 1.55
-  # aux_head: False
-  # aux_head_idx: 1
-  # pos_encoding: none
-  # with_cp: False
 
 debug:
   verbose: 1

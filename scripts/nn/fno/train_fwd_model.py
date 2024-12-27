@@ -24,7 +24,7 @@ configs.load(config_file, recursive=True)
 
 
 def task_launcher(args):
-    mixup, device_type, alg, train_field, include_adjoint_NN, fourier_feature, fno_block_only, mode1, mode2, id, description, gpu_id, epochs, alm, lr, criterion, criterion_weight, H_loss, maxwell_loss, grad_loss, s_param_loss, alm_lambda, alm_mu, mu_growth, constraint_tol, checkpt_fwd, checkpt_adj, bs = args
+    mixup, device_type, alg, train_field, include_adjoint_NN, fourier_feature, dim, mode1, mode2, id, description, gpu_id, epochs, alm, lr, criterion, criterion_weight, H_loss, maxwell_loss, grad_loss, s_param_loss, alm_lambda, alm_mu, mu_growth, constraint_tol, checkpt_fwd, checkpt_adj, bs = args
     env = os.environ.copy()
     env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
     
@@ -82,12 +82,15 @@ def task_launcher(args):
             f"--optimizer.ALM_constraint_tol={constraint_tol}",
 
             f"--model_fwd.type={alg}",
+            f"--model_fwd.dim={dim}",
             f"--model_fwd.hidden_list={[128]}",
-            f"--model_fwd.mode1={mode1}",
-            f"--model_fwd.mode2={mode2}",
+            f"--model_fwd.mode_list={[(mode1, mode2)] * 4}",
             f"--model_fwd.mapping_size={64}",
-            f"--model_fwd.fno_block_only={fno_block_only}",
             f"--model_fwd.fourier_feature={fourier_feature}",
+            f"--model_fwd.temp={[300] * 2}",
+            f"--model_fwd.wl={[1.55] * 2}",
+            f"--model_fwd.mode={[1, 2]}",
+            f"--model_fwd.in_out_port_name={[['in_port_1', f'out_port_{i}'] for i in range(1, 3)]}",
 
             f"--checkpoint.model_comment={suffix}",
             f"--checkpoint.resume={False}" if checkpt_fwd == "none" else f"--checkpoint.resume={True}",
@@ -103,7 +106,7 @@ if __name__ == '__main__':
     ensure_dir(root)
     # mlflow.set_experiment(configs.run.experiment)  # set experiments first
     tasks = [
-        [0.0, "bending", "FNO2d", "fwd", False, "none", True, 66, 132, 34, "regular_fno", 0, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
+        [0.0, "mdm", "FNO2d", "fwd", False, "none", 32, 66, 132, 36, "test_new_model_training_script", 0, 50, False, 0.002, "nmse", 1, 1, 0.2, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
     ]   
 
     with Pool(8) as p:

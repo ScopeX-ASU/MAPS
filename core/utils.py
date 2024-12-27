@@ -16,6 +16,7 @@ import torch.optim
 from torch import Tensor
 from torch.types import Device
 from torch_sparse import spmm
+import yaml
 
 from thirdparty.ceviche.ceviche.constants import *
 
@@ -337,61 +338,6 @@ def cal_fom_from_fields(
 
     return total_fom
 
-
-def cal_adj_src_from_fwd_field(
-    fwd_field,
-    ht_ms,
-    et_ms,
-    monitors,
-) -> Tensor:
-    Ez = torch.view_as_complex(
-        fwd_field[:, -2:, ...].permute(0, 2, 3, 1).contiguous()
-    )  # bs, H, W complex
-    # the Hx and Hy should be calculated from Ez again in cal_fom_from_fields, not directily read from fields
-    Hx = torch.view_as_complex(
-        fwd_field[:, :2, ...].permute(0, 2, 3, 1).contiguous()
-    )  # bs, H, W complex
-    Hy = torch.view_as_complex(
-        fwd_field[:, 2:4, ...].permute(0, 2, 3, 1).contiguous()
-    )  # bs, H, W complex
-    ht_m = ht_ms["ht_m-wl-1.55-port-out_port_1-mode-1"]
-    et_m = et_ms["et_m-wl-1.55-port-out_port_1-mode-1"]
-    monitor_out_x = monitors["port_slice-out_port_1_x"]
-    monitor_out_y = monitors["port_slice-out_port_1_y"]
-    monitor_refl_x = monitors["port_slice-refl_port_1_x"]
-    monitor_refl_y = monitors["port_slice-refl_port_1_y"]
-    gradient_list = []
-    for i in range(Ez.shape[0]):
-        Ez_i = Ez[i].clone().requires_grad_()
-        monitor_slice_out = Slice(
-            y=monitor_out_y[i],
-            x=torch.arange(
-                monitor_out_x[i][0],
-                monitor_out_x[i][1],
-            ).to(monitor_out_y[i].device),
-        )
-        monitor_slice_refl = Slice(
-            x=monitor_refl_x[i],
-            y=torch.arange(
-                monitor_refl_y[i][0],
-                monitor_refl_y[i][1],
-            ).to(monitor_refl_x[i].device),
-        )
-        fom = cal_fom_from_fields(
-            Ez_i,
-            Hx[i],
-            Hy[i],
-            ht_m[i],
-            et_m[i],
-            monitor_slice_out,
-            monitor_slice_refl,
-        )
-        gradient = torch.autograd.grad(fom, Ez_i, create_graph=True)[0]
-        gradient_list.append(gradient)
-
-    return torch.stack(gradient_list, dim=0)
-
-
 def cal_total_field_adj_src_from_fwd_field(
     Ez,
     eps,
@@ -402,6 +348,12 @@ def cal_total_field_adj_src_from_fwd_field(
     from_Ez_to_Hx_Hy_func,
     return_adj_src,
     sim,
+    opt_cfg_file_path,
+    wl,
+    mode,
+    temp,
+    in_port_name,
+    out_port_name,
 ) -> Tensor:
     from core.fdfd.fdfd import fdfd_ez  # this is to avoid circular import
 
@@ -415,19 +367,6 @@ def cal_total_field_adj_src_from_fwd_field(
         total_field = pml_mask.unsqueeze(0).unsqueeze(0) * total_field
         return total_field, None
     else:
-        ht_m = ht_ms["ht_m-wl-1.55-port-out_port_1-mode-1"]
-        et_m = et_ms["et_m-wl-1.55-port-out_port_1-mode-1"]
-        monitor_out_x = monitors["port_slice-out_port_1_x"]
-        monitor_out_y = monitors["port_slice-out_port_1_y"]
-        monitor_refl_x = monitors["port_slice-refl_port_1_x"]
-        monitor_refl_y = monitors["port_slice-refl_port_1_y"]
-        omega = 2 * np.pi * C_0 / (1.55 * 1e-6)
-        sim = fdfd_ez(
-            omega=omega,
-            dL=2e-8,
-            eps_r=torch.randn((260, 260)).to(Ez.device),  # random permittivity
-            npml=(25, 25),
-        )
         Ez_copy = Ez.clone()
         Ez = Ez.permute(0, 2, 3, 1).contiguous()
         Ez = torch.view_as_complex(Ez)
@@ -447,6 +386,109 @@ def cal_total_field_adj_src_from_fwd_field(
 
             Hx_list.append(Hx_to_append)
             Hy_list.append(Hy_to_append)
+
+            total_fom = torch.tensor(0.0).to(Ez_i.device)
+
+            with open(opt_cfg_file_path[i], "r") as opt_cfg_file:
+                opt_cfgs = yaml.safe_load(opt_cfg_file)
+                resolution = opt_cfgs["sim_cfg"]["resolution"]
+                opt_cfgs = opt_cfgs["obj_cfgs"]
+                fusion_fn = opt_cfgs["_fusion_func"]
+                del opt_cfgs["_fusion_func"]
+            for obj_name, opt_cfg in opt_cfgs.items():
+                weight = float(opt_cfg["weight"])
+                direction = opt_cfg["direction"]
+                out_slice_name = opt_cfg["out_port_name"]
+                in_mode = opt_cfg["in_mode"]
+                temperture = opt_cfg["temp"]
+                input_port_name = opt_cfg["in_port_name"]
+                # print(f"this is the wl: {wl}, mode: {mode}, temp: {temp}, in_port_name: {in_port_name}")
+                # print(f"this is the corresponding we read from current obj mode: {in_mode}, temp: {temperture}, in_port_name: {input_port_name}")
+                if weight == 0 or in_mode != mode or temp not in temperture or input_port_name != in_port_name:
+                    continue
+                if opt_cfg["type"] == "eigenmode":
+                    if 'x' in direction:
+                        monitor = Slice(
+                            x=monitors[f"port_slice-{out_slice_name}_x"][i],
+                            y=torch.arange(
+                                monitors[f"port_slice-{out_slice_name}_y"][i][0],
+                                monitors[f"port_slice-{out_slice_name}_y"][i][1],
+                            ).to(monitors[f"port_slice-{out_slice_name}_y"][i].device),
+                        )
+                    else:
+                        monitor = Slice(
+                            y=monitors[f"port_slice-{out_slice_name}_y"][i],
+                            x=torch.arange(
+                                monitors[f"port_slice-{out_slice_name}_x"][i][0],
+                                monitors[f"port_slice-{out_slice_name}_x"][i][1],
+                            ).to(monitors[f"port_slice-{out_slice_name}_x"][i].device),
+                        )
+                    # print("this is the shape of Hx_i: ", Hx_i.shape)
+                    # print("this is the shape of Hy_i: ", Hy_i.shape)
+                    # print("this is the shape of Ez_i: ", Ez_i.shape)
+                    # print("this is the shape of ht_ms: ", ht_ms[f"ht_m-wl-{wl}-port-{out_slice_name}-mode-{mode}"].shape)
+                    fom, _ = get_eigenmode_coefficients(
+                        hx=Hx_i,
+                        hy=Hy_i,
+                        ez=Ez_i,
+                        ht_m=ht_ms[f"ht_m-wl-{wl}-port-{out_slice_name}-mode-{mode}"][i],
+                        et_m=et_ms[f"et_m-wl-{wl}-port-{out_slice_name}-mode-{mode}"][i],
+                        monitor=monitor,
+                        grid_step=1 / resolution,
+                        direction=direction,
+                        energy=True,
+                    )
+                    fom = weight * fom / 1e-8  # normalize with the input power
+                elif "flux" in opt_cfg["type"]: # flux or flux_minus_src
+                    if "xm" in out_slice_name or "ym" in out_slice_name or "xp" in out_slice_name or "yp" in out_slice_name:
+                        monitor = monitors[f"port_slice-{out_slice_name}"][i]
+                    elif 'x' in direction:
+                        monitor = Slice(
+                            x=monitors[f"port_slice-{out_slice_name}_x"][i],
+                            y=torch.arange(
+                                monitors[f"port_slice-{out_slice_name}_y"][i][0],
+                                monitors[f"port_slice-{out_slice_name}_y"][i][1],
+                            ).to(monitors[f"port_slice-{out_slice_name}_y"][i].device),
+                        )
+                    else:
+                        monitor = Slice(
+                            y=monitors[f"port_slice-{out_slice_name}_y"][i],
+                            x=torch.arange(
+                                monitors[f"port_slice-{out_slice_name}_x"][i][0],
+                                monitors[f"port_slice-{out_slice_name}_x"][i][1],
+                            ).to(monitors[f"port_slice-{out_slice_name}_x"][i].device),
+                        )
+                    # print("this is the obj type: ", opt_cfg["type"])
+                    # print("this is the monitor: ", monitor.shape)
+                    # quit()
+                    fom = get_flux(
+                        hx=Hx_i,
+                        hy=Hy_i,
+                        ez=Ez_i,
+                        monitor=monitor,
+                        grid_step=1 / resolution,
+                        direction=direction,
+                    )
+                    if "minus_src" in opt_cfg["type"]:
+                        fom = torch.abs(
+                            torch.abs(fom / 1e-8) - 1
+                        )
+                    else:
+                        fom = torch.abs(fom / 1e-8)
+                    fom = weight * fom
+                else:
+                    raise ValueError(f"Unknown optimization type: {opt_cfg['type']}")
+                total_fom = total_fom + fom
+            total_fom = total_fom * (-1)
+            gradient = torch.autograd.grad(total_fom, Ez_i, create_graph=True)[0]
+            gradient_list.append(gradient)
+        Hx = torch.stack(Hx_list, dim=0)
+        Hy = torch.stack(Hy_list, dim=0)
+        total_field = torch.cat((Hx, Hy, Ez_copy), dim=1)
+        total_field = pml_mask.unsqueeze(0).unsqueeze(0) * total_field
+        adj_src = torch.conj(torch.stack(gradient_list, dim=0))
+        return total_field, adj_src
+        for i in range(Ez.shape[0]):
 
             monitor_slice_out = Slice(
                 y=monitor_out_y[i],
@@ -1738,6 +1780,10 @@ def grid_average(e, monitor, direction: str = "x", autograd=False):
             e_monitor = monitor.nonzero()
             e_monitor = (e_monitor[0], e_monitor[1] - 1)
             e_yee_shifted = (e[monitor] + e[e_monitor]) / 2
+        elif isinstance(monitor, torch.Tensor):
+            e_monitor = torch.nonzero(monitor, as_tuple=True)
+            e_monitor_shifted = (e_monitor[0], e_monitor[1] - 1)
+            e_yee_shifted = (e[e_monitor] + e[e_monitor_shifted]) / 2
     elif direction[0] == "y":
         if isinstance(monitor, Slice):
             if isinstance(monitor[0], torch.Tensor):
@@ -1753,6 +1799,10 @@ def grid_average(e, monitor, direction: str = "x", autograd=False):
             e_monitor = monitor.nonzero()
             e_monitor = (e_monitor[0] - 1, e_monitor[1])
             e_yee_shifted = (e[monitor] + e[e_monitor]) / 2
+        elif isinstance(monitor, torch.Tensor):
+            e_monitor = torch.nonzero(monitor, as_tuple=True)
+            e_monitor_shifted = (e_monitor[0] - 1, e_monitor[1])
+            e_yee_shifted = (e[e_monitor] + e[e_monitor_shifted]) / 2
     return e_yee_shifted
 
 

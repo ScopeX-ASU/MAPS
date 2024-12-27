@@ -34,18 +34,18 @@ def compare_designs(design_regions_1, design_regions_2):
 
 def mdm_opt(device_id, operation_device, perturb_probs=[0.1, 0.3, 0.5]):
     set_torch_deterministic(int(device_id))
-    dump_data_path = f"./data/fdfd/mdm/raw"
+    dump_data_path = f"./data/fdfd/mdm/raw_small"
     sim_cfg = DefaultSimulationConfig()
-    target_img_size = 512
+    target_img_size = 256
     resolution = 50
     target_cell_size = target_img_size / resolution # 10.24
-    port_len = round(random.uniform(1.6, 2) * resolution) / resolution
+    port_len = round(random.uniform(1, 1.2) * resolution) / resolution
 
     mdm_region_size = [
         round((target_cell_size - 2 * port_len) * resolution) / resolution,
         round((target_cell_size - 2 * port_len) * resolution) / resolution,
     ]
-    assert mdm_region_size[0] + 2 * port_len == target_cell_size
+    assert round(mdm_region_size[0] + 2 * port_len, 2) == target_cell_size, f"right hand side: {mdm_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
 
     input_port_width = 0.8
     output_port_width = 0.8
@@ -55,7 +55,7 @@ def mdm_opt(device_id, operation_device, perturb_probs=[0.1, 0.3, 0.5]):
             solver="ceviche_torch",
             border_width=[0, 0, port_len, port_len],
             resolution=resolution,
-            plot_root=f"./data/fdfd/mdm/plot/mdm_{device_id}",
+            plot_root=f"./data/fdfd/mdm/plot_small/mdm_{device_id}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",

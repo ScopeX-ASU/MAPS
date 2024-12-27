@@ -13,4 +13,5 @@ from .layers import *
 from .neurolight_cnn import *
 from .fno_cnn import *
 from .ffno_cnn import *
+from .factorfno_cnn import *
 from .unet import *
