@@ -520,8 +520,9 @@ class PredTrainer(object):
                 filepath=filepath + f"-wl-{wl}-port-{in_port_name}-mode-{mode}-temp-{temp}-fwd.png",
             )
         if adjoint_field is not None:
-            plot_fields(
-                fields=adjoint_field.clone().detach(),
-                ground_truth=data['fields_adj']["fields_adj-wl-1.55-port-in_port_1-mode-1-temp-300"],
-                filepath=filepath + "_adj.png",
-            )
+            for (wl, mode, temp, in_port_name, out_port_name), field in adjoint_field.items():
+                plot_fields(
+                    fields=field.clone().detach(),
+                    ground_truth=data['fields_adj'][f"fields_adj-wl-{wl}-port-{in_port_name}-mode-{mode}"],
+                    filepath=filepath + f"-wl-{wl}-port-{in_port_name}-mode-{mode}-temp-{temp}-adj.png",
+                )
