@@ -112,7 +112,7 @@ class FDFD(VisionDataset):
         ## do not load actual data here, too slow. Just load the filenames
         all_samples = [
                 os.path.basename(i)
-                for i in glob.glob(os.path.join(self.root, self.device_type, "mfs_raw_test", f"{self.device_type}_*.h5"))
+                for i in glob.glob(os.path.join(self.root, self.device_type, "raw", f"{self.device_type}_*.h5"))
             ]
         total_device_id = []
         for filename in all_samples:
@@ -145,7 +145,7 @@ class FDFD(VisionDataset):
     def _preprocess_dataset(self, data_train: Tensor, data_test: Tensor) -> Tuple[Tensor, Tensor]:
         all_samples = [
                 os.path.basename(i)
-                for i in glob.glob(os.path.join(self.root, self.device_type, "mfs_raw_test", f"{self.device_type}_*.h5"))
+                for i in glob.glob(os.path.join(self.root, self.device_type, "raw", f"{self.device_type}_*.h5"))
             ]
         filename_train = []
         filename_test = []
@@ -202,7 +202,8 @@ class FDFD(VisionDataset):
 
     def __getitem__(self, item):
         device_file = self.data[item]
-        with h5py.File(os.path.join(self.root, self.device_type, "mfs_raw_test", device_file), "r") as f:
+        path = os.path.join(self.root, self.device_type, "raw", device_file)
+        with h5py.File(path, "r") as f:
             keys = list(f.keys())
             orgion_size = torch.from_numpy(f["eps_map"][()]).float().size()
             # eps_map = resize_to_targt_size(torch.from_numpy(f["eps_map"][()]).float(), (200, 300))
@@ -299,7 +300,7 @@ class FDFD(VisionDataset):
                         monitor_slice[key] = torch.tensor([data])
                     else:
                         monitor_slice[key] = torch.tensor(data)
-        return eps_map, adj_srcs, gradient, field_solutions, s_params, src_profile, fields_adj, field_normalizer, design_region_mask, ht_m, et_m, monitor_slice, As
+        return eps_map, adj_srcs, gradient, field_solutions, s_params, src_profile, fields_adj, field_normalizer, design_region_mask, ht_m, et_m, monitor_slice, As, path
 
     def extra_repr(self) -> str:
         return "Split: {}".format("Train" if self.train is True else "Test")

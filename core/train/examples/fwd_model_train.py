@@ -25,31 +25,48 @@ from core.train.trainer import PredTrainer
 from core.utils import cal_total_field_adj_src_from_fwd_field
 from thirdparty.pyutility.pyutils.config import train_configs as configs
 import numpy as np
-import time
+import copy
 
 class fwd_predictor(nn.Module):
     def __init__(self, model_fwd):
         super(fwd_predictor, self).__init__()
-        self.model_fwd = model_fwd
+        self.model_fwd = nn.ModuleDict({
+            f"{str(wl).replace('.', 'p')}-{mode}-{temp}-{in_port_name}-{out_port_name}": model
+            for (wl, mode, temp, in_port_name, out_port_name), model in model_fwd.items()
+        }) # this is now a dictionary of models [wl, mode, temp, in_port_name, out_port_name] -> model # most of the time it should contain at most 2 models
 
     def forward(self, data):
         eps = data["eps_map"]
-        src = data["src_profiles"]["source_profile-wl-1.55-port-in_port_1-mode-1"]
-        x_fwd = self.model_fwd(eps, src)
-
-        forward_field, _ = cal_total_field_adj_src_from_fwd_field(
-            Ez=x_fwd,
-            eps=eps,
-            ht_ms=data["ht_m"],
-            et_ms=data["et_m"],
-            monitors=data["monitor_slices"],
-            pml_mask=self.model_fwd.pml_mask,
-            from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
-            return_adj_src=False,
-            sim=self.model_fwd.sim,
-        )
+        # this is the keys of the src_profiles:  
+        # [
+        #     'source_profile-wl-1.55-port-in_port_1-mode-1', 
+        #     'source_profile-wl-1.55-port-in_port_1-mode-2', 
+        #     'source_profile-wl-1.55-port-out_port_1-mode-1', 
+        #     'source_profile-wl-1.55-port-out_port_2-mode-2', 
+        #     'source_profile-wl-1.55-port-refl_port_1-mode-1', 
+        #     'source_profile-wl-1.55-port-refl_port_1-mode-2'
+        # ]
+        src = {}
+        x_fwd = {}
+        forward_field = {}
+        for key, model in self.model_fwd.items():
+            wl, mode, temp, in_port_name, out_port_name = key.split("-")
+            wl, mode, temp = float(wl.replace('p', '.')), int(mode), eval(temp)
+            src[(wl, mode, in_port_name)] = data["src_profiles"][f"source_profile-wl-{wl}-port-{in_port_name}-mode-{mode}"]
+            x_fwd[(wl, mode, temp, in_port_name, out_port_name)] = model(eps, src[(wl, mode, in_port_name)])
+            forward_field[(wl, mode, temp, in_port_name, out_port_name)], _ = cal_total_field_adj_src_from_fwd_field(
+                Ez=x_fwd[(wl, mode, temp, in_port_name, out_port_name)],
+                eps=eps,
+                ht_ms=data["ht_m"], # this two only used for adjoint field calculation, we don't need it here in forward pass
+                et_ms=data["et_m"],
+                monitors=data["monitor_slices"],
+                pml_mask=model.pml_mask,
+                from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
+                return_adj_src=False,
+                sim=model.sim,
+            )
         return {
-            "forward_field": forward_field,
+            "forward_field": forward_field, # now this is a dictionary of forward fields [wl, mode, temp, in_port_name, out_port_name] -> forward field
             "adjoint_field": None,
             "adjoint_source": None,
         }
@@ -73,7 +90,17 @@ def main():
     print("this is the config: \n", configs, flush=True)
     if int(configs.run.deterministic) == True:
         set_torch_deterministic(int(configs.run.random_state))
-    model_fwd = builder.make_model(device=device, **configs.model_fwd)
+    model_fwd = {}
+    assert len(configs.model_fwd.temp) == len(configs.model_fwd.mode) == len(configs.model_fwd.wl) == len(configs.model_fwd.in_out_port_name), "temp, mode, wl, in_out_port_name should have the same length"
+    for i in range(len(configs.model_fwd.temp)):
+        model_cfg = copy.deepcopy(configs.model_fwd)
+        model_cfg.temp = temp = model_cfg.temp[i]
+        model_cfg.mode = mode = model_cfg.mode[i]
+        model_cfg.wl = wl = model_cfg.wl[i]
+        model_cfg.in_port_name = in_port_name = model_cfg.in_out_port_name[i][0]
+        model_cfg.out_port_name = out_port_name = model_cfg.in_out_port_name[i][1]
+        model_fwd[(wl, mode, temp, in_port_name, out_port_name)] = builder.make_model(device=device, **model_cfg)
+    # model_fwd = builder.make_model(device=device, **configs.model_fwd)
     print("this is the model: \n", model_fwd, flush=True)
 
     model = fwd_predictor(model_fwd)
@@ -132,6 +159,8 @@ def main():
         grad_scaler=grad_scaler,
         device=device,
     )
+    # trainer.single_batch_check()
+    # quit()
     for epoch in range(1, int(configs.run.n_epochs) + 1):
         trainer.train(
             data_loader=train_loader,

@@ -132,7 +132,7 @@ class EigenmodeObjective(object):
                     if self.obj_type == "eigenmode":
                         # only record the s parameters for eigenmode
                         # we don't need to record the s parameters if we calculate the phase
-                        self.s_params[(name, wl, out_mode, temp)] = {
+                        self.s_params[(self.out_port_name, wl, out_mode, temp)] = {
                             "s_p": s_p / norm_power if self.energy else s_p / norm_power**0.5, # normalized by input power
                             "s_m": s_m / norm_power if self.energy else s_m / norm_power**0.5, # normalized by input power
                         }
@@ -235,7 +235,7 @@ class FluxNear2FarObjective(object):
                             [ys[0:1] - grid_step, ys], axis=0
                         )
                 if out_port_name == "total_farfield_region":
-                    with torch.no_grad():
+                    with torch.inference_mode():
                         farfield = get_farfields_GreenFunction(
                             nearfield_slices=[
                                 self.port_slices[nearfield_slice_name]
@@ -257,7 +257,7 @@ class FluxNear2FarObjective(object):
                             mu=MU_0,
                             dL=self.grid_step,
                             component="Ez",
-                            decimation_factor=4,
+                            decimation_factor=12,
                         )
                     ez = farfield["Ez"][0, ..., 0]
                     hx = farfield["Hx"][0, ..., 0]
@@ -323,7 +323,7 @@ class FluxNear2FarObjective(object):
                 s = s / (ez.shape[0] if direction[0] == "x" else ez.shape[1])
 
                 s_list.append(s)
-                self.s_params[(name, wl, self.obj_type, temp)] = {
+                self.s_params[(self.out_port_name, wl, self.obj_type, temp)] = {
                     "s": s,
                 }
         if isinstance(s_list[0], Tensor):
@@ -416,12 +416,12 @@ class FluxObjective(object):
 
                 s_list.append(s)
                 if self.minus_src: # which means that we are calculating the reflection
-                    self.s_params[(name, wl, self.obj_type, temp)] = {
+                    self.s_params[(self.out_port_name, wl, self.obj_type, temp)] = {
                         "s_m": s,
                         "s_p": 1-s,
                     }
                 else:
-                    self.s_params[(name, wl, self.obj_type, temp)] = {
+                    self.s_params[(self.out_port_name, wl, self.obj_type, temp)] = {
                         "s": s,
                     }
         if isinstance(s_list[0], Tensor):

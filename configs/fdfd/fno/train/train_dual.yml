@@ -33,14 +33,14 @@ aux_criterion:
 
 log_criterion:
   maxwell_residual_loss:
-    weight: 1
-    wl_cen: 1.55
-    wl_width: 0
-    n_wl: 1
+    weight: 0
+    # wl_cen: 1.55
+    # wl_width: 0
+    # n_wl: 1
   grad_loss:
     weight: 0
   s_param_loss:
-    weight: 1
+    weight: 0
   err_corr_Ez:
     weight: 0
   err_corr_Hx:

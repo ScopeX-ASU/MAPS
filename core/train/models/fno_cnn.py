@@ -10,6 +10,7 @@ from timm.models.layers import DropPath
 from torch import nn
 from torch.functional import Tensor
 from torch.types import Device
+from .layers.fno_conv2d import FNOConv2d
 from neuralop.models import FNO
 from neuralop.layers.mlp import MLP
 from neuralop.layers.fno_block import FNOBlocks
@@ -21,18 +22,59 @@ from core.utils import (
 )
 import copy
 from mmengine.registry import MODELS
-
+from mmcv.cnn.bricks import build_activation_layer, build_conv_layer, build_norm_layer
 import torch.nn.functional as F
 from functools import lru_cache
 from pyutils.torch_train import set_torch_deterministic
 from core.train.utils import resize_to_targt_size
 from core.fdfd.fdfd import fdfd_ez
-from thirdparty.ceviche.ceviche.constants import *
 from einops import rearrange
 from .model_base import ModelBase, ConvBlock, LinearBlock
 from .layers.fourier_feature import LearnableFourierFeatures
 
 __all__ = ["FNO2d"]
+
+class FNO2dBlock(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        n_modes: Tuple[int],
+        kernel_size: int = 1,
+        padding: int = 0,
+        conv_cfg: dict = dict(type="Conv2d", padding_mode="zeros"),
+        act_cfg: dict | None = dict(type="GELU"),
+        norm_cfg: dict | None = dict(type="LayerNorm", eps=1e-6, data_format="channels_first"),
+        drop_path_rate: float = 0.0,
+        device: Device = torch.device("cuda:0"),
+    ) -> None:
+        super().__init__()
+        self.drop_path_rate = drop_path_rate
+        self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0 else nn.Identity()
+        self.f_conv = FNOConv2d(in_channels, out_channels, n_modes, device=device)
+        self.conv = build_conv_layer(
+            conv_cfg,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            padding=padding,
+        )
+        if norm_cfg is not None:
+            _, self.norm = build_norm_layer(norm_cfg, out_channels)
+        else:
+            self.norm = None
+
+        if act_cfg is not None:
+            self.act_func = build_activation_layer(act_cfg)
+        else:
+            self.act_func = None
+
+    def forward(self, x: Tensor) -> Tensor:
+        x = self.norm(self.conv(x) + self.drop_path(self.f_conv(x)))
+
+        if self.act_func is not None:
+            x = self.act_func(x)
+        return x
 
 @MODELS.register_module()
 class FNO2d(ModelBase):
@@ -49,33 +91,35 @@ class FNO2d(ModelBase):
 
     default_cfgs = dict(
         train_field="fwd",
+        dim=16,
         in_channels=3,
         out_channels=2,
         kernel_list=[16, 16, 16, 16],
         kernel_size_list=[1, 1, 1, 1],
         padding_list=[0, 0, 0, 0],
         hidden_list=[128],
-        mode_list=[(20, 20)],
         dropout_rate=0.0,
         drop_path_rate=0.0,
         aux_head=False,
         aux_head_idx=1,
         pos_encoding="none",
         with_cp=False,
-        mode1=20,
-        mode2=20,
-        n_layers=4,
+        img_size=512,  # image size
+        img_res=50,  # image resolution
+        pml_width=0.5,  # PML width
+        wl=1.55,
+        temp=300,
+        mode=1,
+        mode_list=[(20, 20), (20, 20), (20, 20), (20, 20)],
         fourier_feature="none",
         mapping_size=2,
-        fno_block_only=False,
         conv_cfg=dict(type="Conv2d", padding_mode="replicate"),
-        layer_cfg=dict(type="Conv2d", padding_mode="replicate"),
         linear_cfg=dict(type="Linear"),
         # norm_cfg=dict(type="MyLayerNorm", data_format="channels_first"),
         norm_cfg=dict(type="LayerNorm", data_format="channels_first"),
         act_cfg=dict(type="GELU"),
         incident_field_fwd=False,
-        device=torch.device("cuda"),
+        device=torch.device("cuda:0"),
     )
 
     def __init__(
@@ -98,6 +142,8 @@ class FNO2d(ModelBase):
         output shape: (batchsize, x=s, y=s, c=1)
         """
         self.build_layers()
+        self.build_pml_mask()
+        self.build_sim()
 
     def load_cfgs(
         self,
@@ -149,79 +195,78 @@ class FNO2d(ModelBase):
         else:
             raise ValueError("fourier_feature only supports basic and gauss or none")
 
-        omega = 2 * np.pi * C_0 / (1.55 * 1e-6)
-        self.sim = fdfd_ez(
-            omega=omega,
-            dL=2e-8,
-            eps_r=torch.randn((260, 260), device=self.device),  # random permittivity
-            npml=(25, 25),
-        )
-
-    def _build_layers(self):
-        hidden_dim = self.hidden_list[-1]
-        lifting = MLP(
-            in_channels=self.in_channels,
-            out_channels=hidden_dim,
-            hidden_channels=hidden_dim,
-            n_layers=1,
-            n_dim=2,
-        )
-        fno_blocks = nn.ModuleList()
-        fno_blocks.append(
-            FNOBlocks(
-                in_channels=hidden_dim,
-                out_channels=hidden_dim,
-                n_modes=(self.mode1, self.mode2),
-                output_scaling_factor=None,
-                use_mlp=False,
-                mlp_dropout=0,
-                mlp_expansion=0.5,
-                non_linearity=F.gelu,
-                stabilizer=None,
-                norm=None,
-                preactivation=False,
-                fno_skip="linear",
-                mlp_skip="soft-gating",
-                max_n_modes=None,
-                fno_block_precision="full",
-                rank=1.0,
-                fft_norm="forward",
-                fixed_rank_modes=False,
-                implementation="factorized",
-                separable=False,
-                factorization=None,
-                decomposition_kwargs=dict(),
-                joint_factorization=False,
-                SpectralConv=SpectralConv,
-                n_layers=self.n_layers,
-            )
-        )
-        fno_blocks = nn.Sequential(*fno_blocks)
-
-        head = MLP(
-            in_channels=hidden_dim,
-            out_channels=self.out_channels,
-            hidden_channels=hidden_dim,
-            n_layers=2,
-            n_dim=2,
-        )
-
-        return lifting, fno_blocks, head
-
     def build_layers(self):
-        self.lifting, self.fno_blocks, self.head = self._build_layers()
-        # print("if nn have eps branch", hasattr(self, "has_eps_branch"), flush=True)
+        self.stem = ConvBlock( # just a regular conv 1*1 block
+            in_channels=self.in_channels,
+            out_channels=self.dim,
+            kernel_size=1,
+            padding=0,
+            conv_cfg=self.conv_cfg,
+            norm_cfg=None,
+            act_cfg=None,
+            skip=False,
+        )
+        kernel_list = [self.dim] + self.kernel_list
+        drop_path_rates = np.linspace(0, self.drop_path_rate, len(kernel_list[:-1]))
+
+        features = [
+            FNO2dBlock(
+                inc,
+                outc,
+                n_modes,
+                kernel_size,
+                padding,
+                drop_path_rate=drop,
+                device=self.device,
+            )
+            for inc, outc, n_modes, kernel_size, padding, drop in zip(
+                kernel_list[:-1],
+                kernel_list[1:],
+                self.mode_list,
+                self.kernel_size_list,
+                self.padding_list,
+                drop_path_rates,
+            )
+        ]
+        self.features = nn.Sequential(*features)
+        hidden_list = [self.kernel_list[-1]] + self.hidden_list
+        head = [
+            nn.Sequential(
+                ConvBlock(
+                    inc, 
+                    outc, 
+                    kernel_size=1, 
+                    padding=0, 
+                    act_cfg=self.act_cfg, 
+                    device=self.device
+                ),
+                nn.Dropout2d(self.dropout_rate),
+            )
+            for inc, outc in zip(hidden_list[:-1], hidden_list[1:])
+        ]
+        # 2 channels as real and imag part of the TE field
+        head += [
+            ConvBlock(
+                hidden_list[-1],
+                self.out_channels,
+                kernel_size=1,
+                padding=0,
+                device=self.device,
+            )
+        ]
+
+        self.head = nn.Sequential(*head)
 
         if self.aux_head:
             hidden_list = [self.kernel_list[self.aux_head_idx]] + self.hidden_list
             head = [
                 nn.Sequential(
                     ConvBlock(
-                        inc,
-                        outc,
-                        kernel_size=1,
-                        padding=0,
-                        act_cfg=self.act_cfg,
+                        inc, 
+                        outc, 
+                        kernel_size=1, 
+                        padding=0, 
+                        act_cfg=self.act_cfg, 
                         device=self.device,
                     ),
                     nn.Dropout2d(self.dropout_rate),
@@ -235,7 +280,6 @@ class FNO2d(ModelBase):
                     self.out_channels // 2,
                     kernel_size=1,
                     padding=0,
-                    act_cfg=None,
                     device=self.device,
                 )
             ]
@@ -243,34 +287,6 @@ class FNO2d(ModelBase):
             self.aux_head = nn.Sequential(*head)
         else:
             self.aux_head = None
-
-        # Simulation grid size
-        grid_size = (260, 260)  # Adjust to your simulation grid size
-        pml_thickness = 25
-
-        self.pml_mask = torch.ones(grid_size).to(self.device)
-
-        # Define the damping factor for exponential decay
-        damping_factor = torch.tensor(
-            [
-                0.05,
-            ],
-            device=self.device,
-        )  # adjust this to control decay rate
-
-        # Apply exponential decay in the PML regions
-        for i in range(grid_size[0]):
-            for j in range(grid_size[1]):
-                # Calculate distance from each edge
-                dist_to_left = max(0, pml_thickness - i)
-                dist_to_right = max(0, pml_thickness - (grid_size[0] - i - 1))
-                dist_to_top = max(0, pml_thickness - j)
-                dist_to_bottom = max(0, pml_thickness - (grid_size[1] - j - 1))
-
-                # Calculate the damping factor based on the distance to the nearest edge
-                dist = max(dist_to_left, dist_to_right, dist_to_top, dist_to_bottom)
-                if dist > 0:
-                    self.pml_mask[i, j] = torch.exp(-damping_factor * dist)
 
     def fourier_feature_mapping(self, x: Tensor) -> Tensor:
         if self.fourier_feature == "none":
@@ -395,19 +411,27 @@ class FNO2d(ModelBase):
         else:
             enc_fwd = self.fourier_feature_mapping(eps)
             eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1) if self.fourier_feature != "none" else eps
+
         if self.incident_field_fwd:
-            x_fwd = torch.cat((eps_enc_fwd, incident_field_fwd), dim=1)
+            x = torch.cat((eps_enc_fwd, incident_field_fwd), dim=1)
         else:
-            x_fwd = torch.cat((eps_enc_fwd, src), dim=1)
+            x = torch.cat((eps_enc_fwd, src), dim=1)
 
-        x_fwd = self.lifting(x_fwd)  # conv2d downsample
+        # positional encoding
+        grid = self.get_grid(
+            x.shape,
+            x.device,
+            mode=self.pos_encoding,
+            epsilon=eps * 12.11,
+            wavelength=self.wl,
+            grid_step=1 / self.img_res,
+        )  # [bs, 2 or 4 or 8, h, w] real
+        if grid is not None:
+            x = torch.cat((x, grid), dim=1)  # [bs, inc*2+4, h, w] real
 
-        x1_fwd = self.fno_blocks(x_fwd)  # fno block
+        x = self.stem(x)
+        x = self.features(x)
 
-        forward_Ez_field = self.head(x1_fwd)  # 1x1 conv
-
-        if len(forward_Ez_field.shape) == 3:
-            raise ValueError("forward_Ez_field should have 4 dimensions")
-            forward_Ez_field = forward_Ez_field.unsqueeze(0)
+        forward_Ez_field = self.head(x)  # 1x1 conv
 
         return forward_Ez_field

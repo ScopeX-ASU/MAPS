@@ -276,10 +276,10 @@ def make_criterion(name: str = None, cfg=None) -> nn.Module:
         criterion = NL2NormLoss()
     elif name == "maxwell_residual_loss":
         criterion = MaxwellResidualLoss(
-            wl_cen=cfg.wl_cen,
-            wl_width=cfg.wl_width,
-            n_wl=cfg.n_wl,
-            using_ALM=cfg.using_ALM,
+            # wl_cen=cfg.wl_cen,
+            # wl_width=cfg.wl_width,
+            # n_wl=cfg.n_wl,
+            # using_ALM=cfg.using_ALM,
         )
     elif name == "grad_loss":
         criterion = GradientLoss()

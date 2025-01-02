@@ -67,12 +67,11 @@ class UNet(ModelBase):
     """
 
     default_cfgs = dict(
+        train_field="fwd",
         in_channels=3,
         out_channels=2,
         dim=32,
         act_func="GELU",
-        domain_size=[20, 100],  # computation domain in unit of um
-        grid_step=1.550 / 20,  # grid step size in unit of um, typically 1/20 or 1/30 of the wavelength
         img_size=512,  # image size
         img_res=50,  # image resolution
         pml_width=0.5,
@@ -88,11 +87,18 @@ class UNet(ModelBase):
         aux_head_idx=1,
         pos_encoding="none",
         with_cp=False,
-        train_field="fwd",
-        fourier_feature="learnable",
+        fourier_feature="none",
         mapping_size=2,
         norm_cfg=dict(type="LayerNorm", data_format="channels_first"),
         act_cfg=dict(type="GELU"),
+
+        wl=1.55,
+        temp=300,
+        mode=1,
+
+        conv_cfg=dict(type="Conv2d", padding_mode="replicate"),
+        linear_cfg=dict(type="Linear"),
+        incident_field_fwd=False,
     )
 
     def __init__(
@@ -116,6 +122,7 @@ class UNet(ModelBase):
         """
         self.build_layers()
         self.build_pml_mask()
+        self.build_sim()
 
     def load_cfgs(
         self,
@@ -167,18 +174,6 @@ class UNet(ModelBase):
         else:
             raise ValueError("fourier_feature only supports basic and gauss")
 
-        omega = 2 * np.pi * C_0 / (1.55 * 1e-6)
-        self.sim = fdfd_ez(
-            omega=omega,
-            dL=2e-8,
-            eps_r=torch.randn((self.img_size, self.img_size), device=self.device),  # random permittivity
-            npml=(
-                round(self.pml_width * self.img_res),
-                round(self.pml_width * self.img_res),
-            ),
-        )
-        self.padding = 9  # pad the domain if input is non-periodic
-
     def build_layers(self):
         dim = self.dim
         self.dconv_down1 = double_conv(self.in_channels, dim, dim)
@@ -188,7 +183,7 @@ class UNet(ModelBase):
 
         # self.maxpool = nn.MaxPool2d(2)
         self.maxpool = nn.AvgPool2d(2)
-        # self.upsample = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+
         self.upsample1 = nn.ConvTranspose2d(dim * 8, dim * 8, kernel_size=2, stride=2)
         self.upsample2 = nn.ConvTranspose2d(dim * 4, dim * 4, kernel_size=2, stride=2)
         self.upsample3 = nn.ConvTranspose2d(dim * 2, dim * 2, kernel_size=2, stride=2)
@@ -198,36 +193,6 @@ class UNet(ModelBase):
         self.dconv_up1 = double_conv(dim * 3, dim * 2, dim)
         self.drop_out = nn.Dropout2d(self.dropout_rate)
         self.conv_last = nn.Conv2d(dim, self.out_channels, 1)
-
-    def build_pml_mask(self):
-        pml_thickness = self.pml_width * self.img_res
-
-        self.pml_mask = torch.ones((
-            self.img_size,
-            self.img_size,
-        )).to(self.device)
-
-        # Define the damping factor for exponential decay
-        damping_factor = torch.tensor(
-            [
-                0.05,
-            ],
-            device=self.device,
-        )  # adjust this to control decay rate
-
-        # Apply exponential decay in the PML regions
-        for i in range(self.img_size):
-            for j in range(self.img_size):
-                # Calculate distance from each edge
-                dist_to_left = max(0, pml_thickness - i)
-                dist_to_right = max(0, pml_thickness - (self.img_size - i - 1))
-                dist_to_top = max(0, pml_thickness - j)
-                dist_to_bottom = max(0, pml_thickness - (self.img_size - j - 1))
-
-                # Calculate the damping factor based on the distance to the nearest edge
-                dist = max(dist_to_left, dist_to_right, dist_to_top, dist_to_bottom)
-                if dist > 0:
-                    self.pml_mask[i, j] = torch.exp(-damping_factor * dist)
 
     def set_trainable_permittivity(self, mode: bool = True) -> None:
         self.trainable_permittivity = mode
@@ -257,10 +222,18 @@ class UNet(ModelBase):
         eps,
         src,
     ):
+        if self.incident_field_fwd:
+            incident_field_fwd = self.incident_field_from_src(src)
+            incident_field_fwd = torch.view_as_real(incident_field_fwd).permute(
+                0, 3, 1, 2
+            )  # B, 2, H, W
+            incident_field_fwd = incident_field_fwd / (
+                torch.abs(incident_field_fwd).amax(dim=(1, 2, 3), keepdim=True) + 1e-6
+            )
         src = torch.view_as_real(src.resolve_conj()).permute(0, 3, 1, 2)  # B, 2, H, W
-        src = src / (torch.abs(src).amax(dim=(1, 2, 3), keepdim=True) + 1e-6) # normalize src to [-1, 1]
+        src = src / (torch.abs(src).amax(dim=(1, 2, 3), keepdim=True) + 1e-6)
 
-        eps = (eps - torch.min(eps)) / (torch.max(eps) - torch.min(eps)) # normalize eps to [0, 1]
+        eps = eps / 12.11
         eps = eps.unsqueeze(1)  # B, 1, H, W
 
         if self.fourier_feature == "learnable":
@@ -280,10 +253,24 @@ class UNet(ModelBase):
         else:
             enc_fwd = self.fourier_feature_mapping(eps)
             eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1) if self.fourier_feature != "none" else eps
-        
-        x_fwd = torch.cat((eps_enc_fwd, src), dim=1)
 
-        conv1 = self.dconv_down1(x_fwd)
+        if self.incident_field_fwd:
+            x = torch.cat((eps_enc_fwd, incident_field_fwd), dim=1)
+        else:
+            x = torch.cat((eps_enc_fwd, src), dim=1)
+
+        # positional encoding
+        grid = self.get_grid(
+            x.shape,
+            x.device,
+            mode=self.pos_encoding,
+            epsilon=eps * 12.11,
+            wavelength=self.wl,
+            grid_step=1 / self.img_res,
+        )  # [bs, 2 or 4 or 8, h, w] real
+        if grid is not None:
+            x = torch.cat((x, grid), dim=1)  # [bs, inc*2+4, h, w] real
+        conv1 = self.dconv_down1(x)
         x = self.maxpool(conv1)
 
         conv2 = self.dconv_down2(x)

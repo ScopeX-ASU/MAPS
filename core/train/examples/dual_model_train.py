@@ -22,45 +22,90 @@ from core.train import builder
 from core.utils import cal_total_field_adj_src_from_fwd_field
 from core.train.models.utils import from_Ez_to_Hx_Hy
 from core.train.trainer import PredTrainer
+import copy
 
 class dual_predictor(nn.Module):
     def __init__(self, model_fwd, model_adj):
         super(dual_predictor, self).__init__()
-        self.model_fwd = model_fwd
-        self.model_adj = model_adj
+        self.model_fwd = nn.ModuleDict({
+            f"{str(wl).replace('.', 'p')}-{mode}-{temp}-{in_port_name}-{out_port_name}": model
+            for (wl, mode, temp, in_port_name, out_port_name), model in model_fwd.items()
+        }) # this is now a dictionary of models [wl, mode, temp, in_port_name, out_port_name] -> model # most of the time it should contain at most 2 models
+        self.model_adj = nn.ModuleDict({
+            f"{str(wl).replace('.', 'p')}-{mode}-{temp}-{in_port_name}-{out_port_name}": model
+            for (wl, mode, temp, in_port_name, out_port_name), model in model_adj.items()
+        }) # this is now a dictionary of models [wl, mode, temp, in_port_name, out_port_name] -> model # most of the time it should contain at most 2 models
 
     def forward(
         self, 
         data
     ):
         eps = data["eps_map"]
-        src = data['src_profiles']["source_profile-wl-1.55-port-in_port_1-mode-1"]
-        x_fwd = self.model_fwd(eps, src)
-        with torch.enable_grad():
-            forward_field, adjoint_source = cal_total_field_adj_src_from_fwd_field(
-                                            Ez=x_fwd,
+        src = {}
+        adjoint_source = {}
+        x_fwd = {}
+        forward_field = {}
+        adjoint_field = {}
+        # this is the key of data htms:  
+        # [
+        #     'ht_m-wl-1.55-port-in_port_1-mode-1', 
+        #     'ht_m-wl-1.55-port-in_port_1-mode-1-origin_size', 
+        #     'ht_m-wl-1.55-port-in_port_1-mode-2', 
+        #     'ht_m-wl-1.55-port-in_port_1-mode-2-origin_size', 
+        #     'ht_m-wl-1.55-port-out_port_1-mode-1', 
+        #     'ht_m-wl-1.55-port-out_port_1-mode-1-origin_size', 
+        #     'ht_m-wl-1.55-port-out_port_2-mode-2', 
+        #     'ht_m-wl-1.55-port-out_port_2-mode-2-origin_size', 
+        #     'ht_m-wl-1.55-port-refl_port_1-mode-1', 
+        #     'ht_m-wl-1.55-port-refl_port_1-mode-1-origin_size', 
+        #     'ht_m-wl-1.55-port-refl_port_1-mode-2', 
+        #     'ht_m-wl-1.55-port-refl_port_1-mode-2-origin_size'
+        # ]
+        # this is the keys in adjoint field:  
+        # ['fields_adj-wl-1.55-port-in_port_1-mode-1', 'fields_adj-wl-1.55-port-in_port_1-mode-2']
+        for key, model in self.model_fwd.items():
+            wl, mode, temp, in_port_name, out_port_name = key.split("-")
+            wl, mode, temp = float(wl.replace('p', '.')), int(mode), eval(temp)
+            src[(wl, mode, in_port_name)] = data["src_profiles"][f"source_profile-wl-{wl}-port-{in_port_name}-mode-{mode}"]
+            x_fwd[(wl, mode, temp, in_port_name, out_port_name)] = model(eps, src[(wl, mode, in_port_name)])
+            with torch.enable_grad():
+                forward_field[(wl, mode, temp, in_port_name, out_port_name)], adj_source = cal_total_field_adj_src_from_fwd_field(
+                    Ez=x_fwd[(wl, mode, temp, in_port_name, out_port_name)],
+                    eps=eps,
+                    ht_ms=data["ht_m"], # this two only used for adjoint field calculation, we don't need it here in forward pass
+                    et_ms=data["et_m"],
+                    monitors=data["monitor_slices"],
+                    pml_mask=model.pml_mask,
+                    from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
+                    return_adj_src=True,
+                    sim=model.sim,
+                    opt_cfg_file_path=data['opt_cfg_file_path'],
+                    wl=wl,
+                    mode=mode,
+                    temp=temp,
+                    in_port_name=in_port_name,
+                    out_port_name=out_port_name,
+                )
+            adjoint_source[(wl, mode, temp, in_port_name, out_port_name)] = adj_source = adj_source.detach()
+            adj_model = self.model_adj[key]
+            x_adj = adj_model(eps, adj_source)
+            adjoint_field[(wl, mode, temp, in_port_name, out_port_name)], _ = cal_total_field_adj_src_from_fwd_field(
+                                            Ez=x_adj,
                                             eps=eps,
                                             ht_ms=data['ht_m'],
                                             et_ms=data['et_m'],
                                             monitors=data['monitor_slices'],
-                                            pml_mask=self.model_fwd.pml_mask,
+                                            pml_mask=adj_model.pml_mask,
                                             from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
-                                            return_adj_src=True,
-                                            sim=self.model_fwd.sim,
+                                            return_adj_src=False,
+                                            sim=adj_model.sim,
+                                            opt_cfg_file_path=data['opt_cfg_file_path'],
+                                            wl=wl,
+                                            mode=mode,
+                                            temp=temp,
+                                            in_port_name=in_port_name,
+                                            out_port_name=out_port_name,
                                         )
-        adjoint_source = adjoint_source.detach()
-        x_adj = self.model_adj(eps, adjoint_source)
-        adjoint_field, _ = cal_total_field_adj_src_from_fwd_field(
-                                        Ez=x_adj,
-                                        eps=eps,
-                                        ht_ms=data['ht_m'],
-                                        et_ms=data['et_m'],
-                                        monitors=data['monitor_slices'],
-                                        pml_mask=self.model_adj.pml_mask,
-                                        from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
-                                        return_adj_src=False,
-                                        sim=self.model_adj.sim,
-                                    )
         return {
             "forward_field": forward_field,
             "adjoint_field": adjoint_field,
@@ -85,14 +130,35 @@ def main():
     print("this is the config: \n", configs, flush=True)
     if int(configs.run.deterministic) == True:
         set_torch_deterministic(int(configs.run.random_state))
-    model_fwd = builder.make_model(
-        device=device,
-        **configs.model_fwd
-    )
-    model_adj = builder.make_model(
-        device=device,
-        **configs.model_adj
-    )
+    model_fwd = {}
+    assert len(configs.model_fwd.temp) == len(configs.model_fwd.mode) == len(configs.model_fwd.wl) == len(configs.model_fwd.in_out_port_name), "temp, mode, wl, in_out_port_name should have the same length"
+    for i in range(len(configs.model_fwd.temp)):
+        model_cfg = copy.deepcopy(configs.model_fwd)
+        model_cfg.temp = temp = model_cfg.temp[i]
+        model_cfg.mode = mode = model_cfg.mode[i]
+        model_cfg.wl = wl = model_cfg.wl[i]
+        model_cfg.in_port_name = in_port_name = model_cfg.in_out_port_name[i][0]
+        model_cfg.out_port_name = out_port_name = model_cfg.in_out_port_name[i][1]
+        model_fwd[(wl, mode, temp, in_port_name, out_port_name)] = builder.make_model(device=device, **model_cfg)
+    # model_fwd = builder.make_model(device=device, **configs.model_fwd)
+    print("this is the model: \n", model_fwd, flush=True)
+    
+    model_adj = {}
+    assert len(configs.model_adj.temp) == len(configs.model_adj.mode) == len(configs.model_adj.wl) == len(configs.model_adj.in_out_port_name), "temp, mode, wl, in_out_port_name should have the same length"
+    for i in range(len(configs.model_adj.temp)):
+        model_cfg = copy.deepcopy(configs.model_adj)
+        model_cfg.temp = temp = model_cfg.temp[i]
+        model_cfg.mode = mode = model_cfg.mode[i]
+        model_cfg.wl = wl = model_cfg.wl[i]
+        model_cfg.in_port_name = in_port_name = model_cfg.in_out_port_name[i][0]
+        model_cfg.out_port_name = out_port_name = model_cfg.in_out_port_name[i][1]
+        model_adj[(wl, mode, temp, in_port_name, out_port_name)] = builder.make_model(device=device, **model_cfg)
+    # model_adj = builder.make_model(device=device, **configs.model_adj)
+    print("this is the model: \n", model_adj, flush=True)
+    # model_adj = builder.make_model(
+    #     device=device,
+    #     **configs.model_adj
+    # )
 
     model = dual_predictor(model_fwd, model_adj)
 

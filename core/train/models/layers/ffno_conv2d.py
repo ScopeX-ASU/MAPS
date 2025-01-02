@@ -16,7 +16,6 @@ from torch.types import Device
 
 __all__ = ["FFNOConv2d", "FFNOConv3d"]
 
-
 @MODELS.register_module()
 class FFNOConv2d(nn.Module):
     def __init__(
@@ -66,12 +65,6 @@ class FFNOConv2d(nn.Module):
                 dtype=torch.cfloat,
             )
         )
-        # self.weight_1 = nn.Parameter(
-        #     self.scale * torch.zeros([self.in_channels, self.out_channels, self.n_modes[0]], dtype=torch.cfloat)
-        # )
-        # self.weight_2 = nn.Parameter(
-        #     self.scale * torch.zeros([self.in_channels, self.out_channels, self.n_modes[1]], dtype=torch.cfloat)
-        # )
 
     def reset_parameters(self) -> None:
         nn.init.kaiming_normal_(self.weight_1.real)
