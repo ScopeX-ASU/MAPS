@@ -48,7 +48,7 @@ def get_temp_related_eps(
     # and we treat the air as it is independent of the temperature
     eps_max = eps.max()
     eps_min = eps.min()
-    eps = (eps - eps_min) / (eps_max - eps_min) # (0, 1)
+    eps = (eps - eps_min) / (eps_max - eps_min)  # (0, 1)
     n_si = math.sqrt(eps_r_0) + (temp - temp_0) * dn_dT
     eps = eps * (n_si**2 / eps_r_0)
     eps = eps * (eps_max - eps_min) + eps_min
@@ -677,7 +677,13 @@ def plot_eps_field(
         elif stat == "real":
             plot_real(Ez, outline=None, ax=ax[i], cbar=True, font_size=label_fontsize)
         elif stat == "intensity":
-            plot_abs(np.abs(Ez)**2, outline=None, ax=ax[i], cbar=True, font_size=label_fontsize)
+            plot_abs(
+                np.abs(Ez) ** 2,
+                outline=None,
+                ax=ax[i],
+                cbar=True,
+                font_size=label_fontsize,
+            )
         plot_abs(
             eps.astype(np.float64),
             ax=ax[i],
@@ -829,7 +835,7 @@ def plot_eps_field(
     # ax[1].set_yticks(yticks, ylabel)
     area = Ez.shape[0] * Ez.shape[1]
     if area > 2000**2:
-        dpi = 400
+        dpi = 300
     else:
         dpi = 600
     if filepath is not None:
@@ -854,6 +860,22 @@ def insert_mode(omega, dx, x, y, epsr, target=None, npml=0, m=1, filtering=False
     #    H = β / (μ₀ ω) * E
     # where the β term originates from the spatial derivative in the propagation
     # direction.
+    ## remove center phase
+    if e.shape[0] % 2 == 0:
+        center_phase = np.exp(
+            -1j
+            * np.angle(
+                (
+                    e[e.shape[0] // 2 - 1 : e.shape[0] // 2]
+                    + e[e.shape[0] // 2 : e.shape[0] // 2 + 1]
+                )
+                / 2
+            )
+        )
+    else:
+        center_phase = np.exp(-1j * np.angle(e[e.shape[0] // 2 : e.shape[0] // 2 + 1]))
+    e = e * center_phase
+
     k0 = omega / constants.C_0
     beta = np.real(np.sqrt(vals, dtype=complex)) * k0
     h = beta / omega / constants.MU_0 * e
