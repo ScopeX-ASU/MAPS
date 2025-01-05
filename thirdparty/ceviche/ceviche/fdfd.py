@@ -22,8 +22,8 @@ class fdfd:
         bloch_{x,y} phase difference across {x,y} boundaries for bloch periodic boundary conditions (default = 0 = periodic)
         """
 
-        self.omega = omega
-        self.dL = dL
+        self.omega = omega# * 1e6 # if convert to nm, numerical value in A is much smaller
+        self.dL = dL# * 1e6
         self.npml = npml
 
         self._setup_bloch_phases(bloch_phases)
@@ -97,7 +97,7 @@ class fdfd:
         )
 
         # stores the raw sparse matrices
-        self.Dxf, self.Dxb, self.Dyf, self.Dyb, self.Dzf, self.Dzb = derivs
+        self.Dxf, self.Dxb, self.Dyf, self.Dyb, self.Dzf, self.Dzb = derivs        
 
         # store the entries and elements
         self.entries_Dxf, self.indices_Dxf = get_entries_indices(self.Dxf)
