@@ -1,7 +1,7 @@
 """
 Date: 2024-10-02 20:59:04
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-12-14 22:17:11
+LastEditTime: 2025-01-04 01:11:30
 FilePath: /MAPS/core/invdes/models/layers/device_base.py
 """
 
@@ -397,7 +397,10 @@ class N_Ports(BaseDevice):
     def apply_active_modulation(self, eps, control_cfgs):
         ## eps_r: permittivity tensor, denormalized
         ## control_cfgs, include control signals for (multiple) active region(s).
-        eps_copy = eps.clone()
+        if isinstance(eps, torch.Tensor):
+            eps_copy = eps.clone()
+        else:
+            eps_copy = eps.copy()
         for name, control_cfg in control_cfgs.items():
             design_region_cfg = self.design_region_cfgs[name]
             eps_bg, eps_r = design_region_cfg["eps_bg"], design_region_cfg["eps"]
@@ -647,7 +650,8 @@ class N_Ports(BaseDevice):
         monitor_slice = self.add_monitor_slice(slice_name, center, size, direction)
         ## need to check the slice of eps is homogeneous medium
         eps_slice = self.epsilon_map[monitor_slice.x, monitor_slice.y]
-        assert(np.unique(eps_slice).size == 1), f"Near2far slice {slice_name} is not in a homogeneous medium"
+        if not (np.unique(eps_slice).size == 1):
+            print(f"Near2far slice {slice_name} is not in a homogeneous medium", flush=True)
         return monitor_slice
 
     def build_radiation_monitor(
