@@ -1,21 +1,21 @@
 """
 Date: 2024-10-05 02:02:33
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-12-15 00:11:07
+LastEditTime: 2025-01-04 20:47:49
 FilePath: /MAPS/core/invdes/models/layers/parametrization/levelset.py
 """
 
 from functools import lru_cache
 from typing import Tuple
 
+import h5py
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.types import Device
-import h5py
 
 from .base_parametrization import BaseParametrization
 from .utils import HeavisideProjection
-import torch.nn.functional as F
 
 __all__ = ["LeveSetParameterization"]
 
@@ -73,6 +73,7 @@ __all__ = ["LeveSetParameterization"]
 #         ls = ls.reshape(shape)
 #         return ls  ## level set surface with the same shape as z0
 
+
 class LevelSetInterp(object):
     """This class implements the level set surface using various interpolation methods."""
 
@@ -125,20 +126,27 @@ class LevelSetInterp(object):
         # For bilinear interpolation, no precomputed model is required.
         pass
 
-
     def handle_constant_dimension(self, x1, y1):
         """Handle cases where one dimension of z0 has only one knot."""
         if self.n_phi[0] == 1:  # Single knot along the x-axis
             # Interpolate along the y-axis
             z_values = self.z0[0, :].unsqueeze(0).unsqueeze(0)  # Shape: [1, 1, 134]
-            z_interpolated = F.interpolate(z_values, size=(len(y1),), mode="linear", align_corners=True)
-            z_const = z_interpolated.squeeze(0).repeat(len(x1), 1)  # Repeat along x-axis
+            z_interpolated = F.interpolate(
+                z_values, size=(len(y1),), mode="linear", align_corners=True
+            )
+            z_const = z_interpolated.squeeze(0).repeat(
+                len(x1), 1
+            )  # Repeat along x-axis
 
         elif self.n_phi[1] == 1:  # Single knot along the y-axis
             # Interpolate along the x-axis
             z_values = self.z0[:, 0].unsqueeze(0).unsqueeze(0)  # Shape: [1, 1, 134]
-            z_interpolated = F.interpolate(z_values, size=(len(x1),), mode="linear", align_corners=True)
-            z_const = z_interpolated.squeeze(0).repeat(1, len(y1))  # Repeat along y-axis
+            z_interpolated = F.interpolate(
+                z_values, size=(len(x1),), mode="linear", align_corners=True
+            )
+            z_const = z_interpolated.squeeze(0).repeat(
+                1, len(y1)
+            )  # Repeat along y-axis
 
         else:
             z_const = None  # No constant dimension
@@ -203,7 +211,6 @@ class LevelSetInterp(object):
             raise ValueError(f"Unsupported interpolation type: {self.interpolation}")
 
         return ls  # Level set surface with the same shape as z0
-
 
 
 class GetLevelSetEps(nn.Module):
@@ -363,10 +370,15 @@ class LeveSetParameterization(BaseParametrization):
     ):
         init_file_path = param_cfg.get("initialization_file", None)
         if init_file_path is not None:
-            assert init_method == "grating_1d", "Only grating_1d init method is supported with given initialization file"
+            assert (
+                init_method == "grating_1d"
+            ), "Only grating_1d init method is supported with given initialization file"
             with h5py.File(init_file_path, "r") as f:
                 level_set_knots = f["Si_width"][:]
-                level_set_knots = torch.tensor(level_set_knots, device=self.operation_device) * 1e6
+                level_set_knots = (
+                    torch.tensor(level_set_knots, device=self.operation_device) * 1e6
+                )
+                # level_set_knots.fill_(0.05)
                 # print("this is the shape of level_set_knots", level_set_knots.shape, flush=True)
         if init_method == "random":
             nn.init.normal_(weight_dict["ls_knots"], mean=0, std=0.01)
@@ -381,23 +393,50 @@ class LeveSetParameterization(BaseParametrization):
             weight.data.fill_(-0.2)
             weight.data[:, weight.shape[1] // 4 : 3 * weight.shape[1] // 4] = 0.05
             # weight.data += torch.randn_like(weight) * 0.01
-        elif init_method == "grating_1d":
+        elif init_method.startswith("grating_1d"):
+            method = init_method.split("_")
+            if len(method) > 1:
+                method = method[-1]
+            else:
+                method = ""
             weight = weight_dict["ls_knots"]
             weight.data.fill_(-0.2)
             rho_res = self.cfgs["rho_resolution"]
             if weight.shape[0] == 1:
                 rho_res = rho_res[1]
-                n_gratings = weight.shape[1] // 2 # 0 1 0 1 0, 2 gratings
-                grating_widths = torch.linspace(0, 2 / rho_res, n_gratings) if init_file_path is None else level_set_knots.squeeze()
-                ## (rho_res - width/2) / (width/2) = 0.2 / knots
-                weight.data[:, 1::2] = 0.2 * grating_widths / 2 / (1 / rho_res - grating_widths / 2) # 1, 134
+                n_gratings = weight.shape[1] // 2  # 0 1 0 1 0, 2 gratings
             elif weight.shape[1] == 1:
                 rho_res = rho_res[0]
-                n_gratings = weight.shape[0] // 2 # 0 1 0 1 0, 2 gratings
+                n_gratings = weight.shape[0] // 2  # 0 1 0 1 0, 2 gratings
                 grating_widths = torch.linspace(0, 2 / rho_res, n_gratings)
-                ## (rho_res - width/2) / (width/2) = 0.2 / knots
-                weight.data[1::2, :] = 0.2 * grating_widths / 2 / (rho_res - grating_widths / 2)
-                # weight.data[1::2, :] = torch.linspace(0, 0.2, weight.shape[0] // 2)
+            else:
+                raise ValueError("Unsupported grating initialization method")
+
+            if init_file_path is not None:
+                grating_widths = level_set_knots.squeeze()
+            elif method == "random":
+                grating_widths = torch.empty(n_gratings).uniform_(0, 2 / rho_res)
+            elif method == "minmax":
+                grating_widths = torch.empty(n_gratings)
+                grating_widths[0::2] = 0.05
+                grating_widths[1::2] = 0.08
+            elif method in {""}:
+                grating_widths = torch.linspace(0, 2 / rho_res, n_gratings)
+            else:
+                try:
+                    grating_widths = float(method)
+                except ValueError:
+                    raise ValueError(
+                        f"Unsupported grating initialization method: {method}"
+                    )
+
+            weight_values = (
+                0.2 * grating_widths / 2 / (1 / rho_res - grating_widths / 2)
+            )
+            if weight.shape[0] == 1:
+                weight.data[:, 1::2] = weight_values
+            elif weight.shape[1] == 1:
+                weight.data[1::2, :] = weight_values
         elif init_method == "ring":
             # region_cfg
             #     design_region_cfgs["bending_region"] = dict(
@@ -460,7 +499,7 @@ class LeveSetParameterization(BaseParametrization):
             device=design_param.device,
         )
 
-        phi = phi_model.get_ls(x1=phi[0], y1=phi[1], shape=n_phi) # [76, 2001]
+        phi = phi_model.get_ls(x1=phi[0], y1=phi[1], shape=n_phi)  # [76, 2001]
 
         ## This is used to constrain the value to be [0, 1] for heaviside input
         phi = torch.tanh(phi) * 0.5
