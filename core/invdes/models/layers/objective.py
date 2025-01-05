@@ -79,38 +79,46 @@ class EigenmodeObjective(object):
             self.grid_step,
         )
         ## for each wavelength, we evaluate the objective
-        for wl, sim in self.sims.items():
+        for (wl, pol), sim in self.sims.items():
             ## we calculate the average eigen energy for all output modes
             if wl not in target_wls:
+                continue
+            if pol != in_mode[:2]:
                 continue
             for out_mode in out_modes:
                 for temp in target_temps:
                     src, ht_m, et_m, norm_p = self.port_profiles[out_port_name][
                         (wl, out_mode)
                     ]
-                    norm_power = self.port_profiles[in_port_name][(wl, in_mode)][
-                        3
-                    ]
+                    norm_power = self.port_profiles[in_port_name][(wl, in_mode)][3]
                     monitor_slice = self.port_slices[out_port_name]
                     field = fields[(in_port_name, wl, in_mode, temp)]
-                    hx, hy, ez = (
-                        field["Hx"],
-                        field["Hy"],
-                        field["Ez"],
-                    )  # fetch fields
-                    if isinstance(ht_m, Tensor) and ht_m.device != ez.device:
-                        ht_m = ht_m.to(ez.device)
-                        et_m = et_m.to(ez.device)
+                    pol = in_mode[:2]
+                    if pol == "Ez":
+                        fx, fy, fz = (
+                            field["Hx"],
+                            field["Hy"],
+                            field["Ez"],
+                        )  # fetch fields
+                    elif pol == "Hz":
+                        fx, fy, fz = (
+                            field["Ex"],
+                            field["Ey"],
+                            field["Hz"],
+                        )
+                    if isinstance(ht_m, Tensor) and ht_m.device != fz.device:
+                        ht_m = ht_m.to(fz.device)
+                        et_m = et_m.to(fz.device)
                         self.port_profiles[out_port_name][(wl, out_mode)] = [
-                            src.to(ez.device),
+                            src.to(fz.device),
                             ht_m,
                             et_m,
                             norm_p,
                         ]
                     s_p, s_m = get_eigenmode_coefficients(
-                        hx,
-                        hy,
-                        ez,
+                        fx,
+                        fy,
+                        fz,
                         ht_m,
                         et_m,
                         monitor_slice,
@@ -118,6 +126,7 @@ class EigenmodeObjective(object):
                         direction=direction[0],
                         autograd=True,
                         energy=self.energy,
+                        pol=pol,
                     )
                     if direction[1] == "+":
                         s = s_p
@@ -125,6 +134,7 @@ class EigenmodeObjective(object):
                         s = s_m
                     else:
                         raise ValueError("Invalid direction")
+                    # print(s, norm_power)
                     if self.energy:
                         s_list.append(s / norm_power)
                     else:
@@ -133,8 +143,12 @@ class EigenmodeObjective(object):
                         # only record the s parameters for eigenmode
                         # we don't need to record the s parameters if we calculate the phase
                         self.s_params[(self.out_port_name, wl, out_mode, temp)] = {
-                            "s_p": s_p / norm_power if self.energy else s_p / norm_power**0.5, # normalized by input power
-                            "s_m": s_m / norm_power if self.energy else s_m / norm_power**0.5, # normalized by input power
+                            "s_p": s_p / norm_power
+                            if self.energy
+                            else s_p / norm_power**0.5,  # normalized by input power
+                            "s_m": s_m / norm_power
+                            if self.energy
+                            else s_m / norm_power**0.5,  # normalized by input power
                         }
         if isinstance(s_list[0], Tensor):
             return torch.mean(torch.stack(s_list))
@@ -239,12 +253,16 @@ class FluxNear2FarObjective(object):
                         farfield = get_farfields_GreenFunction(
                             nearfield_slices=[
                                 self.port_slices[nearfield_slice_name]
-                                for nearfield_slice_name in list(self.port_slices.keys())
+                                for nearfield_slice_name in list(
+                                    self.port_slices.keys()
+                                )
                                 if nearfield_slice_name.startswith("nearfield")
                             ],
                             nearfield_slices_info=[
                                 self.port_slices_info[nearfield_slice_name]
-                                for nearfield_slice_name in list(self.port_slices_info.keys())
+                                for nearfield_slice_name in list(
+                                    self.port_slices_info.keys()
+                                )
                                 if nearfield_slice_name.startswith("nearfield")
                             ],
                             Ez=ez_near[None, ..., None],
@@ -262,7 +280,9 @@ class FluxNear2FarObjective(object):
                     ez = farfield["Ez"][0, ..., 0]
                     hx = farfield["Hx"][0, ..., 0]
                     hy = farfield["Hy"][0, ..., 0]
-                    self.total_farfield_region_solutions[(in_port_name, wl, in_mode, temp)] = {
+                    self.total_farfield_region_solutions[
+                        (in_port_name, wl, in_mode, temp)
+                    ] = {
                         "Ez": ez,
                         "Hx": hx,
                         "Hy": hy,
@@ -277,7 +297,9 @@ class FluxNear2FarObjective(object):
                         ],
                         nearfield_slices_info=[
                             self.port_slices_info[nearfield_slice_name]
-                            for nearfield_slice_name in list(self.port_slices_info.keys())
+                            for nearfield_slice_name in list(
+                                self.port_slices_info.keys()
+                            )
                             if nearfield_slice_name.startswith("nearfield")
                         ],
                         Ez=ez_near[None, ..., None],
@@ -295,7 +317,7 @@ class FluxNear2FarObjective(object):
                     ez = farfield["Ez"][0, ..., 0]
                     hx = farfield["Hx"][0, ..., 0]
                     hy = farfield["Hy"][0, ..., 0]
-                
+
                 if direction[0] == "x":  # Yee grid average
                     ez = (ez[:-1] + ez[1:]) / 2
                     hx = hx[1:]
@@ -385,24 +407,33 @@ class FluxObjective(object):
 
         s_list = []
         ## for each wavelength, we evaluate the objective
-        for wl, _ in self.sims.items():
+        for (wl, pol), _ in self.sims.items():
             for temp in target_temps:
                 monitor_slice = self.port_slices[out_port_name]
                 norm_power = self.port_profiles[in_port_name][(wl, in_mode)][3]
                 field = fields[(in_port_name, wl, in_mode, temp)]
-                hx, hy, ez = (
-                    field["Hx"],
-                    field["Hy"],
-                    field["Ez"],
-                )  # fetch fields
+                pol = in_mode[:2]
+                if pol == "Ez":
+                    fx, fy, fz = (
+                        field["Hx"],
+                        field["Hy"],
+                        field["Ez"],
+                    )  # fetch fields
+                elif pol == "Hz":
+                    fx, fy, fz = (
+                        field["Ex"],
+                        field["Ey"],
+                        field["Hz"],
+                    )
                 s = get_flux(
-                    hx,
-                    hy,
-                    ez,
+                    fx,
+                    fy,
+                    fz,
                     monitor_slice,
                     grid_step=grid_step,
                     direction=direction[0],
                     autograd=True,
+                    pol=pol,
                 )
                 if isinstance(s, Tensor):
                     abs = torch.abs
@@ -415,10 +446,10 @@ class FluxObjective(object):
                     )  ## if it is larger than 1, then this slice must include source, we minus the power from source
 
                 s_list.append(s)
-                if self.minus_src: # which means that we are calculating the reflection
+                if self.minus_src:  # which means that we are calculating the reflection
                     self.s_params[(self.out_port_name, wl, self.obj_type, temp)] = {
                         "s_m": s,
-                        "s_p": 1-s,
+                        "s_p": 1 - s,
                     }
                 else:
                     self.s_params[(self.out_port_name, wl, self.obj_type, temp)] = {
@@ -490,9 +521,11 @@ class ShapeSimilarityObjective(object):
 
         similarity_list = []
         ## for each wavelength, we evaluate the objective
-        for wl, sim in self.sims.items():
+        for (wl, pol), sim in self.sims.items():
             ## we calculate the average eigen energy for all output modes
             if wl not in target_wls:
+                continue
+            if pol != in_mode[:2]:
                 continue
             for out_mode in out_modes:
                 for temp in target_temps:
@@ -545,7 +578,7 @@ class ShapeSimilarityNear2FarObjective(object):
         intensity: bool = True,
         similarity: str = "angular",
         obj_type: str = "intensity_shape_near2far",
-        total_farfield_region_solutions:dict = None,
+        total_farfield_region_solutions: dict = None,
     ):
         self.sims = sims
         self.port_slices = port_slices
@@ -589,9 +622,11 @@ class ShapeSimilarityNear2FarObjective(object):
 
         similarity_list = []
         ## for each wavelength, we evaluate the objective
-        for wl, sim in self.sims.items():
+        for (wl, pol), sim in self.sims.items():
             ## we calculate the average eigen energy for all output modes
             if wl not in target_wls:
+                continue
+            if pol != in_mode[:2]:
                 continue
             for out_mode in out_modes:
                 for temp in target_temps:
@@ -709,9 +744,9 @@ class ObjectiveFunc(object):
                 in_port_name="in_port_1",
                 out_port_name="out_port_1",
                 #### objective is evaluated at all points by sweeping the wavelength and modes
-                in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                 out_modes=(
-                    1,
+                    "Ez1",
                 ),  # can evaluate on multiple output modes and get average transmission
                 direction="x+",
             )
@@ -875,15 +910,23 @@ class ObjectiveFunc(object):
         field_adj_normalizer = {}
         for key, sim in self.sims.items():
             adj_sources[key] = sim.solver.adj_src  # this is the b_adj
-            ez_adj, hx_adj, hy_adj, flux = sim.norm_adj_power()
+            fz_adj, fx_adj, fy_adj, flux = sim.norm_adj_power()
             # field_adj[key] = {"Ez": ez_adj, "Hx": hx_adj, "Hy": hy_adj}
             field_adj[key] = {}
-            for (port_name, mode), _ in ez_adj.items():
-                field_adj[key][(port_name, mode)] = {
-                    "Ez": ez_adj[(port_name, mode)],
-                    "Hx": hx_adj[(port_name, mode)],
-                    "Hy": hy_adj[(port_name, mode)],
-                }
+            for (port_name, mode), _ in fz_adj.items():
+                pol = mode[:2]
+                if pol == "Ez":
+                    field_adj[key][(port_name, mode)] = {
+                        "Ez": fz_adj[(port_name, mode)],
+                        "Hx": fx_adj[(port_name, mode)],
+                        "Hy": fy_adj[(port_name, mode)],
+                    }
+                elif pol == "Hz":
+                    field_adj[key][(port_name, mode)] = {
+                        "Hz": fz_adj[(port_name, mode)],
+                        "Ex": fx_adj[(port_name, mode)],
+                        "Ey": fy_adj[(port_name, mode)],
+                    }
             field_adj_normalizer[key] = flux
         return adj_sources, field_adj, field_adj_normalizer
 
@@ -901,7 +944,7 @@ class ObjectiveFunc(object):
                 ## here the source is already normalized during norm_run to make sure it has target power
                 ## here is the key part that build the common "eps to field" autograd graph
                 ## later on, multiple "field to fom" autograd graph(s) will be built inside of multiple obj_fn's
-
+                pol = mode[:2]
                 ## temperature is effective only when there is active region defined
                 for temp in temperatures:
                     if getattr(self.device, "active_region_masks", None) is not None:
@@ -910,11 +953,13 @@ class ObjectiveFunc(object):
                             for name in self.device.active_region_masks.keys()
                         }
 
-                        self.sims[wl].eps_r = self.device.apply_active_modulation(
+                        self.sims[
+                            (wl, pol)
+                        ].eps_r = self.device.apply_active_modulation(
                             permittivity, control_cfgs
                         )
                     else:
-                        self.sims[wl].eps_r = permittivity
+                        self.sims[(wl, pol)].eps_r = permittivity
                     ## eps_r: permittivity tensor, denormalized
 
                     # self.sims[wl].eps_r = get_temp_related_eps(
@@ -924,13 +969,24 @@ class ObjectiveFunc(object):
                     #     eps_r_0=Si_eps(wl),
                     #     dn_dT=1.8e-4,
                     # )
-                    Hx, Hy, Ez = self.sims[wl].solve(source, port_name=port_name, mode=mode)
-                    self.solutions[(port_name, wl, mode, temp)] = {
-                        "Hx": Hx,
-                        "Hy": Hy,
-                        "Ez": Ez,
-                    }
-                    self.As[(wl, temp)] = self.sims[wl].A
+                    Fx, Fy, Fz = self.sims[(wl, pol)].solve(
+                        source, port_name=port_name, mode=mode
+                    )
+                    pol = mode[:2]
+                    if pol == "Ez":
+                        self.solutions[(port_name, wl, mode, temp)] = {
+                            "Hx": Fx,
+                            "Hy": Fy,
+                            "Ez": Fz,
+                        }
+                    elif pol == "Hz":
+                        self.solutions[(port_name, wl, mode, temp)] = {
+                            "Ex": Fx,
+                            "Ey": Fy,
+                            "Hz": Fz,
+                        }
+
+                    self.As[(wl, temp)] = self.sims[(wl, pol)].A
 
         self.breakdown = {}
         for name, obj in self.Js.items():

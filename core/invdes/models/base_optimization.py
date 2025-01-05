@@ -1,7 +1,7 @@
 """
 Date: 2024-10-04 18:49:06
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-12-15 02:36:05
+LastEditTime: 2025-01-05 15:06:13
 FilePath: /MAPS/core/invdes/models/base_optimization.py
 """
 
@@ -15,11 +15,12 @@ import numpy as np
 import torch
 import yaml
 from autograd.numpy.numpy_boxes import ArrayBox
-from ceviche.constants import C_0
 from pyutils.config import Config
 from pyutils.general import logger
 from torch import Tensor, nn
 from torch.types import Device
+
+from thirdparty.ceviche.ceviche.constants import C_0
 
 from .layers.device_base import N_Ports
 from .layers.fom_layer import SimulatedFoM
@@ -224,9 +225,9 @@ class BaseOptimization(nn.Module):
                 out_port_name="out_port_1",
                 #### objective is evaluated at all points by sweeping the wavelength and modes
                 wl=1.55,
-                in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                 out_modes=(
-                    1,
+                    "Ez1",
                 ),  # can evaluate on multiple output modes and get average transmission
                 type="eigenmode",
                 direction="x+",
@@ -234,6 +235,18 @@ class BaseOptimization(nn.Module):
         ),
         solver: str = "ceviche",
     ):
+        ## let's verify for 2D simulation, input mode and output mode should have the same polarization
+        ## and we also collect input polarizations
+        in_pols = set()
+        for name, obj_cfg in obj_cfgs.items():
+            if isinstance(obj_cfg, dict):
+                if "in_mode" in obj_cfg:
+                    in_pol = obj_cfg["in_mode"][:2]
+                    in_pols.add(in_pol)
+                    out_pols = [mode[:2] for mode in obj_cfg["out_modes"]]
+                    assert all(
+                        [in_pol == out_pol for out_pol in out_pols]
+                    ), f"Input and output modes of {name} should have the same polarization"
         ### create static forward computational graph from eps to J, no actual execution.
         sim_cfg = self.sim_cfg
         epsilon_map = (
@@ -241,14 +254,15 @@ class BaseOptimization(nn.Module):
         )
         ## this is input source wavelength range, each wl needs to build a fdfd simulation
         wl_cen, wl_width, n_wl = sim_cfg["wl_cen"], sim_cfg["wl_width"], sim_cfg["n_wl"]
-        simulations = {}
+        simulations = {}  # different polarization and wavelength requires different simulation instances
         for wl in np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl):
-            omega = 2 * np.pi * C_0 / (wl * 1e-6)
-            dl = self.device.grid_step * 1e-6
-            sim = self.device.create_simulation(
-                omega, dl, epsilon_map, self.device.NPML, solver
-            )
-            simulations[wl] = sim
+            for pol in in_pols:  # {Ez}, {Hz}, {Ez, Hz}
+                omega = 2 * np.pi * C_0 / (wl * 1e-6)
+                dl = self.device.grid_step * 1e-6
+                sim = self.device.create_simulation(
+                    omega, dl, epsilon_map, self.device.NPML, solver, pol=pol
+                )
+                simulations[(wl, pol)] = sim
 
         self.objective = ObjectiveFunc(
             simulations=simulations,
@@ -267,7 +281,7 @@ class BaseOptimization(nn.Module):
         ### only usedful for autograd, not for torch autodiff
         self.gradient_region = "global_region"
         if self.sim_cfg["solver"] == "ceviche":
-            self.objective.add_adj_objective(obj_cfgs)
+            # self.objective.add_adj_objective(obj_cfgs)
             self.objective.build_jacobian()
             self.objective.build_adj_jacobian()
 
@@ -328,7 +342,9 @@ class BaseOptimization(nn.Module):
     ):
         # print("this is the kyes of self.objective.solutions", list(self.objective.solutions.keys()), flush=True)
         Ez = self.objective.solutions[field_key][field_component]
-        extended_Ez = self.objective.total_farfield_region_solutions.get(field_key, {}).get(field_component, None)
+        extended_Ez = self.objective.total_farfield_region_solutions.get(
+            field_key, {}
+        ).get(field_component, None)
         if extended_Ez is not None:
             Ez = torch.cat((Ez, extended_Ez), dim=0)
             x_shift_coord = extended_Ez.shape[0] * self.device.grid_step
@@ -353,14 +369,21 @@ class BaseOptimization(nn.Module):
             monitors.append((m, color))
         eps_map = eps_map if eps_map is not None else self._eps_map
         if extended_Ez is not None:
-            extended_eps_map = torch.ones_like(extended_Ez, dtype=torch.float64) * self.device.eps_bg
+            extended_eps_map = (
+                torch.ones_like(extended_Ez, dtype=torch.float64) * self.device.eps_bg
+            )
             eps_map = torch.cat((eps_map, extended_eps_map), dim=0)
         obj = obj if obj is not None else self._obj
         if isinstance(obj, Tensor):
             obj = obj.item()
         if isinstance(Ez, ArrayBox):
             Ez = Ez._value
-        design_region_center = np.mean(np.array([cfg["center"] for cfg in self.device.design_region_cfgs.values()]), axis=0)
+        design_region_center = np.mean(
+            np.array(
+                [cfg["center"] for cfg in self.device.design_region_cfgs.values()]
+            ),
+            axis=0,
+        )
         if extended_Ez is not None:
             design_region_center = design_region_center - x_shift_coord
         plot_eps_field(
@@ -373,7 +396,7 @@ class BaseOptimization(nn.Module):
             NPML=self.device.NPML,
             title=f"|{field_component}|^2: {field_key}, FoM: {obj:.3f}",
             field_stat="intensity_real",
-            zoom_eps_factor=2,
+            zoom_eps_factor=1,
             zoom_eps_center=design_region_center,
             x_shift_coord=x_shift_coord if extended_Ez is not None else 0,
             x_shift_idx=x_shift_idx if extended_Ez is not None else 0,
@@ -452,7 +475,12 @@ class BaseOptimization(nn.Module):
                         f.create_dataset(
                             f"et_m-wl-{wl}-port-{port_name}-mode-{mode}", data=et_m
                         )
-                for (port_name, wl, mode, temp), fields in self.objective.solutions.items():
+                for (
+                    port_name,
+                    wl,
+                    mode,
+                    temp,
+                ), fields in self.objective.solutions.items():
                     store_fields = {}
                     for key, field in fields.items():
                         if isinstance(fields[key], Tensor):
@@ -506,7 +534,8 @@ class BaseOptimization(nn.Module):
                     else:
                         store_s_params = store_s_params["s"]
                     f.create_dataset(
-                        f"s_params-port-{port_name}-wl-{wl}-type-{obj_type}-temp-{temp}", data=store_s_params
+                        f"s_params-port-{port_name}-wl-{wl}-type-{obj_type}-temp-{temp}",
+                        data=store_s_params,
                     )  # 3d numpy array
                 adj_srcs, fields_adj, field_adj_normalizer = (
                     self.objective.obtain_adj_srcs()

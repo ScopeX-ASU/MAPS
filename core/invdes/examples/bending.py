@@ -1,4 +1,10 @@
 """
+Date: 2025-01-04 20:49:15
+LastEditors: Jiaqi Gu && jiaqigu@asu.edu
+LastEditTime: 2025-01-05 02:29:36
+FilePath: /MAPS/core/invdes/examples/bending.py
+"""
+"""
 this is a wrapper for the invdes module
 we call use InvDesign.optimize() to optimize the inventory design
 basically, this should be like the training logic like in train_NN.py
@@ -71,7 +77,7 @@ if __name__ == "__main__":
         plot=True,
         plot_filename=f"bending_{'init_try'}",
         objs=["fwd_trans"],
-        field_keys=[("in_port_1", 1.55, 1, 300)],
+        field_keys=[("in_port_1", 1.55, "Hz1", 300)],
         in_port_names=["in_port_1"],
         exclude_port_names=[],
         dump_gds=True,

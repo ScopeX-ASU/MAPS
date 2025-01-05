@@ -4,8 +4,8 @@ import scipy.sparse.linalg as spl
 
 from copy import deepcopy
 
-from ceviche.constants import *
-from ceviche.fdfd import compute_derivative_matrices#, Ez_to_Hx_Hy
+from .constants import *
+from .fdfd import compute_derivative_matrices#, Ez_to_Hx_Hy
 
 def get_modes(eps_cross, omega, dL, npml, m=1, filtering=True):
     """ Solve for the modes of a waveguide cross section
@@ -113,7 +113,6 @@ def normalize_modes(vectors):
             vectors: array with shape (n_points, n_vectors)
         NOTE: eigs already normalizes for you, so you technically dont need this function
     """
-
     powers = np.sum(np.square(np.abs(vectors)), axis=0)
 
     return vectors / np.sqrt(powers)

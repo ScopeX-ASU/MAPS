@@ -1,8 +1,8 @@
 """
 Date: 2024-10-10 21:17:31
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-10-11 13:55:08
-FilePath: /MAPS/core/models/fdfd/utils.py
+LastEditTime: 2025-01-05 15:05:15
+FilePath: /MAPS/core/fdfd/utils.py
 """
 
 """
@@ -90,8 +90,15 @@ def sparse_mm(A, B):
     if torch.is_complex(A_values):
         A_real = A_values.real
         A_imag = A_values.imag
+    else:
+        A_real = A_values
+        A_imag = None
+    if torch.is_complex(B_values):
         B_real = B_values.real
         B_imag = B_values.imag
+    else:
+        B_real = B_values
+        B_imag = None
 
     indices, values_rr = spspmm(
         A.indices(),
@@ -102,33 +109,43 @@ def sparse_mm(A, B):
         A.shape[1],
         B.shape[1],
     )
-    _, values_ri = spspmm(
-        A.indices(),
-        A_real,
-        B.indices(),
-        B_imag,
-        A.shape[0],
-        A.shape[1],
-        B.shape[1],
-    )
-    _, values_ir = spspmm(
-        A.indices(),
-        A_imag,
-        B.indices(),
-        B_real,
-        A.shape[0],
-        A.shape[1],
-        B.shape[1],
-    )
-    _, values_ii = spspmm(
-        A.indices(),
-        A_imag,
-        B.indices(),
-        B_imag,
-        A.shape[0],
-        A.shape[1],
-        B.shape[1],
-    )
+    if B_imag is not None:
+        _, values_ri = spspmm(
+            A.indices(),
+            A_real,
+            B.indices(),
+            B_imag,
+            A.shape[0],
+            A.shape[1],
+            B.shape[1],
+        )
+    else:
+        values_ri = 0
+
+    if A_imag is not None:
+        _, values_ir = spspmm(
+            A.indices(),
+            A_imag,
+            B.indices(),
+            B_real,
+            A.shape[0],
+            A.shape[1],
+            B.shape[1],
+        )
+    else:
+        values_ir = 0
+    if A_imag is None and B_imag is None:
+        _, values_ii = spspmm(
+            A.indices(),
+            A_imag,
+            B.indices(),
+            B_imag,
+            A.shape[0],
+            A.shape[1],
+            B.shape[1],
+        )
+    else:
+        values_ii = 0
     values = values_rr - values_ii + 1j * (values_ri + values_ir)
     return torch.sparse_coo_tensor(indices, values, A.shape, device=A.device)
 

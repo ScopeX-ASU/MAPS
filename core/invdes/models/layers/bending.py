@@ -90,7 +90,7 @@ class Bending(N_Ports):
         )
 
     def init_monitors(self, verbose: bool = True):
-        rel_width = 2
+        rel_width = 4
         if verbose:
             logger.info("Start generating sources and monitors ...")
         src_slice = self.build_port_monitor_slice(
@@ -121,19 +121,19 @@ class Bending(N_Ports):
         # norm_run_sim_cfg = copy.deepcopy(self.sim_cfg)
         # norm_run_sim_cfg["numerical_solver"] = "solve_direct"
         norm_source_profiles = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Hz1",),
             input_port_name="in_port_1",
             input_slice_name="in_port_1",
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             # solver=self.sim_cfg["solver"],
-            solver="ceviche",
+            solver="ceviche_torch",
             plot=True,
         )
 
         norm_refl_profiles = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Hz1",),
             input_port_name="in_port_1",
             input_slice_name="refl_port_1",
             wl_cen=self.sim_cfg["wl_cen"],
@@ -144,7 +144,7 @@ class Bending(N_Ports):
             plot=True,
         )
         norm_monitor_profiles = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Hz1",),
             input_port_name="out_port_1",
             input_slice_name="out_port_1",
             wl_cen=self.sim_cfg["wl_cen"],

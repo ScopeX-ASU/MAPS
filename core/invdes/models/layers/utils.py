@@ -5,9 +5,11 @@ from typing import Callable, List, Tuple
 import matplotlib.patches as patches
 import matplotlib.pylab as plt
 import numpy as np
+import scipy.sparse as sp
+import scipy.sparse.linalg as spl
 import torch
 from autograd import numpy as npa
-from pyutils.general import ensure_dir
+from pyutils.general import ensure_dir, logger
 from scipy.ndimage import zoom
 from torch import Tensor
 
@@ -16,7 +18,8 @@ from core.utils import (
     get_eigenmode_coefficients,
 )
 from thirdparty.ceviche.ceviche import constants
-from thirdparty.ceviche.ceviche.modes import get_modes
+from thirdparty.ceviche.ceviche.fdfd import compute_derivative_matrices
+from thirdparty.ceviche.ceviche.modes import filter_modes, normalize_modes
 
 from .viz import abs as plot_abs
 from .viz import real as plot_real
@@ -812,7 +815,13 @@ def plot_eps_field(
         zoom_eps_center = (0, 0)  # force to be origin if not zoomed
 
     # plot_abs(eps, ax=ax[-1], cmap="Greys", cbar=True, font_size=label_fontsize)
-    plot_abs(torch.ones_like(torch.from_numpy(Ez)), ax=ax[-1], cmap="Greys", cbar=True, font_size=label_fontsize)
+    plot_abs(
+        torch.ones_like(torch.from_numpy(Ez)),
+        ax=ax[-1],
+        cmap="Greys",
+        cbar=True,
+        font_size=label_fontsize,
+    )
     xlabel = np.linspace(
         zoom_eps_center[0] - patch_size[0] / 2,
         zoom_eps_center[0] + patch_size[0] / 2,
@@ -844,41 +853,152 @@ def plot_eps_field(
     plt.close()
 
 
-def insert_mode(omega, dx, x, y, epsr, target=None, npml=0, m=1, filtering=False):
+def solver_eigs(A, Neigs, guess_value=1.0):
+    """solves for `Neigs` eigenmodes of A
+        A:            sparse linear operator describing modes
+        Neigs:        number of eigenmodes to return
+        guess_value:  estimate for the eigenvalues
+    For more info, see https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.eigs.html
+    """
+
+    values, vectors = spl.eigs(A, k=Neigs, sigma=guess_value, v0=None, which="LM")
+
+    return values, vectors
+
+
+def get_modes(
+    eps_cross, omega, dL, npml, m=1, filtering=True, eps_cross_xx=None, pol: str = "Ez"
+):
+    """Solve for the modes of a waveguide cross section
+    ARGUMENTS
+        eps_cross: the permittivity profile of the waveguide
+        omega:     angular frequency of the modes
+        dL:        grid size of the cross section
+        npml:      number of PML points on each side of the cross section
+        m:         number of modes to solve for
+        filtering: whether to filter out evanescent modes
+    RETURNS
+        vals:      array of effective indeces of the modes
+        vectors:   array containing the corresponding mode profiles
+    """
+
+    k0 = omega / constants.C_0
+
+    N = eps_cross.size
+
+    matrices = compute_derivative_matrices(omega, (N, 1), [npml, 0], dL=dL)
+
+    Dxf, Dxb, Dyf, Dyb, Dzf, Dzb = matrices
+
+    diag_eps_r = sp.spdiags(eps_cross.flatten(), [0], N, N)
+    if pol == "Ez":
+        A = diag_eps_r + Dxf.dot(Dxb) * (1 / k0) ** 2
+    elif pol == "Hz":
+        diag_eps_r_xx_inv = sp.spdiags(1 / eps_cross_xx.flatten(), [0], N, N)
+        A = (
+            diag_eps_r
+            + diag_eps_r.dot(Dxf).dot(diag_eps_r_xx_inv).dot(Dxb) * (1 / k0) ** 2
+        )
+
+    n_max = np.sqrt(np.max(eps_cross)) * 0.92
+    vals, vecs = solver_eigs(A, m, guess_value=n_max**2)
+
+    if pol == "Hz":
+        # vecs = (vecs + np.roll(vecs, shift=1, axis=0))/2
+        vecs = np.roll(vecs, shift=1, axis=0)
+
+    if filtering:
+        filter_re = lambda vals: np.real(vals) > 0.0
+        # filter_im = lambda vals: np.abs(np.imag(vals)) <= 1e-12
+        filters = [filter_re]
+        vals, vecs = filter_modes(vals, vecs, filters=filters)
+
+    if vals.size == 0:
+        raise BaseException("Could not find any eigenmodes for this waveguide")
+
+    vecs = normalize_modes(vecs)
+
+    return vals, vecs
+
+
+def insert_mode(omega, dx, x, y, epsr, target=None, npml=0, m="Ez1", filtering=False):
     """Solve for the modes in a cross section of epsr at the location defined by 'x' and 'y'
 
     The mode is inserted into the 'target' array if it is suppled, if the target array is not
     supplied, then a target array is created with the same shape as epsr, and the mode is
     inserted into it.
     """
+    if isinstance(m, int):
+        pol = "Ez"  # by default Ez mode
+        logger.warning("The mode is not specified, by default, it is Ez mode")
+    pol = m[0:2]
+    m = int(m[2:])
     if target is None:
         target = np.zeros(epsr.shape, dtype=complex)
     epsr_cross = epsr[x, y]
+
+    if pol == "Hz":
+        if len(x.shape) == 0:  # x direction slice
+            epsr_cross_xx = epsr_cross
+        elif len(y.shape) == 0:  # y direction slice
+            epsr_cross_xx = (epsr_cross + np.roll(epsr_cross, shift=1)) / 2
+    else:
+        epsr_cross_xx = None
+
+    ## see page 89 in https://empossible.net/wp-content/uploads/2019/08/Lecture-4f-FDFD-Extras.pdf
+    ## E mode: -(Dxf @ Dxb + MU_0 * eps_0 * eps_r) Ez = gamma^2 Ez
+    ## (Dxf @ Dxb / k0^2 + MU_0 * eps_0 / k0^2 * eps_r) Ez = (beta/k0)^2 Ez
+    ## (Dxf @ Dxb / k0^2 + 1/omega^2 * eps_r) Ez = (beta/k0)^2 * Ez
+    # gamma = j*k0*n_eff = j*beta
+    ## beta = neff * k0 = neff * 2pi / lambda = neff * omega / c
+    ## -(Dxf @ Dxb / k0^2 + eps_r) Ez = -beta*2 * Ez
+    ## (Dxf @ Dxb + eps_r) Ez = beta*2 * Ez
     # Solves the eigenvalue problem:
     #    [ ∂²/∂x² / (k₀²) + εr ] E = (β²/k₀²) E
-    vals, e = get_modes(epsr_cross, omega, dx, npml, m=m, filtering=filtering)
+    #    [ ∂²/∂x² / (k₀²) + εr ] E = (β²/k₀²) E
+    ## eigen value is effective index n_eff^2
+    vals, fz = get_modes(
+        epsr_cross,
+        omega,
+        dx,
+        npml,
+        m=m,
+        filtering=filtering,
+        eps_cross_xx=epsr_cross_xx,
+        pol=pol,
+    )
     # Compute transverse magnetic field as:
     #    H = β / (μ₀ ω) * E
     # where the β term originates from the spatial derivative in the propagation
     # direction.
     ## remove center phase
-    if e.shape[0] % 2 == 0:
+    if fz.shape[0] % 2 == 0:
         center_phase = np.exp(
             -1j
             * np.angle(
                 (
-                    e[e.shape[0] // 2 - 1 : e.shape[0] // 2]
-                    + e[e.shape[0] // 2 : e.shape[0] // 2 + 1]
+                    fz[fz.shape[0] // 2 - 1 : fz.shape[0] // 2]
+                    + fz[fz.shape[0] // 2 : fz.shape[0] // 2 + 1]
                 )
                 / 2
             )
         )
     else:
-        center_phase = np.exp(-1j * np.angle(e[e.shape[0] // 2 : e.shape[0] // 2 + 1]))
-    e = e * center_phase
+        center_phase = np.exp(
+            -1j * np.angle(fz[fz.shape[0] // 2 : fz.shape[0] // 2 + 1])
+        )
+    fz = fz * center_phase
 
+    ## for Ez pol, this e is Ez, h is tangential field, i.e., for x direction: hy, for y direction: hx
     k0 = omega / constants.C_0
     beta = np.real(np.sqrt(vals, dtype=complex)) * k0
-    h = beta / omega / constants.MU_0 * e
-    target[x, y] = np.atleast_2d(e)[:, m - 1].squeeze()
+    if pol == "Ez":
+        e = fz
+        h = beta / omega / constants.MU_0 * e
+        target[x, y] = np.atleast_2d(e)[:, m - 1].squeeze()
+    elif pol == "Hz":
+        h = fz
+        e = h * omega * constants.MU_0 / beta
+        target[x, y] = np.atleast_2d(h)[:, m - 1].squeeze()
+
     return h[:, m - 1], e[:, m - 1], beta, target

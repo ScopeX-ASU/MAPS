@@ -1,25 +1,21 @@
 """
 Date: 2024-10-10 19:50:23
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-12-20 04:51:02
+LastEditTime: 2025-01-05 15:04:31
 FilePath: /MAPS/core/fdfd/solver.py
 """
 
 import cupy as cp
 import numpy as np
-import scipy.sparse as sp
+import scipy.sparse.linalg as spl
 import torch
+from pyMKL import pardisoSolver
+from pyutils.general import logger
+from torch import Tensor
+
+from thirdparty.ceviche.ceviche.constants import *
 from thirdparty.ceviche.ceviche.solvers import solve_linear
 from thirdparty.ceviche.ceviche.utils import make_sparse
-from cupyx.scipy.sparse.linalg import factorized, spsolve
-from pyMKL import pardisoSolver
-from pyutils.general import print_stat, TimerCtx
-from torch import Tensor
-from thirdparty.ceviche.ceviche.constants import *
-from .utils import torch_sparse_to_scipy_sparse
-from pyutils.general import logger
-import scipy.sparse.linalg as spl
-import time
 
 try:
     from pyMKL import pardisoSolver
@@ -261,7 +257,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         ctx,
         entries_a,
         indices_a,
-        eps_diag: Tensor,
+        eps_matrix: Tensor,  # for Ez, this is the diagonal of A, for Hz, this should be a sparse matrix
         omega: float,
         b: np.ndarray | Tensor,
         solver_instance,
@@ -273,10 +269,12 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         numerical_solver,
         shape,
         use_autodiff=False,
+        eps: Tensor | None = None,  # 2D array of eps_r, can be used in neural solver
+        pol: str = "Ez",  # Ez or Hz
     ):
         ### entries_a: values of the sparse matrix A
         ### indices_a: row/column indices of the sparse matrix A
-        ### eps_diag: diagonal of A, e.g., -omega**2 * epr_0 * eps_r
+        ### eps_diag: For Ez diagonal of A, e.g., -omega**2 * epr_0 * eps_r
         ctx.use_autodiff = use_autodiff
         if use_autodiff:
             assert (
@@ -292,17 +290,18 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             Jz = Jz.to(torch.complex64)
         if isinstance(b, Tensor):
             b = b.cpu().numpy()
-        A = make_sparse(entries_a, indices_a, (eps_diag.shape[0], eps_diag.shape[0]))
+        N = np.prod(shape)
+        A = make_sparse(entries_a, indices_a, (N, N))
         # epsilon = torch.tensor([EPSILON_0,], dtype=eps_diag.dtype, device=eps_diag.device)
         # omega = torch.tensor([omega,], dtype=eps_diag.dtype, device=eps_diag.device)
-        eps = (eps_diag / (-EPSILON_0 * omega**2)).reshape(shape) # here there is an assumption that the eps_vec is a square matrix
-        Jz = Jz.reshape(eps.shape)
+        # eps = (eps_diag / (-EPSILON_0 * omega**2)).reshape(shape) # here there is an assumption that the eps_vec is a square matrix
+        Jz = Jz.reshape(shape)
 
         if Pl is not None and Pr is not None:
             A = Pl @ A @ Pr
             b = Pl @ b
-            symmetry = True 
-            
+            symmetry = True
+
         else:
             symmetry = False
         # with TimerCtx() as t:
@@ -336,7 +335,9 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                 solver_type=solver_type,
                 neural_solver=fwd_solver,
                 eps=eps,
-                iterative_method="bicgstab" if symmetry else "lgmres",  # or other methods
+                iterative_method="bicgstab"
+                if symmetry
+                else "lgmres",  # or other methods
                 symmetry=symmetry,
                 maxiter=1000,
                 rtol=1e-2,
@@ -346,15 +347,17 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         if Pl is not None and Pr is not None:
             x = Pr @ x
         if not isinstance(x, torch.Tensor):
-            x = torch.from_numpy(x).to(torch.complex128).to(eps_diag.device)
+            x = torch.from_numpy(x).to(torch.complex128).to(eps_matrix.device)
         ctx.entries_a = entries_a
         ctx.indices_a = np.flip(indices_a, axis=0)
-        ctx.save_for_backward(x, eps_diag)
+        ctx.save_for_backward(x, eps_matrix)
         ctx.solver_instance = solver_instance
         ctx.port_name = port_name
         ctx.mode = mode
         ctx.Pl = Pl
         ctx.Pr = Pr
+        ctx.shape = shape
+        ctx.pol = pol
         ctx.adj_solver = (
             neural_solver["adj_solver"] if neural_solver is not None else None
         )
@@ -365,28 +368,45 @@ class SparseSolveTorchFunction(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad):
         if ctx.use_autodiff:
-            return None, None, None, None, None, None, None, None, None, None, None, None, None, None
+            return (
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
         else:
             adj_solver = ctx.adj_solver
             numerical_solver = ctx.numerical_solver
             eps = ctx.eps
-            x, eps_diag = ctx.saved_tensors
+            shape = ctx.shape
+            x, eps_matrix = ctx.saved_tensors
             entries_a = ctx.entries_a
             indices_a = ctx.indices_a
             solver_instance = ctx.solver_instance
             port_name = ctx.port_name
             mode = ctx.mode
+            N = np.prod(shape)
             Pl, Pr = ctx.Pl, ctx.Pr
-            A_t = make_sparse(
-                entries_a, indices_a, (eps_diag.shape[0], eps_diag.shape[0])
-            )
+            A_t = make_sparse(entries_a, indices_a, (N, N))
             grad = grad.cpu().numpy().astype(np.complex128)
             adj_src = grad.conj()
             if (port_name != "Norm" and mode != "Norm") or (
                 port_name != "adj" and mode != "adj"
             ):
                 solver_instance.adj_src[(port_name, mode)] = (
-                    torch.from_numpy(adj_src).to(torch.complex128).to(eps_diag.device)
+                    torch.from_numpy(adj_src).to(torch.complex128).to(eps_matrix.device)
                 )
             ## this adj_src = "-v" in ceviche
             # print_stat(adj_src, "my adjoint source")
@@ -394,7 +414,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             if Pl is not None and Pr is not None:
                 A_t = Pr.T @ A_t @ Pl.T
                 adj_src = Pr.T @ adj_src
-                symmetry = True 
+                symmetry = True
             else:
                 symmetry = False
             if numerical_solver == "solve_direct":
@@ -404,9 +424,11 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                 # print("we are now using pure neural solver for adjoint", flush=True)
                 if isinstance(adj_src, np.ndarray):
                     adj_src = (
-                        torch.from_numpy(adj_src).to(torch.complex64).to(eps.device)
+                        torch.from_numpy(adj_src)
+                        .to(torch.complex64)
+                        .to(eps_matrix.device)
                     )
-                adj_src = adj_src.reshape(eps.shape)
+                adj_src = adj_src.reshape(shape)
                 adj = adj_solver(
                     eps.unsqueeze(0),
                     adj_src.unsqueeze(0),
@@ -433,9 +455,22 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             if Pl is not None and Pr is not None:
                 adj = Pl.T @ adj
             if not isinstance(adj, torch.Tensor):
-                adj = torch.from_numpy(adj).to(torch.complex128).to(eps_diag.device)
+                adj = torch.from_numpy(adj).to(torch.complex128).to(eps_matrix.device)
             solver_instance.adj_field[(port_name, mode)] = adj
-            grad_epsilon = -adj.mul_(x).to(eps_diag.device).real
+
+            if ctx.pol == "Ez":
+                grad_epsilon = -(adj.mul_(x).real.to(eps_matrix.device))
+            elif ctx.pol == "Hz":
+                indices = eps_matrix.indices()
+                # print(rows, cols, eps_matrix)
+                grad_epsilon = -(
+                    adj[indices[0]].mul_(x[indices[1]]).real.to(eps_matrix.device)
+                )
+                grad_epsilon = torch.sparse_coo_tensor(
+                    indices, grad_epsilon, eps_matrix.shape
+                )
+            else:
+                raise ValueError(f"pol {ctx.pol} not supported")
             ## this grad_epsilon = adj * x in ceviche
 
             # print(f"my grad eps", grad_epsilon)
@@ -446,7 +481,24 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             # else:
 
             grad_b = None
-            return None, None, grad_epsilon, None, grad_b, None, None, None, None, None, None, None, None, None
+            return (
+                None,
+                None,
+                grad_epsilon,
+                None,
+                grad_b,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
 
 
 class SparseSolveTorch(torch.nn.Module):
@@ -466,16 +518,33 @@ class SparseSolveTorch(torch.nn.Module):
         self,
         entries_a,
         indices_a,
-        eps_diag: Tensor,
+        eps_matrix: Tensor,
         omega: float,
         b: np.ndarray | Tensor,
         port_name,
         mode,
         Pl=None,
         Pr=None,
+        eps: Tensor | None = None,
+        pol: str = "Ez",
     ):
         x = SparseSolveTorchFunction.apply(
-            entries_a, indices_a, eps_diag, omega, b, self, port_name, mode, Pl, Pr, self.neural_solver, self.numerical_solver, self.shape, self.use_autodiff
+            entries_a,
+            indices_a,
+            eps_matrix,
+            omega,
+            b,
+            self,
+            port_name,
+            mode,
+            Pl,
+            Pr,
+            self.neural_solver,
+            self.numerical_solver,
+            self.shape,
+            self.use_autodiff,
+            eps,
+            pol,
         )
         return x
 

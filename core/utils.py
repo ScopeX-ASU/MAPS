@@ -249,7 +249,10 @@ def get_eigenmode_coefficients(
     direction: str = "x",
     autograd=False,
     energy=False,
-):
+    pol: str = "Ez",
+):  
+    ### for Ez polarization: hx, hy, ez, ht_m is hx or hy, et_m is ez
+    ### for Hx polarization: ex, ey, hz, ht_m is hz, et_m is ex or ey
     if isinstance(ht_m, np.ndarray) and isinstance(hx, torch.Tensor):
         ht_m = torch.from_numpy(ht_m).to(ez.device)
         et_m = torch.from_numpy(et_m).to(ez.device)
@@ -265,7 +268,12 @@ def get_eigenmode_coefficients(
 
     if direction[0] == "x":
         h = (0.0, ravel(hy[monitor]), 0)
-        hm = (0.0, ht_m, 0.0)
+        if pol == "Ez":
+            hm = (0.0, ht_m, 0.0)
+            em = (0.0, 0.0, et_m)
+        elif pol == "Hz":
+            hm = (0.0, 0.0, ht_m)
+            em = (0.0, -et_m, 0.0)
         # The E-field is not co-located with the H-field in the Yee cell. Therefore,
         # we must sample at two neighboring pixels in the propataion direction and
         # then interpolate:
@@ -273,14 +281,21 @@ def get_eigenmode_coefficients(
 
     elif direction[0] == "y":
         h = (ravel(hx[monitor]), 0, 0)
-        hm = (-ht_m, 0.0, 0.0)
+        if pol == "Ez":
+            hm = (-ht_m, 0.0, 0.0)
+            em = (0.0, 0.0, et_m)
+        elif pol == "Hz":
+            hm = (0.0, 0.0, ht_m)
+            em = (-et_m, 0.0, 0.0)
         # The E-field is not co-located with the H-field in the Yee cell. Therefore,
         # we must sample at two neighboring pixels in the propataion direction and
         # then interpolate:
         e_yee_shifted = grid_average(ez, monitor, direction, autograd=autograd)
 
     e = (0.0, 0.0, e_yee_shifted)
-    em = (0.0, 0.0, et_m)
+
+    if pol == "Hz": #swap e and h
+        e, h = h, e
 
     # print("this is the type of em: ", type(em[2])) # ndarray
     # print("this is the type of hy: ", type(hy[monitor])) # torch.Tensor
@@ -1814,6 +1829,7 @@ def get_flux(
     grid_step: float = 0.05,
     direction: str = "x",
     autograd=False,
+    pol: str = "Ez",
 ):
     if autograd:
         ravel = npa.ravel
@@ -1829,6 +1845,7 @@ def get_flux(
         if monitor is None:
             # no need to slice and ravel
             h = (0, hy, 0)
+   
         else:
             h = (0, ravel(hy[monitor]), 0)
     elif direction[0] == "y":
@@ -1846,6 +1863,9 @@ def get_flux(
 
     e = (0.0, 0.0, e_yee_shifted)
 
+    if pol == "Hz":
+        ## swap e and h
+        e, h = h, e
     s = 0.5 * real(overlap(e, h, dl=grid_step * 1e-6, direction=direction))
 
     return s

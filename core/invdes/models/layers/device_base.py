@@ -1,7 +1,7 @@
 """
 Date: 2024-10-02 20:59:04
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-04 01:11:30
+LastEditTime: 2025-01-05 15:07:09
 FilePath: /MAPS/core/invdes/models/layers/device_base.py
 """
 
@@ -13,12 +13,11 @@ from typing import Tuple
 import meep as mp
 import numpy as np
 import torch
-# from ceviche.modes import insert_mode
-from ceviche.constants import C_0
 from pyutils.config import Config
 from pyutils.general import ensure_dir
 
 from core.fdfd import fdfd_ez as fdfd_ez_torch
+from core.fdfd import fdfd_hz as fdfd_hz_torch
 from core.invdes.models.layers.utils import modulation_fn_dict
 from core.utils import (
     Si_eps,
@@ -26,12 +25,12 @@ from core.utils import (
     Slice,
     get_flux,
 )
-from thirdparty.ceviche.ceviche import fdfd_ez
+from thirdparty.ceviche.ceviche import fdfd_ez, fdfd_hz
+from thirdparty.ceviche.ceviche.constants import C_0
 
 from .utils import (
     apply_regions_gpu,
     get_grid,
-    get_temp_related_eps,
     insert_mode,
     plot_eps_field,
 )
@@ -538,20 +537,18 @@ class N_Ports(BaseDevice):
         direction: str = "x+",
     ):
         ## extend the farfield from range[0] to range[1] um along the direction
-        
+
         region_center = [
             int(round((c + offset / 2) / self.grid_step))
             for c, offset in zip(center, self.cell_size)
         ]
         half_width_x = int(round(size[0] / 2 / self.grid_step))
         half_width_y = int(round(size[1] / 2 / self.grid_step))
-        xs = np.arange(
-            region_center[0] - half_width_x, region_center[0] + half_width_x
-        )
+        xs = np.arange(region_center[0] - half_width_x, region_center[0] + half_width_x)
         ys = np.arange(
-                region_center[1] - half_width_y,
-                region_center[1] + half_width_y,
-            )
+            region_center[1] - half_width_y,
+            region_center[1] + half_width_y,
+        )
 
         region = Slice(
             x=xs[:, None],
@@ -572,7 +569,6 @@ class N_Ports(BaseDevice):
         )
 
         return region
-
 
     def build_farfield_region_ext(
         self,
@@ -639,7 +635,6 @@ class N_Ports(BaseDevice):
 
         return region
 
-
     def build_near2far_slice(
         self,
         slice_name: str = "nearfield_1",
@@ -651,7 +646,10 @@ class N_Ports(BaseDevice):
         ## need to check the slice of eps is homogeneous medium
         eps_slice = self.epsilon_map[monitor_slice.x, monitor_slice.y]
         if not (np.unique(eps_slice).size == 1):
-            print(f"Near2far slice {slice_name} is not in a homogeneous medium", flush=True)
+            print(
+                f"Near2far slice {slice_name} is not in a homogeneous medium",
+                flush=True,
+            )
         return monitor_slice
 
     def build_radiation_monitor(
@@ -861,7 +859,7 @@ class N_Ports(BaseDevice):
         n_wl: int = 1,
         grid_step=None,
         power_scales: dict = None,
-        source_modes: Tuple[int] = (1,),
+        source_modes: Tuple[int] = ("Ez1",),
     ):
         grid_step = grid_step or self.grid_step
         dl = grid_step * 1e-6
@@ -926,11 +924,22 @@ class N_Ports(BaseDevice):
             source_profiles[(wl, mode)] = [source, ht_m, et_m, power_scale]
         return source_profiles
 
-    def create_simulation(self, omega, dl, eps, NPML, solver="ceviche"):
+    def create_simulation(
+        self, omega, dl, eps, NPML, solver="ceviche", pol: str = "Ez"
+    ):
         if solver == "ceviche":
-            return fdfd_ez(omega, dl, eps, NPML)
+            if pol == "Ez":
+                return fdfd_ez(omega, dl, eps, NPML)
+            elif pol == "Hz":
+                return fdfd_hz(omega, dl, eps, NPML)
+            else:
+                raise ValueError(f"Pol {pol} not supported")
         elif solver == "ceviche_torch":
-            return fdfd_ez_torch(
+            if pol == "Ez":
+                fdfd_fn = fdfd_ez_torch
+            elif pol == "Hz":
+                fdfd_fn = fdfd_hz_torch
+            return fdfd_fn(
                 omega,
                 dl,
                 eps,
@@ -943,7 +952,13 @@ class N_Ports(BaseDevice):
             raise ValueError(f"Solver {solver} not supported")
 
     def solve_ceviche(
-        self, eps, source, wl: float = 1.55, grid_step=None, solver: str = "ceviche"
+        self,
+        eps,
+        source,
+        wl: float = 1.55,
+        grid_step=None,
+        solver: str = "ceviche",
+        pol: str = "Ez",
     ):
         """
         _summary_
@@ -955,14 +970,22 @@ class N_Ports(BaseDevice):
         grid_step = grid_step or self.grid_step
         dl = grid_step * 1e-6
         # simulation = fdfd_ez(omega, dl, eps, [self.NPML[0], self.NPML[1]])
-        simulation = self.create_simulation(omega, dl, eps, self.NPML, solver=solver)
+        simulation = self.create_simulation(
+            omega, dl, eps, self.NPML, solver=solver, pol=pol
+        )
+
         if hasattr(simulation, "solver"):  # which means that it is a torch simulation
             with torch.no_grad():
-                Hx, Hy, Ez = simulation.solve(source, port_name="Norm", mode="Norm")
+                Fx, Fy, Fz = simulation.solve(source, port_name="Norm", mode="Norm")
         else:
-            Hx, Hy, Ez = simulation.solve(source)
+            Fx, Fy, Fz = simulation.solve(source)
 
-        return Hx, Hy, Ez
+        if pol == "Ez":
+            return {"Hx": Fx, "Hy": Fy, "Ez": Fz}
+        elif pol == "Hz":
+            return {"Ex": Fx, "Ey": Fy, "Hz": Fz}
+        else:
+            raise ValueError(f"Unknown simulation {type(simulation)} type")
 
     def solve(
         self,
@@ -991,10 +1014,16 @@ class N_Ports(BaseDevice):
             for (wl, mode), (source, _, _, _) in source_profiles.items():
                 # current_eps = get_temp_related_eps(eps, wl, temp)
                 current_eps = eps
-                Hx, Hy, Ez = self.solve_ceviche(
-                    current_eps, source, wl=wl, grid_step=grid_step, solver=solver
+                pol = mode[:2]  # "Ez1" -> "Ez"
+                field_sol = self.solve_ceviche(
+                    current_eps,
+                    source,
+                    wl=wl,
+                    grid_step=grid_step,
+                    solver=solver,
+                    pol=pol,
                 )
-                fields[(wl, mode)] = {"Hx": Hx, "Hy": Hy, "Ez": Ez}
+                fields[(wl, mode)] = field_sol
             return fields
         else:
             raise ValueError(f"Solver {solver} not supported")
@@ -1002,7 +1031,7 @@ class N_Ports(BaseDevice):
     @lru_cache(maxsize=128)
     def build_norm_sources(
         self,
-        source_modes: Tuple[int] = (1,),
+        source_modes: Tuple[str] = ("Ez1",),
         input_port_name: str = "in_port_1",
         input_slice_name: str = "in_port_1",
         wl_cen=1.55,
@@ -1069,8 +1098,16 @@ class N_Ports(BaseDevice):
 
             input_SCALE = {}
             for k in source_profiles:
-                Hx, Hy, Ez = fields[k]["Hx"], fields[k]["Hy"], fields[k]["Ez"]
-                # _, ht_m, et_m, _ = monitor_profiles[k]
+                mode = k[1]
+                pol = mode[:2]
+                if pol == "Ez":
+                    Fx, Fy, Fz = fields[k]["Hx"], fields[k]["Hy"], fields[k]["Ez"]
+                elif pol == "Hz":
+                    Fx, Fy, Fz = fields[k]["Ex"], fields[k]["Ey"], fields[k]["Hz"]
+                else:
+                    raise ValueError(f"Unknown polarization {pol}")
+
+                # _, ht_m, et_m, _ = source_profiles[k]
                 # print("this is the type of Hx:", type(Hx), flush=True)
                 # print("this is the type of Hy:", type(Hy), flush=True)
                 # print("this is the type of Ez:", type(Ez), flush=True)
@@ -1079,27 +1116,29 @@ class N_Ports(BaseDevice):
                 # ht_m = torch.from_numpy(ht_m).to(Ez.device)
                 # et_m = torch.from_numpy(et_m).to(Ez.device)
                 # eigen_energy = get_eigenmode_coefficients(
-                #     Hx,
-                #     Hy,
-                #     Ez,
+                #     Fx,
+                #     Fy,
+                #     Fz,
                 #     ht_m,
                 #     et_m,
                 #     output_slice,
                 #     grid_step=self.grid_step,
                 #     direction=direction,
                 #     energy=True,
+                #     pol=pol,
                 # )
                 # print("eigen_energy:", eigen_energy)
                 ## used to verify eigen mode coefficients, need to be the same as eigen energy
                 flux = get_flux(
-                    Hx,
-                    Hy,
-                    Ez,
+                    Fx,
+                    Fy,
+                    Fz,
                     output_slice,
                     grid_step=self.grid_step,
                     direction=direction,
+                    pol=pol,
                 )
-                # print("flux:", flux)
+                # print("norm flux:", flux)
                 if isinstance(flux, torch.Tensor):
                     flux = flux.item()
                 input_SCALE[k] = np.abs(flux)
@@ -1111,10 +1150,11 @@ class N_Ports(BaseDevice):
             k: (power / v) ** 0.5 for k, v in input_scale.items()
         }  # normalize the source power to target power for all wavelengths and modes
 
-        Ez = list(fields.values())[0]["Ez"]
-        if isinstance(Ez, torch.Tensor):
+        pol = list(fields.keys())[0][1][:2]  # [wl, mode] get pol from mode
+        Fz = list(fields.values())[0][pol]
+        if isinstance(Fz, torch.Tensor):
             source_profiles = {
-                k: [torch.from_numpy(i).to(Ez.device) for i in v[:-1]] + [v[-1]]
+                k: [torch.from_numpy(i).to(Fz.device) for i in v[:-1]] + [v[-1]]
                 for k, v in source_profiles.items()
             }
         source_profiles = {
@@ -1125,7 +1165,7 @@ class N_Ports(BaseDevice):
 
         if plot:
             plot_eps_field(
-                Ez * list(input_scale.values())[0],
+                Fz * list(input_scale.values())[0],
                 in_port_eps,
                 zoom_eps_factor=1,
                 filepath=os.path.join(
@@ -1135,7 +1175,7 @@ class N_Ports(BaseDevice):
                 x_width=self.cell_size[0],
                 y_height=self.cell_size[1],
                 monitors=[(input_slice, "r"), (output_slice, "b")],
-                title=f"|Ez|^2, Norm run at {input_slice_name}",
+                title=f"|{pol}|^2, Norm run at {input_slice_name}",
             )
         if self.port_sources_dict.get(input_slice_name) is not None:
             self.port_sources_dict[input_slice_name].update(source_profiles)

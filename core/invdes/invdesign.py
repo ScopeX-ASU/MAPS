@@ -124,13 +124,15 @@ class InvDesign:
                 if plot_filename.endswith(".png"):
                     plot_filename = plot_filename[:-4]
                 for j in range(len(objs)):
+                    # (port_name, wl, mode, temp), extract pol from mode, e.g., Ez1 -> Ez
+                    pol = field_keys[j][2][:2]
                     self.devOptimization.plot(
                         eps_map=self.devOptimization._eps_map,
                         obj=results["breakdown"][objs[j]]["value"],
                         plot_filename=plot_filename + f"_{i}" + f"_{objs[j]}.jpg",
                         # field_key=("in_port_1", 1.55, 1),
                         field_key=field_keys[j],
-                        field_component="Ez",
+                        field_component=pol,
                         # in_port_name="in_port_1",
                         in_port_name=in_port_names[j],
                         # exclude_port_names=["refl_port_2"],
