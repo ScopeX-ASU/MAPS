@@ -14,6 +14,7 @@ class MetaLens(N_Ports):
         self,
         material_r: str = "Si",  # waveguide material
         material_bg: str = "Air",  # background material
+        material_sub: str = "SiO2",  # substrate material
         sim_cfg: dict = {
             "border_width": [
                 0,
@@ -47,6 +48,7 @@ class MetaLens(N_Ports):
         wl_cen = sim_cfg["wl_cen"]
         eps_r_fn = material_fn_dict[material_r]
         eps_bg_fn = material_fn_dict[material_bg]
+        eps_sub_fn = material_fn_dict[material_sub]
         box_size = [n_layers * ridge_height_max, aperture]
         size_x = box_size[0] + port_len[0] + port_len[1] + substrate_depth
         size_y = aperture
@@ -67,7 +69,7 @@ class MetaLens(N_Ports):
                 direction="x",
                 center=[-size_x / 2 + port_len[0] / 2 + 0.5 / self.resolution, 0],
                 size=[port_len[0] + 1 / self.resolution, port_width[0]],
-                eps=eps_bg_fn(wl_cen),
+                eps=eps_sub_fn(wl_cen),
             ),
             out_port_1=dict(
                 type="box",
@@ -83,7 +85,7 @@ class MetaLens(N_Ports):
                     type="box",
                     center=[-size_x / 2 + port_len[0] + substrate_depth / 2, 0],
                     size=[substrate_depth, aperture],  # some margin
-                    eps=eps_r_fn(wl_cen),
+                    eps=eps_sub_fn(wl_cen),
                 )
             )
         else:
@@ -122,7 +124,7 @@ class MetaLens(N_Ports):
         src_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="in_port_1",
-            rel_loc=0.6,
+            rel_loc=0.98,
             rel_width=float("inf"),
             direction="x+",
         )
@@ -155,19 +157,19 @@ class MetaLens(N_Ports):
             - 0.5 / self.resolution
         )
 
-        nearfield_slice_2 = self.build_near2far_slice(
-            slice_name="nearfield_2",
-            center=(nf1_center[0] - nf2_width / 2, nf1_size[1] / 2),
-            size=(nf2_width, 0),
-            direction="y+",
-        )
+        # nearfield_slice_2 = self.build_near2far_slice(
+        #     slice_name="nearfield_2",
+        #     center=(nf1_center[0] - nf2_width / 2, nf1_size[1] / 2),
+        #     size=(nf2_width, 0),
+        #     direction="y+",
+        # )
 
-        nearfield_slice_3 = self.build_near2far_slice(
-            slice_name="nearfield_3",
-            center=(nf1_center[0] - nf2_width / 2, -nf1_size[1] / 2),
-            size=(nf2_width, 0),
-            direction="y-",
-        )
+        # nearfield_slice_3 = self.build_near2far_slice(
+        #     slice_name="nearfield_3",
+        #     center=(nf1_center[0] - nf2_width / 2, -nf1_size[1] / 2),
+        #     size=(nf2_width, 0),
+        #     direction="y-",
+        # )
 
         # nearfield_slice_4 = self.build_near2far_slice(
         #     slice_name="nearfield_4",
@@ -195,7 +197,7 @@ class MetaLens(N_Ports):
         surface_x = (
             self.port_cfgs["out_port_1"]["center"][0]
             - self.port_cfgs["out_port_1"]["size"][0] / 2
-        ) # this is the x coordinate of the right edge of the metalens
+        )  # this is the x coordinate of the right edge of the metalens
         out_port_end = (
             self.port_cfgs["out_port_1"]["center"][0]
             + self.port_cfgs["out_port_1"]["size"][0] / 2
@@ -217,51 +219,73 @@ class MetaLens(N_Ports):
         maximum_x_coord = [
             (surface_x + farfield_dx[1]) for farfield_dx in self.farfield_dxs
         ]
-        maximum_x_coord = max(maximum_x_coord) + 1 # add additional 1 to leave some margin
+        maximum_x_coord = (
+            max(maximum_x_coord) + 1
+        )  # add additional 1 to leave some margin
         total_farfield_region = self.build_farfield_region(
-                region_name="total_farfield_region",
-                direction="x+",
-                center=(
-                    (out_port_end + maximum_x_coord) / 2,
-                    0,
+            region_name="total_farfield_region",
+            direction="x+",
+            center=(
+                (out_port_end + maximum_x_coord) / 2,
+                0,
+            ),
+            size=(
+                maximum_x_coord - out_port_end,
+                max(
+                    self.box_size[1]
+                    + self.sim_cfg["border_width"][2]
+                    + self.sim_cfg["border_width"][3],
+                    self.max_port_width,
                 ),
-                size=(
-                    maximum_x_coord - out_port_end, 
-                    max(self.box_size[1] + self.sim_cfg["border_width"][2] + self.sim_cfg["border_width"][3], self.max_port_width)
-                ),
+            ),
         )
 
         farfield_rad_trans_yp_region = self.build_farfield_region(
-                region_name="rad_trans_farfield_yp",
-                direction="y",
-                center=(
-                    (out_port_end + maximum_x_coord) / 2,
-                    max(self.box_size[1] + self.sim_cfg["border_width"][2] + self.sim_cfg["border_width"][3], self.max_port_width) / 2 - self.sim_cfg["PML"][1] - 0.1,
-                ),
-                size=(
-                    maximum_x_coord - out_port_end - 0.5, 
-                    2 * self.grid_step,
-                ),
+            region_name="rad_trans_farfield_yp",
+            direction="y",
+            center=(
+                (out_port_end + maximum_x_coord) / 2,
+                max(
+                    self.box_size[1]
+                    + self.sim_cfg["border_width"][2]
+                    + self.sim_cfg["border_width"][3],
+                    self.max_port_width,
+                )
+                / 2
+                - self.sim_cfg["PML"][1]
+                - 0.1,
+            ),
+            size=(
+                maximum_x_coord - out_port_end - 0.5,
+                2 * self.grid_step,
+            ),
         )
-        
 
         farfield_rad_trans_ym_region = self.build_farfield_region(
-                region_name="rad_trans_farfield_ym",
-                direction="y",
-                center=(
-                    (out_port_end + maximum_x_coord) / 2,
-                    -max(self.box_size[1] + self.sim_cfg["border_width"][2] + self.sim_cfg["border_width"][3], self.max_port_width) / 2 + self.sim_cfg["PML"][1] + 0.1,
-                ),
-                size=(
-                    maximum_x_coord - out_port_end - 0.5, 
-                    2 * self.grid_step,
-                ),
+            region_name="rad_trans_farfield_ym",
+            direction="y",
+            center=(
+                (out_port_end + maximum_x_coord) / 2,
+                -max(
+                    self.box_size[1]
+                    + self.sim_cfg["border_width"][2]
+                    + self.sim_cfg["border_width"][3],
+                    self.max_port_width,
+                )
+                / 2
+                + self.sim_cfg["PML"][1]
+                + 0.1,
+            ),
+            size=(
+                maximum_x_coord - out_port_end - 0.5,
+                2 * self.grid_step,
+            ),
         )
         return (
             src_slice,
             nearfield_slice_1,
-            nearfield_slice_2,
-            nearfield_slice_3,
+            # nearfield_slice_2,
+            # nearfield_slice_3,
             refl_slice,
             # farfield_slices,
             radiation_monitor,
