@@ -1,7 +1,7 @@
 """
 Date: 2024-10-02 20:59:04
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-05 15:07:09
+LastEditTime: 2025-01-05 18:36:35
 FilePath: /MAPS/core/invdes/models/layers/device_base.py
 """
 
@@ -890,38 +890,39 @@ class N_Ports(BaseDevice):
         wl_cen: float = 1.55,
         wl_width: float = 0,
         n_wl: int = 1,
+        source_modes: Tuple[str] = ("Ez1",),
         grid_step=None,
         power_scales: dict = None,
         direction: str = "x+",
     ):
         grid_step = grid_step or self.grid_step
         source_profiles = {}
-        mode = 1  # placeholder, by default treat it as mode 1
         offset = -1 if direction[1] == "+" else 1
         for wl in np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl):
-            source = np.zeros_like(eps, dtype=np.complex64)
-            if direction[0] == "y":  # horizontal slice
-                source[:, slice.y] = 1
-                source[:, slice.y + offset] = np.exp(
-                    -1j * 2 * np.pi / wl_cen * grid_step - 1j * np.pi
-                )
-            elif direction[0] == "x":  # vertical slice
-                source[slice.x, :] = 1
-                source[slice.x + offset, :] = np.exp(
-                    -1j * 2 * np.pi / wl_cen * grid_step - 1j * np.pi
-                )
+            for source_mode in source_modes:
+                source = np.zeros_like(eps, dtype=np.complex64)
+                if direction[0] == "y":  # horizontal slice
+                    source[:, slice.y] = 1
+                    source[:, slice.y + offset] = np.exp(
+                        -1j * 2 * np.pi / wl_cen * grid_step - 1j * np.pi
+                    )
+                elif direction[0] == "x":  # vertical slice
+                    source[slice.x, :] = 1
+                    source[slice.x + offset, :] = np.exp(
+                        -1j * 2 * np.pi / wl_cen * grid_step - 1j * np.pi
+                    )
 
-            ht_m = et_m = source.reshape(-1)
-            if power_scales is not None:
-                power_scale = power_scales[
-                    (wl, mode)
-                ]  # use direction as a placeholder for mode
-                ht_m = et_m = et_m * power_scale
-                source = source * power_scale
-            else:
-                power_scale = 1
+                ht_m = et_m = source.reshape(-1)
+                if power_scales is not None:
+                    power_scale = power_scales[
+                        (wl, source_mode)
+                    ]  # use direction as a placeholder for mode
+                    ht_m = et_m = et_m * power_scale
+                    source = source * power_scale
+                else:
+                    power_scale = 1
 
-            source_profiles[(wl, mode)] = [source, ht_m, et_m, power_scale]
+                source_profiles[(wl, source_mode)] = [source, ht_m, et_m, power_scale]
         return source_profiles
 
     def create_simulation(
@@ -1086,6 +1087,7 @@ class N_Ports(BaseDevice):
                     wl_cen=wl_cen,
                     wl_width=wl_width,
                     n_wl=n_wl,
+                    source_modes=source_modes,
                     power_scales=power_scales,
                     direction=direction,
                 )
