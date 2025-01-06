@@ -250,7 +250,7 @@ def get_eigenmode_coefficients(
     autograd=False,
     energy=False,
     pol: str = "Ez",
-):  
+):
     ### for Ez polarization: hx, hy, ez, ht_m is hx or hy, et_m is ez
     ### for Hx polarization: ex, ey, hz, ht_m is hz, et_m is ex or ey
     if isinstance(ht_m, np.ndarray) and isinstance(hx, torch.Tensor):
@@ -277,7 +277,7 @@ def get_eigenmode_coefficients(
         # The E-field is not co-located with the H-field in the Yee cell. Therefore,
         # we must sample at two neighboring pixels in the propataion direction and
         # then interpolate:
-        e_yee_shifted = grid_average(ez, monitor, direction, autograd=autograd)
+        e_yee_shifted = grid_average(ez, monitor, direction, autograd=autograd, pol=pol)
 
     elif direction[0] == "y":
         h = (ravel(hx[monitor]), 0, 0)
@@ -290,11 +290,11 @@ def get_eigenmode_coefficients(
         # The E-field is not co-located with the H-field in the Yee cell. Therefore,
         # we must sample at two neighboring pixels in the propataion direction and
         # then interpolate:
-        e_yee_shifted = grid_average(ez, monitor, direction, autograd=autograd)
+        e_yee_shifted = grid_average(ez, monitor, direction, autograd=autograd, pol=pol)
 
     e = (0.0, 0.0, e_yee_shifted)
 
-    if pol == "Hz": #swap e and h
+    if pol == "Hz":  # swap e and h
         e, h = h, e
 
     # print("this is the type of em: ", type(em[2])) # ndarray
@@ -352,6 +352,7 @@ def cal_fom_from_fields(
     total_fom = -fwd_trans + 0.1 * refl_fom
 
     return total_fom
+
 
 def cal_total_field_adj_src_from_fwd_field(
     Ez,
@@ -419,10 +420,15 @@ def cal_total_field_adj_src_from_fwd_field(
                 input_port_name = opt_cfg["in_port_name"]
                 # print(f"this is the wl: {wl}, mode: {mode}, temp: {temp}, in_port_name: {in_port_name}")
                 # print(f"this is the corresponding we read from current obj mode: {in_mode}, temp: {temperture}, in_port_name: {input_port_name}")
-                if weight == 0 or in_mode != mode or temp not in temperture or input_port_name != in_port_name:
+                if (
+                    weight == 0
+                    or in_mode != mode
+                    or temp not in temperture
+                    or input_port_name != in_port_name
+                ):
                     continue
                 if opt_cfg["type"] == "eigenmode":
-                    if 'x' in direction:
+                    if "x" in direction:
                         monitor = Slice(
                             x=monitors[f"port_slice-{out_slice_name}_x"][i],
                             y=torch.arange(
@@ -446,18 +452,27 @@ def cal_total_field_adj_src_from_fwd_field(
                         hx=Hx_i,
                         hy=Hy_i,
                         ez=Ez_i,
-                        ht_m=ht_ms[f"ht_m-wl-{wl}-port-{out_slice_name}-mode-{mode}"][i],
-                        et_m=et_ms[f"et_m-wl-{wl}-port-{out_slice_name}-mode-{mode}"][i],
+                        ht_m=ht_ms[f"ht_m-wl-{wl}-port-{out_slice_name}-mode-{mode}"][
+                            i
+                        ],
+                        et_m=et_ms[f"et_m-wl-{wl}-port-{out_slice_name}-mode-{mode}"][
+                            i
+                        ],
                         monitor=monitor,
                         grid_step=1 / resolution,
                         direction=direction,
                         energy=True,
                     )
                     fom = weight * fom / 1e-8  # normalize with the input power
-                elif "flux" in opt_cfg["type"]: # flux or flux_minus_src
-                    if "xm" in out_slice_name or "ym" in out_slice_name or "xp" in out_slice_name or "yp" in out_slice_name:
+                elif "flux" in opt_cfg["type"]:  # flux or flux_minus_src
+                    if (
+                        "xm" in out_slice_name
+                        or "ym" in out_slice_name
+                        or "xp" in out_slice_name
+                        or "yp" in out_slice_name
+                    ):
                         monitor = monitors[f"port_slice-{out_slice_name}"][i]
-                    elif 'x' in direction:
+                    elif "x" in direction:
                         monitor = Slice(
                             x=monitors[f"port_slice-{out_slice_name}_x"][i],
                             y=torch.arange(
@@ -485,9 +500,7 @@ def cal_total_field_adj_src_from_fwd_field(
                         direction=direction,
                     )
                     if "minus_src" in opt_cfg["type"]:
-                        fom = torch.abs(
-                            torch.abs(fom / 1e-8) - 1
-                        )
+                        fom = torch.abs(torch.abs(fom / 1e-8) - 1)
                     else:
                         fom = torch.abs(fom / 1e-8)
                     fom = weight * fom
@@ -504,7 +517,6 @@ def cal_total_field_adj_src_from_fwd_field(
         adj_src = torch.conj(torch.stack(gradient_list, dim=0))
         return total_field, adj_src
         for i in range(Ez.shape[0]):
-
             monitor_slice_out = Slice(
                 y=monitor_out_y[i],
                 x=torch.arange(
@@ -1770,7 +1782,7 @@ def plot_level_set(x0, y0, rho, x1, y1, phi):
     plt.show()
 
 
-def grid_average(e, monitor, direction: str = "x", autograd=False):
+def grid_average(e, monitor, direction: str = "x", autograd=False, pol: str = "Ez"):
     if autograd:
         mean = npa.mean
     else:
@@ -1782,41 +1794,57 @@ def grid_average(e, monitor, direction: str = "x", autograd=False):
         if isinstance(monitor, Slice):
             if isinstance(monitor[0], torch.Tensor):
                 e_monitor = (
-                    monitor[0] + torch.tensor([[-1], [0]], device=monitor[0].device),
+                    monitor[0]
+                    + torch.tensor([[-1], [0]], device=monitor[0].device)
+                    + (0 if pol == "Ez" else 1),
                     monitor[1],
                 )
 
                 e_yee_shifted = torch.mean(e[e_monitor], dim=0)
             else:
-                e_monitor = (monitor[0] + np.array([[-1], [0]]), monitor[1])
+                e_monitor = (
+                    monitor[0] + np.array([[-1], [0]]) + (0 if pol == "Ez" else 1),
+                    monitor[1],
+                )
 
                 e_yee_shifted = mean(e[e_monitor], axis=0)
         elif isinstance(monitor, np.ndarray):
             e_monitor = monitor.nonzero()
-            e_monitor = (e_monitor[0], e_monitor[1] - 1)
+            e_monitor = (e_monitor[0] + (-1 if pol == "Ez" else 1), e_monitor[1])
             e_yee_shifted = (e[monitor] + e[e_monitor]) / 2
         elif isinstance(monitor, torch.Tensor):
             e_monitor = torch.nonzero(monitor, as_tuple=True)
-            e_monitor_shifted = (e_monitor[0], e_monitor[1] - 1)
+            e_monitor_shifted = (
+                e_monitor[0] + (-1 if pol == "Ez" else 1),
+                e_monitor[1],
+            )
             e_yee_shifted = (e[e_monitor] + e[e_monitor_shifted]) / 2
     elif direction[0] == "y":
         if isinstance(monitor, Slice):
             if isinstance(monitor[0], torch.Tensor):
                 e_monitor = (
                     monitor[0],
-                    monitor[1] + torch.tensor([[-1], [0]], device=monitor[0].device),
+                    monitor[1]
+                    + torch.tensor([[-1], [0]], device=monitor[0].device)
+                    + (0 if pol == "Ez" else 1),
                 )
                 e_yee_shifted = torch.mean(e[e_monitor], dim=0)
             else:
-                e_monitor = (monitor[0], monitor[1] + np.array([[-1], [0]]))
+                e_monitor = (
+                    monitor[0],
+                    monitor[1] + np.array([[-1], [0]]) + (0 if pol == "Ez" else 1),
+                )
                 e_yee_shifted = mean(e[e_monitor], axis=0)
         elif isinstance(monitor, np.ndarray):
             e_monitor = monitor.nonzero()
-            e_monitor = (e_monitor[0] - 1, e_monitor[1])
+            e_monitor = (e_monitor[0], e_monitor[1] + (-1 if pol == "Ez" else 1))
             e_yee_shifted = (e[monitor] + e[e_monitor]) / 2
         elif isinstance(monitor, torch.Tensor):
             e_monitor = torch.nonzero(monitor, as_tuple=True)
-            e_monitor_shifted = (e_monitor[0] - 1, e_monitor[1])
+            e_monitor_shifted = (
+                e_monitor[0],
+                e_monitor[1] + (-1 if pol == "Ez" else 1),
+            )
             e_yee_shifted = (e[e_monitor] + e[e_monitor_shifted]) / 2
     return e_yee_shifted
 
@@ -1845,7 +1873,7 @@ def get_flux(
         if monitor is None:
             # no need to slice and ravel
             h = (0, hy, 0)
-   
+
         else:
             h = (0, ravel(hy[monitor]), 0)
     elif direction[0] == "y":
@@ -1859,7 +1887,7 @@ def get_flux(
     if monitor is None:
         e_yee_shifted = ez
     else:
-        e_yee_shifted = grid_average(ez, monitor, direction, autograd=autograd)
+        e_yee_shifted = grid_average(ez, monitor, direction, autograd=autograd, pol=pol)
 
     e = (0.0, 0.0, e_yee_shifted)
 
