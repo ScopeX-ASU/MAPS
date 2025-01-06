@@ -814,14 +814,8 @@ def plot_eps_field(
     else:
         zoom_eps_center = (0, 0)  # force to be origin if not zoomed
 
-    # plot_abs(eps, ax=ax[-1], cmap="Greys", cbar=True, font_size=label_fontsize)
-    plot_abs(
-        torch.ones_like(torch.from_numpy(Ez)),
-        ax=ax[-1],
-        cmap="Greys",
-        cbar=True,
-        font_size=label_fontsize,
-    )
+    plot_abs(eps, ax=ax[-1], cmap="Greys", cbar=True, font_size=label_fontsize)
+
     xlabel = np.linspace(
         zoom_eps_center[0] - patch_size[0] / 2,
         zoom_eps_center[0] + patch_size[0] / 2,

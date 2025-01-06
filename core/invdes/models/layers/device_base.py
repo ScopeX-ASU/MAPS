@@ -1,7 +1,7 @@
 """
 Date: 2024-10-02 20:59:04
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-05 18:36:35
+LastEditTime: 2025-01-05 19:25:20
 FilePath: /MAPS/core/invdes/models/layers/device_base.py
 """
 
@@ -1178,6 +1178,7 @@ class N_Ports(BaseDevice):
                 y_height=self.cell_size[1],
                 monitors=[(input_slice, "r"), (output_slice, "b")],
                 title=f"|{pol}|^2, Norm run at {input_slice_name}",
+                field_stat="intensity_real",
             )
         if self.port_sources_dict.get(input_slice_name) is not None:
             self.port_sources_dict[input_slice_name].update(source_profiles)
