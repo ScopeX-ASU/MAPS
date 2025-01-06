@@ -213,40 +213,50 @@ class FluxNear2FarObjective(object):
 
         s_list = []
         ## for each wavelength, we evaluate the objective
-        for wl, _ in self.sims.items():
+        for (wl, pol), _ in self.sims.items():
+            if pol != in_mode[:2]:
+                continue
             for temp in target_temps:
                 # monitor_slice = self.port_slices[out_port_name]
                 norm_power = self.port_profiles[in_port_name][(wl, in_mode)][3]
                 # this is how ez, hx and hy are calculated in regular simulation
                 field = fields[(in_port_name, wl, in_mode, temp)]
-                hx_near, hy_near, ez_near = (
-                    field["Hx"],
-                    field["Hy"],
-                    field["Ez"],
-                )  # fetch fields
+                if pol == "Ez":
+                    fx_near, fy_near, fz_near = (
+                        field["Hx"],
+                        field["Hy"],
+                        field["Ez"],
+                    )  # fetch fields
+                elif pol == "Hz":
+                    fx_near, fy_near, fz_near = (
+                        field["Ex"],
+                        field["Ey"],
+                        field["Hz"],
+                    )
                 # print("this is the keys of the self.port_slices_info", list(self.port_slices.keys()))
                 extended_farfield_slice_info = copy.deepcopy(
                     self.port_slices_info[out_port_name]
                 )
+                ## Ez, extend toward negative dir, Hz extend toward positive dir
                 if direction[0] == "x":
                     xs = extended_farfield_slice_info["xs"]
                     if not xs.shape:
                         extended_farfield_slice_info["xs"] = np.array(
-                            [xs - grid_step, xs]
+                            [xs - grid_step, xs] if pol == "Ez" else [xs, xs + grid_step]
                         )
                     else:
                         extended_farfield_slice_info["xs"] = np.concatenate(
-                            [xs[0:1] - grid_step, xs], axis=0
+                            [xs[0:1] - grid_step, xs] if pol == "Ez" else [xs, xs[-1:] + grid_step], axis=0
                         )
                 elif direction[0] == "y":
                     ys = extended_farfield_slice_info["ys"]
                     if not ys.shape:
                         extended_farfield_slice_info["ys"] = np.array(
-                            [ys - grid_step, ys]
+                            [ys - grid_step, ys] if pol == "Ez" else [ys, ys + grid_step]
                         )
                     else:
                         extended_farfield_slice_info["ys"] = np.concatenate(
-                            [ys[0:1] - grid_step, ys], axis=0
+                            [ys[0:1] - grid_step, ys] if pol == "Ez" else [ys, ys[-1:] + grid_step], axis=0
                         )
                 if out_port_name == "total_farfield_region":
                     with torch.inference_mode():
@@ -265,29 +275,41 @@ class FluxNear2FarObjective(object):
                                 )
                                 if nearfield_slice_name.startswith("nearfield")
                             ],
-                            Ez=ez_near[None, ..., None],
-                            Hx=hx_near[None, ..., None],
-                            Hy=hy_near[None, ..., None],
+                            Fz=fz_near[None, ..., None],
+                            Fx=fx_near[None, ..., None],
+                            Fy=fy_near[None, ..., None],
                             farfield_x=None,
                             farfield_slice_info=self.port_slices_info[out_port_name],
-                            freqs=torch.tensor([1 / wl], device=ez_near.device),
+                            freqs=torch.tensor([1 / wl], device=fz_near.device),
                             eps=self.eps_bg,
                             mu=MU_0,
                             dL=self.grid_step,
-                            component="Ez",
+                            component=pol,
                             decimation_factor=12,
                         )
-                    ez = farfield["Ez"][0, ..., 0]
-                    hx = farfield["Hx"][0, ..., 0]
-                    hy = farfield["Hy"][0, ..., 0]
-                    self.total_farfield_region_solutions[
-                        (in_port_name, wl, in_mode, temp)
-                    ] = {
-                        "Ez": ez,
-                        "Hx": hx,
-                        "Hy": hy,
-                    }
-                    return torch.tensor(0.0).to(ez.device)
+                    if pol == "Ez":
+                        fz = farfield["Ez"][0, ..., 0]
+                        fx = farfield["Hx"][0, ..., 0]
+                        fy = farfield["Hy"][0, ..., 0]
+                        self.total_farfield_region_solutions[
+                            (in_port_name, wl, in_mode, temp)
+                        ] = {
+                            "Ez": fz,
+                            "Hx": fx,
+                            "Hy": fy,
+                        }
+                    elif pol == "Hz":
+                        fz = farfield["Hz"][0, ..., 0]
+                        fx = farfield["Ex"][0, ..., 0]
+                        fy = farfield["Ey"][0, ..., 0]
+                        self.total_farfield_region_solutions[
+                            (in_port_name, wl, in_mode, temp)
+                        ] = {
+                            "Hz": fz,
+                            "Ex": fx,
+                            "Ey": fy,
+                        }
+                    return torch.tensor(0.0).to(fz.device)
                 else:
                     farfield = get_farfields_GreenFunction(
                         nearfield_slices=[
@@ -302,38 +324,52 @@ class FluxNear2FarObjective(object):
                             )
                             if nearfield_slice_name.startswith("nearfield")
                         ],
-                        Ez=ez_near[None, ..., None],
-                        Hx=hx_near[None, ..., None],
-                        Hy=hy_near[None, ..., None],
+                        Fz=fz_near[None, ..., None],
+                        Fx=fx_near[None, ..., None],
+                        Fy=fy_near[None, ..., None],
                         farfield_x=None,
                         farfield_slice_info=self.port_slices_info[out_port_name],
-                        freqs=torch.tensor([1 / wl], device=ez_near.device),
+                        freqs=torch.tensor([1 / wl], device=fz_near.device),
                         eps=self.eps_bg,
                         mu=MU_0,
                         dL=self.grid_step,
-                        component="Ez",
+                        component=pol,
                         decimation_factor=4,
                     )
-                    ez = farfield["Ez"][0, ..., 0]
-                    hx = farfield["Hx"][0, ..., 0]
-                    hy = farfield["Hy"][0, ..., 0]
+                    if pol == "Ez":
+                        fz = farfield["Ez"][0, ..., 0]
+                        fx = farfield["Hx"][0, ..., 0]
+                        fy = farfield["Hy"][0, ..., 0]
+                    elif pol == "Hz":
+                        fz = farfield["Hz"][0, ..., 0]
+                        fx = farfield["Ex"][0, ..., 0]
+                        fy = farfield["Ey"][0, ..., 0]
 
                 if direction[0] == "x":  # Yee grid average
-                    ez = (ez[:-1] + ez[1:]) / 2
-                    hx = hx[1:]
-                    hy = hy[1:]
+                    fz = (fz[:-1] + fz[1:]) / 2
+                    if pol == "Ez":
+                        fx = fx[1:]
+                        fy = fy[1:]
+                    elif pol == "Hz":
+                        fx = fx[:-1]
+                        fy = fy[:-1]
                 else:
-                    ez = (ez[:, :-1] + ez[:, 1:]) / 2
-                    hx = hx[:, 1:]
-                    hy = hy[:, 1:]
+                    fz = (fz[:, :-1] + fz[:, 1:]) / 2
+                    if pol == "Ez":
+                        fx = fx[:, 1:]
+                        fy = fy[:, 1:]
+                    elif pol == "Hz":
+                        fx = fx[:, :-1]
+                        fy = fy[:, :-1]
                 s = get_flux(
-                    hx,
-                    hy,
-                    ez,
+                    fx,
+                    fy,
+                    fz,
                     monitor=None,
                     grid_step=grid_step,
                     direction=direction[0],
                     autograd=True,
+                    pol=pol,
                 )
                 if isinstance(s, Tensor):
                     abs = torch.abs
@@ -342,7 +378,7 @@ class FluxNear2FarObjective(object):
                 s = abs(s / norm_power)  # we only need absolute flux
 
                 ## we need to average the flux across the region, which is treated as multiple slices
-                s = s / (ez.shape[0] if direction[0] == "x" else ez.shape[1])
+                s = s / (fz.shape[0] if direction[0] == "x" else fz.shape[1])
 
                 s_list.append(s)
                 self.s_params[(self.out_port_name, wl, self.obj_type, temp)] = {
@@ -533,18 +569,18 @@ class ShapeSimilarityObjective(object):
                     monitor_direction = self.port_slices_info[out_port_name][
                         "direction"
                     ]
-                    ez = fields[(in_port_name, wl, in_mode, temp)]["Ez"]
-                    ez = ez[monitor_slice]
+                    fz = fields[(in_port_name, wl, in_mode, temp)][pol]
+                    fz = fz[monitor_slice]
                     if (
                         len(monitor_slice.x.shape) <= 1
                         or len(monitor_slice.y.shape) <= 1
                     ):  # 1d slice
-                        ez = ez.reshape(1, -1)
+                        fz = fz.reshape(1, -1)
                     else:  # 2d slice
                         if monitor_direction[0] == "y":
-                            ez = ez.t()
+                            fz = fz.t()
                     shape_similarity = get_shape_similarity(
-                        ez,
+                        fz,
                         grid_step=self.grid_step,
                         shape_type=shape_type,
                         shape_cfg=shape_cfg,
@@ -635,11 +671,18 @@ class ShapeSimilarityNear2FarObjective(object):
                         "direction"
                     ]
                     field = fields[(in_port_name, wl, in_mode, temp)]
-                    hx_near, hy_near, ez_near = (
-                        field["Hx"],
-                        field["Hy"],
-                        field["Ez"],
-                    )
+                    if pol == "Ez":
+                        fx_near, fy_near, fz_near = (
+                            field["Hx"],
+                            field["Hy"],
+                            field["Ez"],
+                        )
+                    elif pol == "Hz":
+                        fx_near, fy_near, fz_near = (
+                            field["Ex"],
+                            field["Ey"],
+                            field["Hz"],
+                        )
 
                     farfield = get_farfields_GreenFunction(
                         nearfield_slices=[
@@ -654,30 +697,31 @@ class ShapeSimilarityNear2FarObjective(object):
                             )
                             if nearfield_slice_name.startswith("nearfield")
                         ],
-                        Ez=ez_near[None, ..., None],
-                        Hx=hx_near[None, ..., None],
-                        Hy=hy_near[None, ..., None],
+                        Fz=fz_near[None, ..., None],
+                        Fx=fx_near[None, ..., None],
+                        Fy=fy_near[None, ..., None],
                         farfield_x=None,
                         farfield_slice_info=self.port_slices_info[out_port_name],
-                        freqs=torch.tensor([1 / wl], device=ez_near.device),
+                        freqs=torch.tensor([1 / wl], device=fz_near.device),
                         eps=self.eps_bg,
                         mu=MU_0,
                         dL=self.grid_step,
-                        component="Ez",
+                        component=pol,
                         decimation_factor=4,
                     )
-                    ez = farfield["Ez"][0, ..., 0]
+                    
+                    fz = farfield[pol][0, ..., 0]
                     # ez = ez[monitor_slice]
                     if (
                         len(monitor_slice.x.shape) <= 1
                         or len(monitor_slice.y.shape) <= 1
                     ):  # 1d slice
-                        ez = ez.reshape(1, -1)
+                        fz = fz.reshape(1, -1)
                     else:  # 2d slice
                         if monitor_direction[0] == "y":
-                            ez = ez.t()
+                            fz = fz.t()
                     shape_similarity = get_shape_similarity(
-                        ez,
+                        fz,
                         grid_step=self.grid_step,
                         shape_type=shape_type,
                         shape_cfg=shape_cfg,
