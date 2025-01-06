@@ -1,7 +1,7 @@
 """
 Date: 1969-12-31 17:00:00
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-12-08 15:56:43
+LastEditTime: 2025-01-05 18:49:11
 FilePath: /MAPS/core/fdfd/near2far.py
 """
 
@@ -135,9 +135,9 @@ def get_farfields_Rayleigh_Sommerfeld(
 def get_farfields_GreenFunction(
     nearfield_slices,  # list of nearfield monitor
     nearfield_slices_info,  # list of nearfield monitor
-    Ez: Tensor,  # nearfield fields, entire fields
-    Hx: Tensor,  # nearfield fields, entire fields
-    Hy: Tensor,  # nearfield fields, entire fields
+    Fz: Tensor,  # nearfield fields, entire fields
+    Fx: Tensor,  # nearfield fields, entire fields
+    Fy: Tensor,  # nearfield fields, entire fields
     farfield_x: Tensor | dict,  # farfield points physical locatinos, in um (x, y)
     freqs: Tensor,  # 1 / lambda, e.g., 1/1.55
     eps: float,  # eps_r
@@ -164,8 +164,8 @@ def get_farfields_GreenFunction(
             far_xs = np.array(far_xs.item())
         if not isinstance(far_ys, np.ndarray):
             far_ys = np.array(far_ys.item())
-        far_xs = torch.from_numpy(far_xs.astype(np.float32)).to(Ez.device)
-        far_ys = torch.from_numpy(far_ys.astype(np.float32)).to(Ez.device)
+        far_xs = torch.from_numpy(far_xs.astype(np.float32)).to(Fz.device)
+        far_ys = torch.from_numpy(far_ys.astype(np.float32)).to(Fz.device)
         if len(far_xs.shape) == 0:  # vertical farfield slice
             far_xs = far_xs.reshape([1]).repeat(len(far_ys))
             # print(far_xs, far_ys)
@@ -182,9 +182,9 @@ def get_farfields_GreenFunction(
     for nearfield_slice, nearfield_slice_info in zip(
         nearfield_slices, nearfield_slices_info
     ):
-        ez = Ez[..., *nearfield_slice, :]  # [bs, s, nf]
-        hx = Hx[..., *nearfield_slice, :]  # [bs, s, nf]
-        hy = Hy[..., *nearfield_slice, :]  # [bs, s, nf]
+        fz = Fz[..., *nearfield_slice, :]  # [bs, s, nf]
+        fx = Fx[..., *nearfield_slice, :]  # [bs, s, nf]
+        fy = Fy[..., *nearfield_slice, :]  # [bs, s, nf]
         ## near field slice locations (um)
         near_xs, near_ys = nearfield_slice_info["xs"], nearfield_slice_info["ys"]
         if not isinstance(near_xs, np.ndarray):
@@ -192,8 +192,8 @@ def get_farfields_GreenFunction(
         if not isinstance(near_ys, np.ndarray):
             near_ys = np.array(near_ys.item())
 
-        xs = torch.from_numpy(near_xs.astype(np.float32)).to(Ez.device)
-        ys = torch.from_numpy(near_ys.astype(np.float32)).to(Ez.device)
+        xs = torch.from_numpy(near_xs.astype(np.float32)).to(Fz.device)
+        ys = torch.from_numpy(near_ys.astype(np.float32)).to(Fz.device)
         direction = nearfield_slice_info["direction"]  # e.g., x+, x-, y+, y-
         if len(xs.shape) == 0:  # vertical monitor
             xs = xs.reshape([1]).expand_as(ys)
@@ -203,24 +203,29 @@ def get_farfields_GreenFunction(
             xs = torch.stack((xs, ys), dim=-1)  # [num_src_points, 2]
 
         # with TimerCtx() as t:
-        hx, hy, ez = GreenFunctionProjection(
+        fx, fy, fz = GreenFunctionProjection(
             x=far_xs,
             freqs=freqs,
             eps_r=eps,
             mu=mu,
             x0=xs,
-            Ez=ez,
-            Hx=hx,
-            Hy=hy,
+            Fz=fz,
+            Fx=fx,
+            Fy=fy,
             dL=dL,
             near_monitor_direction=direction,
             decimation_factor=decimation_factor,
         )
         #     torch.cuda.synchronize()
         # print(f"GreenFunctionProjection time: {t.interval} s")
-        far_fields["Ez"] += ez.reshape(-1, *farfield_shape, len(freqs))  # [bs, n, nf]
-        far_fields["Hx"] += hx.reshape(-1, *farfield_shape, len(freqs))  # [bs, n, nf]
-        far_fields["Hy"] += hy.reshape(-1, *farfield_shape, len(freqs))  # [bs, n, nf]
+        if component == "Ez": 
+            far_fields["Ez"] += fz.reshape(-1, *farfield_shape, len(freqs))  # [bs, n, nf]
+            far_fields["Hx"] += fx.reshape(-1, *farfield_shape, len(freqs))  # [bs, n, nf]
+            far_fields["Hy"] += fy.reshape(-1, *farfield_shape, len(freqs))  # [bs, n, nf]
+        elif component == "Hz":
+            far_fields["Hz"] += fz.reshape(-1, *farfield_shape, len(freqs))
+            far_fields["Ex"] += fx.reshape(-1, *farfield_shape, len(freqs))
+            far_fields["Ey"] += fy.reshape(-1, *farfield_shape, len(freqs))
 
     return far_fields
 
@@ -232,38 +237,39 @@ def GreenFunctionProjection(
     eps_r: float,  # eps_r in the homogeneous medium
     mu: float,  # mu_0 in the homogeneous medium
     x0: Tensor,  # nearfield monitor locations, um (x,y)
-    Ez: Tensor,  # nearfield fields, [bs, s, nf] complex
-    Hx: Tensor,  # nearfield fields, [bs, s, nf] complex
-    Hy: Tensor,  # nearfield fields, [bs, s, nf] complex
+    Fz: Tensor,  # nearfield fields, [bs, s, nf] complex
+    Fx: Tensor,  # nearfield fields, [bs, s, nf] complex
+    Fy: Tensor,  # nearfield fields, [bs, s, nf] complex
     dL: float,  # grid size, um, used in nearfield integral
     near_monitor_direction: str = "x+",
     decimation_factor: int = 1,  # subsampling rate on near field source
     maximum_batch_size: int = 5000,
+    component: str = "Ez",  # Ez, Hz
 ):
-    x_copy = x.clone()
-    num_iter = x_copy.shape[0] // maximum_batch_size + 1
-    far_field_ez = []
-    far_field_hx = []
-    far_field_hy = []
+    x_ref = x
+    num_iter = x_ref.shape[0] // maximum_batch_size + 1
+    far_field_fz = []
+    far_field_fx = []
+    far_field_fy = []
     if decimation_factor > 1:
-        Ez = Ez[:, decimation_factor // 2 :: decimation_factor, :].contiguous()
-        Hx = Hx[:, decimation_factor // 2 :: decimation_factor, :].contiguous()
-        Hy = Hy[:, decimation_factor // 2 :: decimation_factor, :].contiguous()
+        Fz = Fz[:, decimation_factor // 2 :: decimation_factor, :].contiguous()
+        Fx = Fx[:, decimation_factor // 2 :: decimation_factor, :].contiguous()
+        Fy = Fy[:, decimation_factor // 2 :: decimation_factor, :].contiguous()
         x0 = x0[decimation_factor // 2 :: decimation_factor, :].contiguous()
         dL = dL * decimation_factor
 
-    dtype = Ez.dtype
+    dtype = Fz.dtype
     freqs = freqs.float()
     x0 = x0.float()
-    Ez = Ez.cfloat()
-    Hx = Hx.cfloat()
-    Hy = Hy.cfloat()
+    Fz = Fz.cfloat()
+    Fx = Fx.cfloat()
+    Fy = Fy.cfloat()
 
     i_omega = -2j * (np.pi * C_0) * freqs  # [nf]
     k = 2 * np.pi * eps_r**0.5 * freqs  # wave number # [nf]
     epsilon = EPSILON_0 * eps_r
     for i in range(num_iter):
-        x = x_copy[i * maximum_batch_size : (i + 1) * maximum_batch_size] if i < num_iter - 1 else x_copy[i * maximum_batch_size :]
+        x = x_ref[i * maximum_batch_size : (i + 1) * maximum_batch_size] if i < num_iter - 1 else x_ref[i * maximum_batch_size :]
 
         # transform the coordinate system so that the origin is at the source point
         # then the observation points in the new system are:
@@ -276,32 +282,58 @@ def GreenFunctionProjection(
             # surface equivalence theory
             # J = n x H = nx.*Hy - ny.*Hx
             if near_monitor_direction[-1] == "+":
-                # [0, -Hz, Hy]
-                J = (0, 0, Hy[..., None, :, :])  # [bs, s, nf] -> [bs, 1, s, nf]
-                # M = -n x E
-                # (0, Ez, -Ey)
-                M = (0, Ez[..., None, :, :], 0)
+                
+                if component == "Ez":
+                    # [0, -Hz, Hy]
+                    J = (0, 0, Fy[..., None, :, :])  # [bs, s, nf] -> [bs, 1, s, nf]
+                    # M = -n x E
+                    # (0, Ez, -Ey)
+                    M = (0, Fz[..., None, :, :], 0)
+                elif component == "Hz":
+                    J = (0, -Fz[..., None, :, :])
+                    # (0, Ez, -Ey)
+                    M = (0, 0, -Fy[..., None, :, :])
             else:
-                # [0, Hz, -Hy]
-                J = (0, 0, -Hy[..., None, :, :])
-                # M = -n x E
-                # (0, -Ez, Ey)
-                M = (0, -Ez[..., None, :, :], 0)
+                if component == "Ez":
+                    # [0, Hz, -Hy]
+                    J = (0, 0, -Fy[..., None, :, :])
+                    # M = -n x E
+                    # (0, -Ez, Ey)
+                    M = (0, -Fz[..., None, :, :], 0)
+                elif component == "Hz":
+                    # [0, Hz, -Hy]
+                    J = (0, Fz[..., None, :, :])
+                    # (0, -Ez, Ey)
+                    M = (0, 0, Fy[..., None, :, :])
 
         elif near_monitor_direction.startswith("y"):
             # n = torch.tensor([0.0, 1.0, 0.0], dtype=x.dtype, device=x.device) # surface normal
             if near_monitor_direction[-1] == "+":
-                # [Hz, 0, -Hx]
-                J = (0, 0, -Hx[..., None, :, :])
-                # M = -n x E
-                # (-Ez, 0, Ex)
-                M = (-Ez[..., None, :, :], 0, 0)
+                if component == "Ez":
+                    # [Hz, 0, -Hx]
+                    J = (0, 0, -Fx[..., None, :, :])
+                    # M = -n x E
+                    # (-Ez, 0, Ex)
+                    M = (-Fz[..., None, :, :], 0, 0)
+                elif component == "Hz":
+                    # [Hz, 0, -Hx]
+                    J = (Fz[..., None, :, :], 0, 0)
+                    # M = -n x E
+                    # (-Ez, 0, Ex)
+                    M = (0, 0, Fx[..., None, :, :])
             else:
-                # [-Hz, 0, Hx]
-                J = (0, 0, Hx[..., None, :, :])
-                # M = -n x E
-                # (Ez, 0, -Ex)
-                M = (Ez[..., None, :, :], 0, 0)
+                if component == "Ez":
+                    # [-Hz, 0, Hx]
+                    J = (0, 0, Fx[..., None, :, :])
+                    # M = -n x E
+                    # (Ez, 0, -Ex)
+                    M = (Fz[..., None, :, :], 0, 0)
+                elif component == "Hz":
+                    # [-Hz, 0, Hx]
+                    J = (-Fz[..., None, :, :], 0, 0)
+                    # M = -n x E
+                    # (Ez, 0, -Ex)
+                    M = (0, 0, -Fx[..., None, :, :])
 
         else:
             raise ValueError("Invalid near_monitor_direction")
@@ -329,7 +361,7 @@ def GreenFunctionProjection(
         G, dG_dr, d2G_dr2 = _green_functions(k, r_obs)
 
         # operations between unit vectors and currents
-        @torch.compile
+        # @torch.compile
         def r_x_current(
             current: Tuple[Tensor, ...], is_2d: bool = True
         ) -> Tuple[Tensor, ...]:
@@ -347,7 +379,7 @@ def GreenFunctionProjection(
                     sin_theta * cos_phi * current[1] - sin_theta * sin_phi * current[0],
                 ]
 
-        @torch.compile
+        # @torch.compile
         def r_dot_current(current: Tuple[Tensor, ...], is_2d: bool = True) -> Tensor:
             """Dot product between the r unit vector and the current."""
             if is_2d:
@@ -359,7 +391,7 @@ def GreenFunctionProjection(
                     + cos_theta * current[2]
                 )
 
-        @torch.compile
+        # @torch.compile
         def r_dot_current_dtheta(current: Tuple[Tensor, ...], is_2d: bool = True) -> Tensor:
             """Theta derivative of the dot product between the r unit vector and the current."""
             if is_2d:
@@ -371,7 +403,7 @@ def GreenFunctionProjection(
                     - sin_theta * current[2]
                 )
 
-        @torch.compile
+        # @torch.compile
         def r_dot_current_dphi_div_sin_theta(current: Tuple[Tensor, ...]) -> Tensor:
             """Phi derivative of the dot product between the r unit vector and the current,
             analytically divided by sin theta."""
@@ -409,42 +441,62 @@ def GreenFunctionProjection(
         # electric vector potential terms
         F, curl_F, grad_div_F = potential_terms(M, epsilon)
 
-        # assemble the electric field components (Taflove 8.24, 8.27)
-        # e_x_integrand, e_y_integrand, e_z_integrand = (
-        #     i_omega * (a + grad_div_a / (k**2)) - curl_f / epsilon
-        #     for a, grad_div_a, curl_f in zip(A, grad_div_A, curl_F)
-        # )
-        e_z_integrand = i_omega * (A[2] + grad_div_A[2] / (k**2)) - curl_F[2] / epsilon
+        if component == "Ez":
+            # assemble the electric field components (Taflove 8.24, 8.27)
+            # e_x_integrand, e_y_integrand, e_z_integrand = (
+            #     i_omega * (a + grad_div_a / (k**2)) - curl_f / epsilon
+            #     for a, grad_div_a, curl_f in zip(A, grad_div_A, curl_F)
+            # )
+            f_z_integrand = i_omega * (A[2] + grad_div_A[2] / (k**2)) - curl_F[2] / epsilon
 
-        # assemble the magnetic field components (Taflove 8.25, 8.28)
-        # h_x_integrand, h_y_integrand, h_z_integrand = (
-        #     i_omega * (f + grad_div_f / (k**2)) + curl_a / MU_0
-        #     for f, grad_div_f, curl_a in zip(F, grad_div_F, curl_A)
-        # )  # [bs, n, s, nf]
+            # assemble the magnetic field components (Taflove 8.25, 8.28)
+            # h_x_integrand, h_y_integrand, h_z_integrand = (
+            #     i_omega * (f + grad_div_f / (k**2)) + curl_a / MU_0
+            #     for f, grad_div_f, curl_a in zip(F, grad_div_F, curl_A)
+            # )  # [bs, n, s, nf]
 
-        h_x_integrand, h_y_integrand = (
-            i_omega * (f + grad_div_f / (k**2)) + curl_a / MU_0
-            for f, grad_div_f, curl_a in zip(F[:2], grad_div_F[:2], curl_A[:2])
-        )  # [bs, n, s, nf]
+            f_x_integrand, f_y_integrand = (
+                i_omega * (f + grad_div_f / (k**2)) + curl_a / MU_0
+                for f, grad_div_f, curl_a in zip(F[:2], grad_div_F[:2], curl_A[:2])
+            )  # [bs, n, s, nf]
+        elif component == "Hz":
+            # assemble the electric field components (Taflove 8.24, 8.27)
+            f_x_integrand, f_y_integrand = (
+                i_omega * (a + grad_div_a / (k**2)) - curl_f / epsilon
+                for a, grad_div_a, curl_f in zip(A[:2], grad_div_A[:2], curl_F[:2])
+            )
+            # e_z_integrand = i_omega * (A[2] + grad_div_A[2] / (k**2)) - curl_F[2] / epsilon
+
+            # assemble the magnetic field components (Taflove 8.25, 8.28)
+            # h_x_integrand, h_y_integrand, h_z_integrand = (
+            #     i_omega * (f + grad_div_f / (k**2)) + curl_a / MU_0
+            #     for f, grad_div_f, curl_a in zip(F, grad_div_F, curl_A)
+            # )  # [bs, n, s, nf]
+
+            # h_x_integrand, h_y_integrand = (
+            #     i_omega * (f + grad_div_f / (k**2)) + curl_a / MU_0
+            #     for f, grad_div_f, curl_a in zip(F[:2], grad_div_F[:2], curl_A[:2])
+            # )  # [bs, n, s, nf]
+            f_z_integrand = i_omega * (F[2] + grad_div_F[2] / (k**2)) + curl_A[2] / MU_0
 
         # integrate over the surface, sum over tagential dimensions
         # e.g., direciont = "x", sum over y (dim=3)
         # e_x = self.trapezoid(e_x_integrand, (pts[idx_u], pts[idx_v]), (idx_u, idx_v))
         # e_y = self.trapezoid(e_y_integrand, (pts[idx_u], pts[idx_v]), (idx_u, idx_v))
 
-        e_z = trapezoid_1d(e_z_integrand, dx=dL, dim=-2).to(dtype)
-        h_x = trapezoid_1d(h_x_integrand, dx=dL, dim=-2).to(dtype)
-        h_y = trapezoid_1d(h_y_integrand, dx=dL, dim=-2).to(dtype)
+        f_z = trapezoid_1d(f_z_integrand, dx=dL, dim=-2).to(dtype)
+        f_x = trapezoid_1d(f_x_integrand, dx=dL, dim=-2).to(dtype)
+        f_y = trapezoid_1d(f_y_integrand, dx=dL, dim=-2).to(dtype)
         # h_z = self.trapezoid(h_z_integrand, (pts[idx_u], pts[idx_v]), (idx_u, idx_v))
-        far_field_ez.append(e_z)
-        far_field_hx.append(h_x)
-        far_field_hy.append(h_y)
+        far_field_fz.append(f_z)
+        far_field_fx.append(f_x)
+        far_field_fy.append(f_y)
 
-    h_x = torch.cat(far_field_hx, dim=1)
-    h_y = torch.cat(far_field_hy, dim=1)
-    e_z = torch.cat(far_field_ez, dim=1)
+    f_x = torch.cat(far_field_fx, dim=1)
+    f_y = torch.cat(far_field_fy, dim=1)
+    f_z = torch.cat(far_field_fz, dim=1)
 
-    return h_x, h_y, e_z
+    return f_x, f_y, f_z
 
 
 # @torch.compile
