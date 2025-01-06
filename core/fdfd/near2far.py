@@ -1,7 +1,7 @@
 """
 Date: 1969-12-31 17:00:00
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-05 18:49:11
+LastEditTime: 2025-01-05 19:40:20
 FilePath: /MAPS/core/fdfd/near2far.py
 """
 
@@ -215,6 +215,7 @@ def get_farfields_GreenFunction(
             dL=dL,
             near_monitor_direction=direction,
             decimation_factor=decimation_factor,
+            component=component,
         )
         #     torch.cuda.synchronize()
         # print(f"GreenFunctionProjection time: {t.interval} s")
@@ -290,7 +291,8 @@ def GreenFunctionProjection(
                     # (0, Ez, -Ey)
                     M = (0, Fz[..., None, :, :], 0)
                 elif component == "Hz":
-                    J = (0, -Fz[..., None, :, :])
+                    # [0, -Hz, Hy]
+                    J = (0, -Fz[..., None, :, :], 0)
                     # (0, Ez, -Ey)
                     M = (0, 0, -Fy[..., None, :, :])
             else:
@@ -302,7 +304,7 @@ def GreenFunctionProjection(
                     M = (0, -Fz[..., None, :, :], 0)
                 elif component == "Hz":
                     # [0, Hz, -Hy]
-                    J = (0, Fz[..., None, :, :])
+                    J = (0, Fz[..., None, :, :], 0)
                     # (0, -Ez, Ey)
                     M = (0, 0, Fy[..., None, :, :])
 
