@@ -1,7 +1,7 @@
 """
 Date: 1969-12-31 17:00:00
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-12-15 03:40:49
+LastEditTime: 2025-01-05 19:58:32
 FilePath: /MAPS/core/invdes/examples/metalens.py
 """
 
@@ -47,7 +47,7 @@ if __name__ == "__main__":
     # input_port_width = 0.8
     # output_port_width = 0.8
 
-    wl = 0.850
+    wl = 0.85
     initialization_file = "core/invdes/initialization/Si_metalens1D_for_850nm_FL30um.mat"
     # initialization_file = "core/invdes/initialization/Si_metalens1D_for_850nm_FL50um.mat"
     # initialization_file = "core/invdes/initialization/Si_metalens1D_for_850nm_FL60um.mat"
@@ -59,11 +59,12 @@ if __name__ == "__main__":
         dict(
             # solver="ceviche",
             solver="ceviche_torch",
+            # solver="ceviche",
             numerical_solver="solve_direct",
             use_autodiff=False,
             neural_solver=None,
             border_width=[0, 0, 0, 0],
-            PML=[0.5, 0.5],
+            PML=[0.5, 0],
             resolution=200,
             wl_cen=wl,
             plot_root="./figs/metalens_near2far_FL30_init",
@@ -81,25 +82,34 @@ if __name__ == "__main__":
         sim_cfg=sim_cfg,
         # aperture=20,
         aperture=20.1,
-        port_len=(1.5, 2),
-        port_width=(22.2, 2),
+        port_len=(1, 1),
+        port_width=(20.1, 2),
         substrate_depth=0,
         ridge_height_max=0.75,
         nearfield_dx=0.3,
         nearfield_size=21,
-        # farfield_dxs=((20, 50),),
         farfield_dxs=((30, 37.2),),
-        # farfield_dxs=((50, 70),),
-        # farfield_dxs=((60, 89),),
-        # farfield_dxs=((80, 131),),
-        # farfield_dxs=((30, 100),),
-        # farfield_dxs=((30, 140),),
-        # farfield_dxs=((100, 180),),
         farfield_sizes=(2,),
         device=operation_device,
     )
 
-    hr_device = device.copy(resolution=200)
+    # device = MetaLens(
+    #     material_bg="Air",
+    #     sim_cfg=sim_cfg,
+    #     aperture=20,
+    #     # aperture=6,
+    #     port_len=(1, 2),
+    #     port_width=(7, 2),
+    #     substrate_depth=0,
+    #     ridge_height_max=0.75,
+    #     nearfield_dx=0.3,
+    #     nearfield_size=6,
+    #     farfield_dxs=((10, 17.2),),
+    #     farfield_sizes=(2,),
+    #     device=operation_device,
+    # )
+
+    hr_device = device.copy(resolution=500)
 
     # def fom_func(breakdown):
     #     ## maximization fom
@@ -140,7 +150,7 @@ if __name__ == "__main__":
         plot=True,
         plot_filename=f"metalens_{'init_try'}",
         objs=["fwd_trans"],
-        field_keys=[("in_port_1", wl, 1, 300)],
+        field_keys=[("in_port_1", wl, "Hz1", 300)],
         in_port_names=["in_port_1"],
         exclude_port_names=["farfield_region"],
     )

@@ -35,8 +35,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         temp=[300],
                         wl=[0.85],
-                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
-                        out_modes=(1,),
+                        in_mode="Hz1",  # only one source mode is supported, cannot input multiple modes at the same time
+                        out_modes=("Hz1",),
                         type="flux_near2far",
                         direction="x+",
                     ),
@@ -48,8 +48,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     #     #### objective is evaluated at all points by sweeping the wavelength and modes
                     #     temp=[300],
                     #     wl=[0.85],
-                    #     in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
-                    #     out_modes=(1,),
+                    #     in_mode="Hz1",  # only one source mode is supported, cannot input multiple modes at the same time
+                    #     out_modes=("Hz1",),
                     #     type="flux_near2far",
                     #     direction="x+",
                     # ),
@@ -60,8 +60,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     #     out_port_name="farfield_3",
                     #     temp=[300],
                     #     wl=[0.85],
-                    #     in_mode=1,
-                    #     out_modes=(1,),
+                    #     in_mode="Hz1",
+                    #     out_modes=("Hz1",),
                     #     type="flux_near2far",
                     #     direction="x+",
                     # ),
@@ -71,8 +71,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     #     out_port_name="farfield_4",
                     #     temp=[300],
                     #     wl=[0.85],
-                    #     in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
-                    #     out_modes=(1,),
+                    #     in_mode="Hz1",  # only one source mode is supported, cannot input multiple modes at the same time
+                    #     out_modes=("Hz1",),
                     #     type="flux_near2far",
                     #     direction="x+",
                     # ),
@@ -84,8 +84,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     #     #### objective is evaluated at all points by sweeping the wavelength and modes
                     #     temp=[300],
                     #     wl=[0.85],
-                    #     in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
-                    #     out_modes=(1,),
+                    #     in_mode="Hz1",  # only one source mode is supported, cannot input multiple modes at the same time
+                    #     out_modes=("Hz1",),
                     #     type="flux_near2far",
                     #     direction="x+",
                     # ),
@@ -97,9 +97,9 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         temp=[300],
                         wl=[0.85],
-                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Hz1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            1,
+                            "Hz1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux_minus_src",
                         direction="x",
@@ -112,9 +112,9 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         temp=[300],
                         wl=[0.85],
-                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Hz1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            1,
+                            "Hz1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         # type="flux_near2far",
                         type="flux",
@@ -128,9 +128,9 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         temp=[300],
                         wl=[0.85],
-                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Hz1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            1,
+                            "Hz1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         # type="flux_near2far",
                         type="flux_near2far",
@@ -144,9 +144,9 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         temp=[300],
                         wl=[0.85],
-                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Hz1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            1,
+                            "Hz1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         # type="flux_near2far",
                         type="flux",
@@ -160,9 +160,9 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         temp=[300],
                         wl=[0.85],
-                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Hz1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            1,
+                            "Hz1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         # type="flux_near2far",
                         type="flux_near2far",
@@ -176,7 +176,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                     #     #### objective is evaluated at all points by sweeping the wavelength and modes
                     #     temp=[300],
                     #     wl=[0.85],
-                    #     in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                    #     in_mode="Hz1",  # only one source mode is supported, cannot input multiple modes at the same time
                     #     out_modes=(
                     #         1,
                     #     ),  # can evaluate on multiple output modes and get average transmission
@@ -192,7 +192,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                     #     #### objective is evaluated at all points by sweeping the wavelength and modes
                     #     temp = [300],
                     #     wl=[0.85],
-                    #     in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                    #     in_mode="Hz1",  # only one source mode is supported, cannot input multiple modes at the same time
                     #     out_modes=(
                     #         1,
                     #     ),  # can evaluate on multiple output modes and get average transmission
@@ -206,7 +206,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                     #     in_port_name="in_port_1",
                     #     out_port_name="farfield_1",
                     #     #### objective is evaluated at all points by sweeping the wavelength and modes
-                    #     in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                    #     in_mode="Hz1",  # only one source mode is supported, cannot input multiple modes at the same time
                     #     wl=[0.85],
                     #     temp=[300],
                     #     out_modes=(
@@ -228,8 +228,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         temp=[300],
                         wl=[0.85],
-                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
-                        out_modes=(1,),
+                        in_mode="Hz1",  # only one source mode is supported, cannot input multiple modes at the same time
+                        out_modes=("Hz1",),
                         type="flux_near2far",
                         direction="x+",
                     ),
@@ -257,7 +257,11 @@ class MetaLensOptimization(BaseOptimization):
                 interpolation="bilinear",
                 # transform=[dict(type="mirror_symmetry", dims=[1]), dict(type="blur", mfs=0.1, resolutions=[310, 310])],
                 transform=[dict(type="mirror_symmetry", dims=[1])],
+                # init_method="grating_1d_random",
+                # init_method="grating_1d_minmax",
+                # init_method="grating_0.2",
                 init_method="grating_1d",
+                # init_method="random",
                 binary_projection=dict(
                     fw_threshold=100,
                     bw_threshold=100,

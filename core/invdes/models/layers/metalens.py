@@ -124,14 +124,14 @@ class MetaLens(N_Ports):
         src_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="in_port_1",
-            rel_loc=0.98,
+            rel_loc=0.85,
             rel_width=float("inf"),
             direction="x+",
         )
         refl_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="refl_port_1",
-            rel_loc=0.65,
+            rel_loc=0.9,
             rel_width=float("inf"),
             direction="x+",
         )
@@ -301,7 +301,7 @@ class MetaLens(N_Ports):
             logger.info("Start normalization run ...")
 
         norm_source_profiles = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Hz1",),
             input_port_name="in_port_1",
             input_slice_name="in_port_1",
             wl_cen=self.sim_cfg["wl_cen"],
@@ -313,7 +313,7 @@ class MetaLens(N_Ports):
         )
 
         norm_refl_profiles_1 = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Hz1",),
             input_port_name="in_port_1",
             input_slice_name="refl_port_1",
             wl_cen=self.sim_cfg["wl_cen"],

@@ -6,7 +6,6 @@ from .device_base import N_Ports
 from core.utils import material_fn_dict
 from pyutils.general import logger
 import warnings
-import copy
 
 __all__ = ["Bending"]
 
@@ -140,7 +139,7 @@ class Bending(N_Ports):
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             # solver=self.sim_cfg["solver"],
-            solver="ceviche",
+            solver="ceviche_torch",
             plot=True,
         )
         norm_monitor_profiles = self.build_norm_sources(
@@ -151,7 +150,7 @@ class Bending(N_Ports):
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             # solver=self.sim_cfg["solver"],
-            solver="ceviche",
+            solver="ceviche_torch",
             plot=True,
         )
         return norm_source_profiles, norm_refl_profiles, norm_monitor_profiles
