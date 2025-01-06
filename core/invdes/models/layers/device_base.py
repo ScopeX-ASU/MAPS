@@ -1,7 +1,7 @@
 """
 Date: 2024-10-02 20:59:04
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-05 19:25:20
+LastEditTime: 2025-01-05 22:17:12
 FilePath: /MAPS/core/invdes/models/layers/device_base.py
 """
 
@@ -24,6 +24,7 @@ from core.utils import (
     SiO2_eps,
     Slice,
     get_flux,
+    get_eigenmode_coefficients,
 )
 from thirdparty.ceviche.ceviche import fdfd_ez, fdfd_hz
 from thirdparty.ceviche.ceviche.constants import C_0

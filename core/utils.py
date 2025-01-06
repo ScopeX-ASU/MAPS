@@ -286,7 +286,7 @@ def get_eigenmode_coefficients(
             em = (0.0, 0.0, et_m)
         elif pol == "Hz":
             hm = (0.0, 0.0, ht_m)
-            em = (-et_m, 0.0, 0.0)
+            em = (et_m, 0.0, 0.0)
         # The E-field is not co-located with the H-field in the Yee cell. Therefore,
         # we must sample at two neighboring pixels in the propataion direction and
         # then interpolate:

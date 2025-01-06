@@ -938,11 +938,29 @@ def insert_mode(omega, dx, x, y, epsr, target=None, npml=0, m="Ez1", filtering=F
     supplied, then a target array is created with the same shape as epsr, and the mode is
     inserted into it.
     """
+    # from angler import Simulation
     if isinstance(m, int):
         pol = "Ez"  # by default Ez mode
         logger.warning("The mode is not specified, by default, it is Ez mode")
     pol = m[0:2]
     m = int(m[2:])
+    # print(omega, epsr, dx, npml)
+
+    # sim = Simulation(omega, epsr, dl=dx*1e6, NPML=[npml, npml], pol="Hz")
+    # if len(x.shape) == 0:
+    #     center = (x.item(), (y[0] + y[-1])//2)
+    #     width = y[-1] - y[0]
+    #     dir = "x" 
+    # else:
+    #     center = ((x[0] + x[-1]) // 2, y.item())
+    #     width = x[-1] - x[0]
+    #     dir = "y"
+    # # print(dir, center, width)
+    # sim.add_mode(np.max(epsr)**0.5, dir, center=center, width=width, order=1)
+    # sim.setup_modes()
+    # fz_angler = sim.src[x, y]
+    # print(fz_angler)
+
     if target is None:
         target = np.zeros(epsr.shape, dtype=complex)
     epsr_cross = epsr[x, y]
@@ -1006,15 +1024,14 @@ def insert_mode(omega, dx, x, y, epsr, target=None, npml=0, m="Ez1", filtering=F
 
     ## for Ez pol, this e is Ez, h is tangential field, i.e., for x direction: hy, for y direction: hx
     k0 = omega / constants.C_0
-    beta = k0
+    beta = np.real(np.sqrt(vals, dtype=complex)) * k0
     if pol == "Ez":
-        beta = np.real(np.sqrt(vals, dtype=complex)) * k0
         e = fz
         h = beta / omega / constants.MU_0 * e
         target[x, y] = np.atleast_2d(e)[:, m - 1].squeeze()
     elif pol == "Hz":
         h = fz
-        e = h * omega * constants.MU_0 / k0
+        e = h * omega * constants.MU_0 / beta
         target[x, y] = np.atleast_2d(h)[:, m - 1].squeeze()
 
     return h[:, m - 1], e[:, m - 1], beta, target

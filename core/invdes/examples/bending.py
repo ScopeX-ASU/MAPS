@@ -1,7 +1,7 @@
 """
 Date: 2025-01-04 20:49:15
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-05 02:29:36
+LastEditTime: 2025-01-05 22:18:23
 FilePath: /MAPS/core/invdes/examples/bending.py
 """
 """
@@ -47,7 +47,7 @@ if __name__ == "__main__":
         dict(
             solver="ceviche_torch",
             border_width=[0, port_len, port_len, 0],
-            resolution=50,
+            resolution=100,
             plot_root=f"./figs/bending_{'init_try'}",
             PML=[0.5, 0.5],
             neural_solver=None,
