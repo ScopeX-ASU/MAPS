@@ -674,6 +674,11 @@ def plot_eps_field(
         ),
         gridspec_kw={"wspace": 0.3},
     )
+
+    ## clap Ez abs within 0 ~ 99.999%
+    Ez_abs = np.abs(Ez)
+    Ez_phase = np.angle(Ez)
+    Ez = np.clip(Ez_abs, a_min=0, a_max=np.percentile(Ez_abs, 99.999)) * np.exp(1j * Ez_phase)
     for i, stat in enumerate(field_stat):
         if stat == "abs":
             plot_abs(Ez, outline=None, ax=ax[i], cbar=True, font_size=label_fontsize)
