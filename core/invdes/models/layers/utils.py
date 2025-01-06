@@ -867,7 +867,15 @@ def solver_eigs(A, Neigs, guess_value=1.0):
 
 
 def get_modes(
-    eps_cross, omega, dL, npml, m=1, filtering=True, eps_cross_xx=None, pol: str = "Ez"
+    eps_cross,
+    omega,
+    dL,
+    npml,
+    m=1,
+    filtering=True,
+    eps_cross_xx=None,
+    pol: str = "Ez",
+    direction: str = "x",
 ):
     """Solve for the modes of a waveguide cross section
     ARGUMENTS
@@ -904,8 +912,11 @@ def get_modes(
     vals, vecs = solver_eigs(A, m, guess_value=n_max**2)
 
     if pol == "Hz":
-        # vecs = (vecs + np.roll(vecs, shift=1, axis=0))/2
-        vecs = np.roll(vecs, shift=1, axis=0)
+        if direction == "x":
+            vecs = np.roll(vecs, shift=1, axis=0)
+        elif direction == "y":
+            vecs = (vecs + np.roll(vecs, shift=1, axis=0)) / 2
+        # vecs = np.roll(vecs, shift=1, axis=0)
 
     if filtering:
         filter_re = lambda vals: np.real(vals) > 0.0
@@ -940,10 +951,13 @@ def insert_mode(omega, dx, x, y, epsr, target=None, npml=0, m="Ez1", filtering=F
     if pol == "Hz":
         if len(x.shape) == 0:  # x direction slice
             epsr_cross_xx = epsr_cross
+            direction = "x"
         elif len(y.shape) == 0:  # y direction slice
             epsr_cross_xx = (epsr_cross + np.roll(epsr_cross, shift=1)) / 2
+            direction = "y"
     else:
         epsr_cross_xx = None
+        direction = "x"
 
     ## see page 89 in https://empossible.net/wp-content/uploads/2019/08/Lecture-4f-FDFD-Extras.pdf
     ## E mode: -(Dxf @ Dxb + MU_0 * eps_0 * eps_r) Ez = gamma^2 Ez
@@ -966,7 +980,9 @@ def insert_mode(omega, dx, x, y, epsr, target=None, npml=0, m="Ez1", filtering=F
         filtering=filtering,
         eps_cross_xx=epsr_cross_xx,
         pol=pol,
+        direction=direction,
     )
+
     # Compute transverse magnetic field as:
     #    H = β / (μ₀ ω) * E
     # where the β term originates from the spatial derivative in the propagation
@@ -991,14 +1007,15 @@ def insert_mode(omega, dx, x, y, epsr, target=None, npml=0, m="Ez1", filtering=F
 
     ## for Ez pol, this e is Ez, h is tangential field, i.e., for x direction: hy, for y direction: hx
     k0 = omega / constants.C_0
-    beta = np.real(np.sqrt(vals, dtype=complex)) * k0
+    beta = k0
     if pol == "Ez":
+        beta = np.real(np.sqrt(vals, dtype=complex)) * k0
         e = fz
         h = beta / omega / constants.MU_0 * e
         target[x, y] = np.atleast_2d(e)[:, m - 1].squeeze()
     elif pol == "Hz":
         h = fz
-        e = h * omega * constants.MU_0 / beta
+        e = h * omega * constants.MU_0 / k0
         target[x, y] = np.atleast_2d(h)[:, m - 1].squeeze()
 
     return h[:, m - 1], e[:, m - 1], beta, target
