@@ -1,7 +1,7 @@
 """
 Date: 2024-10-10 19:50:23
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-06 18:56:51
+LastEditTime: 2025-01-06 19:07:59
 FilePath: /MAPS/core/fdfd/solver.py
 """
 
@@ -14,7 +14,6 @@ from pyutils.general import logger
 from torch import Tensor
 
 from thirdparty.ceviche.constants import *
-from thirdparty.ceviche.solvers import solve_linear
 from thirdparty.ceviche.utils import make_sparse
 
 try:
@@ -461,7 +460,6 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                 grad_epsilon = -(adj.mul_(x).real.to(eps_matrix.device))
             elif ctx.pol == "Hz":
                 indices = eps_matrix.indices()
-                # print(rows, cols, eps_matrix)
                 grad_epsilon = -(
                     adj[indices[0]].mul_(x[indices[1]]).real.to(eps_matrix.device)
                 )
