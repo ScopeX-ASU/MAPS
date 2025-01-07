@@ -9,11 +9,11 @@ from core.utils import (
     Slice,
     get_flux,
 )
-from thirdparty.ceviche.ceviche import fdfd_ez as fdfd_ez_ceviche
-from thirdparty.ceviche.ceviche import fdfd_hz as fdfd_hz_ceviche
-from thirdparty.ceviche.ceviche.constants import *
-from thirdparty.ceviche.ceviche.derivatives import create_sfactor
-from thirdparty.ceviche.ceviche.primitives import spsp_mult
+from thirdparty.ceviche import fdfd_ez as fdfd_ez_ceviche
+from thirdparty.ceviche import fdfd_hz as fdfd_hz_ceviche
+from thirdparty.ceviche.constants import *
+from thirdparty.ceviche.derivatives import create_sfactor
+from thirdparty.ceviche.primitives import spsp_mult
 
 from .derivatives import compute_derivative_matrices
 from .preconditioner import create_symmetrizer
@@ -489,14 +489,14 @@ class fdfd_ez(fdfd_ez_ceviche):
                     # print("this is the increment of the total flux: ", torch.abs(get_flux(hx_adj, hy_adj, ez_adj, frame_slice, self.dL/1e-6, "x")))
                     total_flux = total_flux + torch.abs(
                         get_flux(
-                            hx_adj, hy_adj, ez_adj, frame_slice, self.dL / 1e-6, "x"
+                            hx_adj, hy_adj, ez_adj, frame_slice, self.dL / MICRON_UNIT, "x"
                         )
                     )  # absolute to ensure positive flux
                 for frame_slice in y_slices:
                     # print("this is the increment of the total flux: ", torch.abs(get_flux(hx_adj, hy_adj, ez_adj, frame_slice, self.dL/1e-6, "y")))
                     total_flux = total_flux + torch.abs(
                         get_flux(
-                            hx_adj, hy_adj, ez_adj, frame_slice, self.dL / 1e-6, "y"
+                            hx_adj, hy_adj, ez_adj, frame_slice, self.dL / MICRON_UNIT, "y"
                         )
                     )  # in case that opposite direction cancel each other
                 total_flux = total_flux / 2  # 2 * total_flux --> total_flux
@@ -585,7 +585,7 @@ class fdfd_hz(fdfd_hz_ceviche):
         neural_solver=None,
         numerical_solver="solve_direct",
         use_autodiff: bool = False,
-        sym_precond: bool = False,
+        sym_precond: bool = True,
     ):
         self.power = power
         self.A = None
@@ -606,9 +606,8 @@ class fdfd_hz(fdfd_hz_ceviche):
         super().__init__(omega, dL, eps_r, npml, bloch_phases=bloch_phases)
 
         self.Pl = self.Pr = None
-        # TODO, preconditioner is not implemented for Hz
-        # if 0 and sym_precond:
-        #     self._make_precond()
+        if sym_precond:
+            self._make_precond()
 
     def _save_shape(self, grid):
         """
@@ -659,10 +658,10 @@ class fdfd_hz(fdfd_hz_ceviche):
         Nx_pml, Ny_pml = self.npml
 
         # Create the sfactor in each direction and for 'f' and 'b'
-        sxf = create_sfactor("f", self.omega, self.dL, Nx, Nx_pml)
-        syf = create_sfactor("f", self.omega, self.dL, Ny, Ny_pml)
+        sxb = create_sfactor("b", self.omega, self.dL, Nx, Nx_pml)
+        syb = create_sfactor("b", self.omega, self.dL, Ny, Ny_pml)
 
-        self.Pl, self.Pr = create_symmetrizer(sxf, syf)
+        self.Pl, self.Pr = create_symmetrizer(sxb, syb)
 
     def _make_A_scipy(self, eps_vec):
         eps_vec = eps_vec.detach().cpu().numpy()
@@ -848,7 +847,7 @@ class fdfd_hz(fdfd_hz_ceviche):
                             ey_adj,
                             hz_adj,
                             frame_slice,
-                            self.dL / 1e-6,
+                            self.dL / MICRON_UNIT,
                             "x",
                             pol="Hz",
                         )
@@ -861,7 +860,7 @@ class fdfd_hz(fdfd_hz_ceviche):
                             ey_adj,
                             hz_adj,
                             frame_slice,
-                            self.dL / 1e-6,
+                            self.dL / MICRON_UNIT,
                             "y",
                             pol="Hz",
                         )

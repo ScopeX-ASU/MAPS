@@ -5,6 +5,8 @@ __pycache__/
 /figs/*
 # C extensions
 *.so
+*.png
+*.jpg
 
 # Distribution / packaging
 .Python

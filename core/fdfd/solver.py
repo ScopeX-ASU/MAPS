@@ -1,7 +1,7 @@
 """
 Date: 2024-10-10 19:50:23
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-05 15:04:31
+LastEditTime: 2025-01-06 18:56:51
 FilePath: /MAPS/core/fdfd/solver.py
 """
 
@@ -13,9 +13,9 @@ from pyMKL import pardisoSolver
 from pyutils.general import logger
 from torch import Tensor
 
-from thirdparty.ceviche.ceviche.constants import *
-from thirdparty.ceviche.ceviche.solvers import solve_linear
-from thirdparty.ceviche.ceviche.utils import make_sparse
+from thirdparty.ceviche.constants import *
+from thirdparty.ceviche.solvers import solve_linear
+from thirdparty.ceviche.utils import make_sparse
 
 try:
     from pyMKL import pardisoSolver
@@ -301,7 +301,6 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             A = Pl @ A @ Pr
             b = Pl @ b
             symmetry = True
-
         else:
             symmetry = False
         # with TimerCtx() as t:

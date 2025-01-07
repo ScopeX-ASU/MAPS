@@ -1,15 +1,16 @@
 import math
+
 import matplotlib
 
 matplotlib.use("agg")
 import matplotlib.pyplot as plt
-import numpy as np
-
 import meep as mp
+import numpy as np
+import torch
+
 from core.models.fdfd.utils import get_farfields
 from core.models.layers.utils import Slice
-import torch
-from ceviche.constants import MU_0, EPSILON_0
+from thirdparty.ceviche.constants import EPSILON_0, MU_0
 
 resolution = 300  # pixels/um
 
@@ -40,7 +41,7 @@ else:
 geometry = [
     mp.Block(
         # size=mp.Vector3(float("inf"),float("inf")),
-        size=mp.Vector3(10,10),
+        size=mp.Vector3(10, 10),
         center=mp.Vector3(),
         material=mp.Medium(epsilon=3.48**2),
     )
@@ -154,9 +155,9 @@ near_field_regions = {
 fields = torch.from_numpy(ez[None, ..., None]).to(torch.complex128)  # [1, x, y, 1]
 n = 0
 farfields_points = torch.tensor([[r * math.cos(angles[n]), r * math.sin(angles[n])]])
-near_point = (int((dpml + sxy) * resolution), int((dpml + sxy/2) * resolution))
+near_point = (int((dpml + sxy) * resolution), int((dpml + sxy / 2) * resolution))
 print(f"meep nearfields: {ez[near_point]}")
-freqs = 1/torch.tensor([fcen])
+freqs = 1 / torch.tensor([fcen])
 results = get_farfields(
     near_field_regions,
     fields,

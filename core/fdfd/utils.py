@@ -1,7 +1,7 @@
 """
 Date: 2024-10-10 21:17:31
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-05 15:05:15
+LastEditTime: 2025-01-06 19:01:21
 FilePath: /MAPS/core/fdfd/utils.py
 """
 
@@ -18,6 +18,8 @@ from einops import einsum
 from scipy.special import jn, yn
 from torch import Tensor
 from torch_sparse import spmm, spspmm
+
+from thirdparty.ceviche.constants import MICRON_UNIT
 
 __all__ = [
     "get_entries_indices",
@@ -218,7 +220,7 @@ def green2d(
     r = rhat.norm(p=2, dim=-1, keepdim=True)  # [n, s, 1]
     rhat = rhat / r  # unit vector # [n, s, 2]
     # print(rhat)
-    omega = 2 * np.pi * freqs / 1e-6  # [nf] angular frequencies
+    omega = 2 * np.pi * freqs / MICRON_UNIT  # [nf] angular frequencies
     k = omega * (eps * mu) ** 0.5  # [nf] wave numbers
     ik = (1j * k).to(f0.dtype)  # [nf] imaginary wave numbers
     # [nf] * [n, s, 1] = [n, s, nf]

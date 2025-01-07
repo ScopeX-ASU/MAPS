@@ -17,9 +17,9 @@ from core.utils import (
     Slice,
     get_eigenmode_coefficients,
 )
-from thirdparty.ceviche.ceviche import constants
-from thirdparty.ceviche.ceviche.fdfd import compute_derivative_matrices
-from thirdparty.ceviche.ceviche.modes import filter_modes, normalize_modes
+from thirdparty.ceviche import constants
+from thirdparty.ceviche.fdfd import compute_derivative_matrices
+from thirdparty.ceviche.modes import filter_modes, normalize_modes
 
 from .viz import abs as plot_abs
 from .viz import real as plot_real
@@ -678,7 +678,9 @@ def plot_eps_field(
     ## clap Ez abs within 0 ~ 99.999%
     Ez_abs = np.abs(Ez)
     Ez_phase = np.angle(Ez)
-    Ez = np.clip(Ez_abs, a_min=0, a_max=np.percentile(Ez_abs, 99.999)) * np.exp(1j * Ez_phase)
+    Ez = np.clip(Ez_abs, a_min=0, a_max=np.percentile(Ez_abs, 99.999)) * np.exp(
+        1j * Ez_phase
+    )
     for i, stat in enumerate(field_stat):
         if stat == "abs":
             plot_abs(Ez, outline=None, ax=ax[i], cbar=True, font_size=label_fontsize)
@@ -950,7 +952,7 @@ def insert_mode(omega, dx, x, y, epsr, target=None, npml=0, m="Ez1", filtering=F
     # if len(x.shape) == 0:
     #     center = (x.item(), (y[0] + y[-1])//2)
     #     width = y[-1] - y[0]
-    #     dir = "x" 
+    #     dir = "x"
     # else:
     #     center = ((x[0] + x[-1]) // 2, y.item())
     #     width = x[-1] - x[0]

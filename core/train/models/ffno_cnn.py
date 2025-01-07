@@ -1,35 +1,31 @@
-from typing import List, Optional, Tuple
+from typing import Tuple
 
 import numpy as np
-from sympy import Identity
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from pyutils.activation import Swish
-from timm.models.layers import DropPath, to_2tuple
-from torch import nn
-from torch.functional import Tensor
-from torch.types import Device
-from torch.utils.checkpoint import checkpoint
-# from .constant import *
-from .layers.activation import SIREN
-from .layers.ffno_conv2d import FFNOConv2d
-from torch.types import _size
-from .layers.layer_norm import MyLayerNorm
-from core.utils import resize_to_targt_size
+from einops import rearrange
+from mmcv.cnn.bricks import build_activation_layer, build_norm_layer
 from mmengine.registry import MODELS
-from .model_base import ModelBase, ConvBlock, LinearBlock
-from .fno_cnn import LearnableFourierFeatures
+from timm.models.layers import DropPath, to_2tuple
+from torch.functional import Tensor
+from torch.types import Device, _size
+from torch.utils.checkpoint import checkpoint
+
 from core.fdfd.fdfd import fdfd_ez
-from thirdparty.ceviche.ceviche.constants import C_0
 from core.utils import (
     Si_eps,
-    SiO2_eps,
 )
-from einops import rearrange
-from mmcv.cnn.bricks import build_activation_layer, build_conv_layer, build_norm_layer
+from thirdparty.ceviche.constants import C_0, MICRON_UNIT
+
+from .fno_cnn import LearnableFourierFeatures
+
+# from .constant import *
+from .layers.ffno_conv2d import FFNOConv2d
+from .model_base import ConvBlock, ModelBase
 
 __all__ = ["FFNO2d"]
+
 
 class BSConv2d(nn.Module):
     def __init__(
@@ -46,7 +42,10 @@ class BSConv2d(nn.Module):
         stride = to_2tuple(stride)
         dilation = to_2tuple(dilation)
         # same padding
-        padding = [(dilation[i] * (kernel_size[i] - 1) + 1) // 2 for i in range(len(kernel_size))]
+        padding = [
+            (dilation[i] * (kernel_size[i] - 1) + 1) // 2
+            for i in range(len(kernel_size))
+        ]
         self.conv = nn.Sequential(
             nn.Conv2d(
                 in_channels,
@@ -73,6 +72,7 @@ class BSConv2d(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         return self.conv(x)
 
+
 class LayerNorm(nn.Module):
     r"""LayerNorm implementation used in ConvNeXt
     LayerNorm that supports two data formats: channels_last (default) or channels_first.
@@ -84,7 +84,7 @@ class LayerNorm(nn.Module):
     def __init__(
         self,
         normalized_shape,
-        dim = 2,
+        dim=2,
         eps=1e-6,
         data_format="channels_last",
         reshape_last_to_first=False,
@@ -110,10 +110,14 @@ class LayerNorm(nn.Module):
             s = (x - u).pow(2).mean(1, keepdim=True)
             x = (x - u) / torch.sqrt(s + self.eps)
             if self.dim == 3:
-                x = self.weight[:, None, None, None] * x + self.bias[:, None, None, None] # add one extra dimension to match conv2d but not 2d
+                x = (
+                    self.weight[:, None, None, None] * x
+                    + self.bias[:, None, None, None]
+                )  # add one extra dimension to match conv2d but not 2d
             elif self.dim == 2:
                 x = self.weight[:, None, None] * x + self.bias[:, None, None]
             return x
+
 
 class FFNO2dBlock(nn.Module):
     expansion = 2
@@ -136,7 +140,9 @@ class FFNO2dBlock(nn.Module):
     ) -> None:
         super().__init__()
         self.drop_path_rate = drop_path_rate
-        self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0 else nn.Identity()
+        self.drop_path = (
+            DropPath(drop_path_rate) if drop_path_rate > 0 else nn.Identity()
+        )
         # self.drop_path2 = DropPath(drop_path_rate) if drop_path_rate > 0 else nn.Identity()
         self.f_conv = FFNOConv2d(in_channels, out_channels, n_modes, device=device)
         if norm_cfg is not None:
@@ -164,7 +170,9 @@ class FFNO2dBlock(nn.Module):
                         padding=1,
                     ),
                     # nn.BatchNorm2d(out_channels * self.expansion) if norm == "bn" else MyLayerNorm(out_channels * self.expansion, data_format="channels_first"),
-                    LayerNorm(out_channels * self.expansion, data_format="channels_first"),
+                    LayerNorm(
+                        out_channels * self.expansion, data_format="channels_first"
+                    ),
                     nn.GELU(),
                     nn.Conv2d(out_channels * self.expansion, out_channels, 1),
                 )
@@ -172,14 +180,18 @@ class FFNO2dBlock(nn.Module):
                 self.ff = nn.Sequential(
                     nn.Conv2d(out_channels, out_channels * self.expansion, 1),
                     # nn.BatchNorm2d(out_channels * self.expansion) if norm == "bn" else MyLayerNorm(out_channels * self.expansion, data_format="channels_first"),
-                    LayerNorm(out_channels * self.expansion, data_format="channels_first"),
+                    LayerNorm(
+                        out_channels * self.expansion, data_format="channels_first"
+                    ),
                     nn.GELU(),
                     nn.Conv2d(out_channels * self.expansion, out_channels, 1),
                 )
         else:
             self.ff = None
         if aug_path:
-            self.aug_path = nn.Sequential(BSConv2d(in_channels, out_channels, 3), nn.GELU())
+            self.aug_path = nn.Sequential(
+                BSConv2d(in_channels, out_channels, 3), nn.GELU()
+            )
         else:
             self.aug_path = None
         if act_cfg is not None:
@@ -214,6 +226,7 @@ class FFNO2dBlock(nn.Module):
         else:
             return _inner_forward(x)
 
+
 @MODELS.register_module()
 class FFNO2d(ModelBase):
     """
@@ -236,7 +249,16 @@ class FFNO2d(ModelBase):
         kernel_size_list=[1, 1, 1, 1, 1, 1, 1, 1],
         padding_list=[0, 0, 0, 0, 0, 0, 0, 0],
         hidden_list=[32],
-        mode_list=[(33, 33), (33, 33), (33, 33), (33, 33), (33, 33), (33, 33), (33, 33), (33, 33)],
+        mode_list=[
+            (33, 33),
+            (33, 33),
+            (33, 33),
+            (33, 33),
+            (33, 33),
+            (33, 33),
+            (33, 33),
+            (33, 33),
+        ],
         norm_cfg=dict(type="LayerNorm", data_format="channels_first"),
         act_cfg=dict(type="GELU"),
         dropout_rate=0.0,
@@ -325,7 +347,7 @@ class FFNO2d(ModelBase):
         else:
             raise ValueError("fourier_feature only supports basic and gauss")
 
-        omega = 2 * np.pi * C_0 / (1.55 * 1e-6)
+        omega = 2 * np.pi * C_0 / (1.55 * MICRON_UNIT)
         self.sim = fdfd_ez(
             omega=omega,
             dL=2e-8,
@@ -367,7 +389,14 @@ class FFNO2d(ModelBase):
         hidden_list = [self.kernel_list[-1]] + self.hidden_list
         head = [
             nn.Sequential(
-                ConvBlock(inc, outc, kernel_size=1, padding=0, act_cfg=self.act_cfg, device=self.device),
+                ConvBlock(
+                    inc,
+                    outc,
+                    kernel_size=1,
+                    padding=0,
+                    act_cfg=self.act_cfg,
+                    device=self.device,
+                ),
                 nn.Dropout2d(self.dropout_rate),
             )
             for inc, outc in zip(hidden_list[:-1], hidden_list[1:])
@@ -392,7 +421,12 @@ class FFNO2d(ModelBase):
             head = [
                 nn.Sequential(
                     ConvBlock(
-                        inc, outc, kernel_size=1, padding=0, act_func=self.act_func, device=self.device
+                        inc,
+                        outc,
+                        kernel_size=1,
+                        padding=0,
+                        act_func=self.act_func,
+                        device=self.device,
                     ),
                     nn.Dropout2d(self.dropout_rate),
                 )
@@ -554,7 +588,11 @@ class FFNO2d(ModelBase):
             eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1)
         else:
             enc_fwd = self.fourier_feature_mapping(eps)
-            eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1) if self.fourier_feature != "none" else eps
+            eps_enc_fwd = (
+                torch.cat((eps, enc_fwd), dim=1)
+                if self.fourier_feature != "none"
+                else eps
+            )
         if self.incident_field_fwd:
             x_fwd = torch.cat((eps_enc_fwd, incident_field_fwd), dim=1)
         else:

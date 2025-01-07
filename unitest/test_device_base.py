@@ -16,8 +16,8 @@ from copy import deepcopy
 import numpy as np
 import scipy.sparse as sp
 import torch
-from ceviche import fdfd_ez as ceviche_fdfd_ez
-from ceviche.constants import *
+from thirdparty.ceviche import fdfd_ez as ceviche_fdfd_ez
+from thirdparty.ceviche.constants import *
 from pyutils.general import TimerCtx, print_stat
 from torch_sparse import spspmm
 
@@ -354,7 +354,7 @@ def test_fdtd_ez_torch():
     )
 
     omega = 2 * np.pi / (1.55e-6)
-    dl = device.grid_step * 1e-6
+    dl = device.grid_step * MICRON_UNIT
     # sim = fdfd_ez(omega, dl, eps_r[:2,:2], device=dev, npml=[1,1])
     # sim = fdfd_ez(omega, dl, eps_r[:2,:2], npml=[1,1])
     # hx, hy, ez = sim.solve(source[:2,:2])

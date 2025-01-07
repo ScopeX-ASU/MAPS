@@ -1,7 +1,7 @@
 """
 Date: 1969-12-31 17:00:00
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-05 19:58:32
+LastEditTime: 2025-01-06 19:01:32
 FilePath: /MAPS/core/invdes/examples/metalens.py
 """
 
@@ -18,6 +18,7 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 )
 import torch
+from pyutils.config import Config
 
 from core.invdes.invdesign import InvDesign
 from core.invdes.models import (
@@ -26,7 +27,6 @@ from core.invdes.models import (
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import MetaLens
 from core.utils import set_torch_deterministic
-from pyutils.config import Config
 
 sys.path.pop(0)
 if __name__ == "__main__":
@@ -48,7 +48,9 @@ if __name__ == "__main__":
     # output_port_width = 0.8
 
     wl = 0.85
-    initialization_file = "core/invdes/initialization/Si_metalens1D_for_850nm_FL30um.mat"
+    initialization_file = (
+        "core/invdes/initialization/Si_metalens1D_for_850nm_FL30um.mat"
+    )
     # initialization_file = "core/invdes/initialization/Si_metalens1D_for_850nm_FL50um.mat"
     # initialization_file = "core/invdes/initialization/Si_metalens1D_for_850nm_FL60um.mat"
     # initialization_file = "core/invdes/initialization/Si_metalens1D_for_850nm_FL80um.mat"
@@ -64,7 +66,7 @@ if __name__ == "__main__":
             use_autodiff=False,
             neural_solver=None,
             border_width=[0, 0, 0, 0],
-            PML=[0.5, 0],
+            PML=[0.5, 0.5],
             resolution=200,
             wl_cen=wl,
             plot_root="./figs/metalens_near2far_FL30_init",
@@ -83,7 +85,7 @@ if __name__ == "__main__":
         # aperture=20,
         aperture=20.1,
         port_len=(1, 1),
-        port_width=(20.1, 2),
+        port_width=(21.1, 2),
         substrate_depth=0,
         ridge_height_max=0.75,
         nearfield_dx=0.3,

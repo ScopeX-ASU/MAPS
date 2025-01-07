@@ -1,8 +1,7 @@
-import autograd.numpy as npa
 import numpy as np
-import scipy.sparse as sp
 import torch
-from thirdparty.ceviche.ceviche.constants import C_0, EPSILON_0, ETA_0, MU_0
+
+from thirdparty.ceviche.constants import EPSILON_0, ETA_0
 
 """
 This file contains functions related to performing derivative operations used in the simulation tools.

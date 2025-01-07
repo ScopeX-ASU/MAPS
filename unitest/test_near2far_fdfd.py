@@ -1,20 +1,24 @@
 """
 Date: 1969-12-31 17:00:00
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-12-08 16:31:47
+LastEditTime: 2025-01-06 19:05:46
 FilePath: /MAPS/unitest/test_near2far_fdfd.py
 """
+
 import os
 import sys
 
 # Add the project root to sys.path
 project_root = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "/home/pingchua/projects/MAPS")
+    os.path.join(os.path.dirname(__file__), "..")
 )
 sys.path.insert(0, project_root)
+import copy
+
+import numpy as np
 import torch
-from ceviche.constants import *
 from matplotlib import pyplot as plt
+from pyutils.general import TimerCtx
 
 from core.fdfd.near2far import (
     get_farfields_GreenFunction,
@@ -28,9 +32,7 @@ from core.invdes.models.base_optimization import (
 )
 from core.invdes.models.layers import MetaLens
 from core.utils import set_torch_deterministic
-import numpy as np
-import copy
-from pyutils.general import TimerCtx
+from thirdparty.ceviche.constants import *
 
 
 def test_near2far():
@@ -171,7 +173,8 @@ def test_near2far():
                     device.port_monitor_slices[f"nearfield_{i}"] for i in range(1, 4)
                 ],
                 nearfield_slices_info=[
-                    device.port_monitor_slices_info[f"nearfield_{i}"] for i in range(1, 4)
+                    device.port_monitor_slices_info[f"nearfield_{i}"]
+                    for i in range(1, 4)
                 ],
                 Ez=Ez[None, ..., None],
                 Hx=Hx[None, ..., None],
@@ -192,7 +195,8 @@ def test_near2far():
                     device.port_monitor_slices[f"nearfield_{i}"] for i in range(1, 4)
                 ],
                 nearfield_slices_info=[
-                    device.port_monitor_slices_info[f"nearfield_{i}"] for i in range(1, 4)
+                    device.port_monitor_slices_info[f"nearfield_{i}"]
+                    for i in range(1, 4)
                 ],
                 Ez=Ez[None, ..., None],
                 Hx=Hx[None, ..., None],

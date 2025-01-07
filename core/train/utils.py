@@ -1,27 +1,33 @@
 import logging
 import math
 import random
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.distributed as dist
 import torch.fft
-import torch.optim
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
-from core.utils import LevelSetInterp, get_eps
-from thirdparty.ceviche.ceviche.constants import *
+import torch.optim
 from torch import Tensor
 from torch_sparse import spmm
-from typing import Callable, List, Tuple
-from core.utils import get_eigenmode_coefficients, Slice, get_flux
+
 from core.fdfd.fdfd import fdfd_ez
+from core.utils import (
+    LevelSetInterp,
+    Slice,
+    get_eigenmode_coefficients,
+    get_eps,
+    get_flux,
+)
+from thirdparty.ceviche.constants import *
 
 if TYPE_CHECKING:
     from torch.optim.optimizer import _params_t
 else:
     _params_t = Any
+
 
 def cal_fom_from_fields(
     Ez,
@@ -33,31 +39,34 @@ def cal_fom_from_fields(
     monitor_refl,
 ):
     fwd_trans, _ = get_eigenmode_coefficients(
-                hx=Hx,
-                hy=Hy,
-                ez=Ez,
-                ht_m=ht_m,
-                et_m=et_m,
-                monitor=monitor_out,
-                grid_step=1/50,
-                direction="y",
-                energy=True,
-            )
-    fwd_trans = fwd_trans / 1e-8 # normalize with the input power
+        hx=Hx,
+        hy=Hy,
+        ez=Ez,
+        ht_m=ht_m,
+        et_m=et_m,
+        monitor=monitor_out,
+        grid_step=1 / 50,
+        direction="y",
+        energy=True,
+    )
+    fwd_trans = fwd_trans / 1e-8  # normalize with the input power
 
     refl_fom = get_flux(
-                hx=Hx,
-                hy=Hy,
-                ez=Ez,
-                monitor=monitor_refl,
-                grid_step=1/50,
-                direction="x",
-            )
-    refl_fom = torch.abs(torch.abs(refl_fom / 1e-8) - 1) # normalize with the input power
+        hx=Hx,
+        hy=Hy,
+        ez=Ez,
+        monitor=monitor_refl,
+        grid_step=1 / 50,
+        direction="x",
+    )
+    refl_fom = torch.abs(
+        torch.abs(refl_fom / 1e-8) - 1
+    )  # normalize with the input power
 
     total_fom = -fwd_trans + 0.1 * refl_fom
 
     return total_fom
+
 
 def cal_total_field_adj_src_from_fwd_field(
     Ez,
@@ -71,21 +80,20 @@ def cal_total_field_adj_src_from_fwd_field(
 ) -> Tensor:
     if not return_adj_src:
         Hx, Hy = from_Ez_to_Hx_Hy_func(
-            eps, Ez # the eps_map doesn't really matter here actually
+            eps,
+            Ez,  # the eps_map doesn't really matter here actually
         )
-        total_field = torch.cat(
-            (Hx, Hy, Ez), dim=1
-        )
+        total_field = torch.cat((Hx, Hy, Ez), dim=1)
         total_field = pml_mask.unsqueeze(0).unsqueeze(0) * total_field
         return total_field, None
     else:
-        ht_m = ht_ms['ht_m-wl-1.55-port-out_port_1-mode-1']
-        et_m = et_ms['et_m-wl-1.55-port-out_port_1-mode-1']
+        ht_m = ht_ms["ht_m-wl-1.55-port-out_port_1-mode-1"]
+        et_m = et_ms["et_m-wl-1.55-port-out_port_1-mode-1"]
         monitor_out_x = monitors["port_slice-out_port_1_x"]
         monitor_out_y = monitors["port_slice-out_port_1_y"]
         monitor_refl_x = monitors["port_slice-refl_port_1_x"]
         monitor_refl_y = monitors["port_slice-refl_port_1_y"]
-        omega = 2 * np.pi * C_0 / (1.55 * 1e-6)
+        omega = 2 * np.pi * C_0 / (1.55 * MICRON_UNIT)
         sim = fdfd_ez(
             omega=omega,
             dL=2e-8,
@@ -113,25 +121,25 @@ def cal_total_field_adj_src_from_fwd_field(
             Hy_list.append(Hy_to_append)
 
             monitor_slice_out = Slice(
-                            y=monitor_out_y[i],
-                            x=torch.arange(
-                                monitor_out_x[i][0],
-                                monitor_out_x[i][1],
-                            ).to(monitor_out_y[i].device),
-                        )
+                y=monitor_out_y[i],
+                x=torch.arange(
+                    monitor_out_x[i][0],
+                    monitor_out_x[i][1],
+                ).to(monitor_out_y[i].device),
+            )
             monitor_slice_refl = Slice(
                 x=monitor_refl_x[i],
                 y=torch.arange(
-                        monitor_refl_y[i][0],
-                        monitor_refl_y[i][1],
-                    ).to(monitor_refl_x[i].device),
-                )
+                    monitor_refl_y[i][0],
+                    monitor_refl_y[i][1],
+                ).to(monitor_refl_x[i].device),
+            )
             fom = cal_fom_from_fields(
-                Ez_i, 
-                Hx_i, 
-                Hy_i, 
-                ht_m[i], 
-                et_m[i], 
+                Ez_i,
+                Hx_i,
+                Hy_i,
+                ht_m[i],
+                et_m[i],
                 monitor_slice_out,
                 monitor_slice_refl,
             )
@@ -139,36 +147,62 @@ def cal_total_field_adj_src_from_fwd_field(
             gradient_list.append(gradient)
         Hx = torch.stack(Hx_list, dim=0)
         Hy = torch.stack(Hy_list, dim=0)
-        total_field = torch.cat(
-            (Hx, Hy, Ez_copy), dim=1
-        )
+        total_field = torch.cat((Hx, Hy, Ez_copy), dim=1)
         total_field = pml_mask.unsqueeze(0).unsqueeze(0) * total_field
         adj_src = torch.conj(torch.stack(gradient_list, dim=0))
         return total_field, adj_src
 
-def plot_fields(fields: Tensor, ground_truth: Tensor, cmap: str = "magma", filepath: str = './figs/fields.png', **kwargs):
+
+def plot_fields(
+    fields: Tensor,
+    ground_truth: Tensor,
+    cmap: str = "magma",
+    filepath: str = "./figs/fields.png",
+    **kwargs,
+):
     # the field is of shape (batch, 6, x, y)
-    fields = fields.reshape(fields.shape[0], -1, 2, fields.shape[-2], fields.shape[-1]).permute(0, 1, 3, 4, 2).contiguous()
+    fields = (
+        fields.reshape(fields.shape[0], -1, 2, fields.shape[-2], fields.shape[-1])
+        .permute(0, 1, 3, 4, 2)
+        .contiguous()
+    )
     fields = torch.view_as_complex(fields)
-    ground_truth = ground_truth.reshape(ground_truth.shape[0], -1, 2, ground_truth.shape[-2], ground_truth.shape[-1]).permute(0, 1, 3, 4, 2).contiguous()
+    ground_truth = (
+        ground_truth.reshape(
+            ground_truth.shape[0], -1, 2, ground_truth.shape[-2], ground_truth.shape[-1]
+        )
+        .permute(0, 1, 3, 4, 2)
+        .contiguous()
+    )
     ground_truth = torch.view_as_complex(ground_truth)
     fig, ax = plt.subplots(3, ground_truth.shape[1], figsize=(15, 10), squeeze=False)
 
-    field_name = ['Hx', 'Hy', 'Ez']
+    field_name = ["Hx", "Hy", "Ez"]
     for idx, field in enumerate(field_name):
-        v_range = max(torch.abs(fields[0, idx]).max(), torch.abs(ground_truth[0, idx]).max()).item()
+        v_range = max(
+            torch.abs(fields[0, idx]).max(), torch.abs(ground_truth[0, idx]).max()
+        ).item()
         # Plot predicted fields in the first row
-        im_pred = ax[0, idx].imshow(torch.abs(fields[0, idx]).cpu().numpy(), vmin=0, vmax=v_range, cmap=cmap)
+        im_pred = ax[0, idx].imshow(
+            torch.abs(fields[0, idx]).cpu().numpy(), vmin=0, vmax=v_range, cmap=cmap
+        )
         ax[0, idx].set_title(f"Predicted Field {field}")
         fig.colorbar(im_pred, ax=ax[0, idx])
-        
+
         # Plot ground truth fields in the second row
-        im_gt = ax[1, idx].imshow(torch.abs(ground_truth[0, idx]).cpu().numpy(), vmin=0, vmax=v_range, cmap=cmap)
+        im_gt = ax[1, idx].imshow(
+            torch.abs(ground_truth[0, idx]).cpu().numpy(),
+            vmin=0,
+            vmax=v_range,
+            cmap=cmap,
+        )
         ax[1, idx].set_title(f"Ground Truth {field}")
         fig.colorbar(im_gt, ax=ax[1, idx])
 
         # Plot the difference between the predicted and ground truth fields in the third row
-        im_err = ax[2, idx].imshow(torch.abs(fields[0, idx] - ground_truth[0, idx]).cpu().numpy(), cmap=cmap)
+        im_err = ax[2, idx].imshow(
+            torch.abs(fields[0, idx] - ground_truth[0, idx]).cpu().numpy(), cmap=cmap
+        )
         ax[2, idx].set_title(f"Error {field}")
         fig.colorbar(im_err, ax=ax[2, idx])
 
@@ -176,12 +210,16 @@ def plot_fields(fields: Tensor, ground_truth: Tensor, cmap: str = "magma", filep
     plt.savefig(filepath, dpi=300)
     plt.close()
 
+
 def resize_to_targt_size(image: Tensor, size: Tuple[int, int]) -> Tensor:
     if len(image.shape) == 2:
         image = image.unsqueeze(0).unsqueeze(0)
     elif len(image.shape) == 3:
         image = image.unsqueeze(0)
-    return F.interpolate(image, size=size, mode='bilinear', align_corners=False).squeeze()
+    return F.interpolate(
+        image, size=size, mode="bilinear", align_corners=False
+    ).squeeze()
+
 
 class DAdaptAdam(torch.optim.Optimizer):
     r"""
@@ -433,6 +471,8 @@ class DAdaptAdam(torch.optim.Optimizer):
             group["k"] = k + 1
 
         return loss
+
+
 class DeterministicCtx:
     def __init__(self, seed: int | None = None) -> None:
         self.seed = seed
@@ -461,6 +501,7 @@ class DeterministicCtx:
         if torch.cuda.is_available():
             torch.cuda.set_rng_state(self.torch_cuda_random_state)
 
+
 def set_torch_deterministic(seed: int = 0) -> None:
     seed = int(seed) % (2**32)
     torch.manual_seed(seed)
@@ -470,6 +511,7 @@ def set_torch_deterministic(seed: int = 0) -> None:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
         torch.cuda.manual_seed_all(seed)
+
 
 def numerical_gradient_2d(phi, d_size):
     grad_x = torch.zeros_like(phi)
@@ -497,6 +539,7 @@ def numerical_gradient_2d(phi, d_size):
 
     return grad_x, grad_y
 
+
 # Auxiliary function to calculate first and second order partial derivatives.
 def ls_derivatives(phi, d_size):
     SC = 1e-12
@@ -515,6 +558,7 @@ def ls_derivatives(phi, d_size):
     phi_yy = phi_2y_y
 
     return phi_x, phi_y, phi_xx, phi_xy, phi_yy
+
 
 class fab_penalty_ls_gap(torch.nn.Module):
     def __init__(self, beta=1, min_feature_size=1):
@@ -559,6 +603,7 @@ class fab_penalty_ls_gap(torch.nn.Module):
             * grid_size**2
         )
 
+
 class fab_penalty_ls_curve(torch.nn.Module):
     def __init__(self, alpha=1, min_feature_size=1):
         super(fab_penalty_ls_curve, self).__init__()
@@ -597,6 +642,7 @@ class fab_penalty_ls_curve(torch.nn.Module):
             self.alpha * torch.maximum(curve_const, torch.tensor(0)) * grid_size**2
         )
 
+
 def padding_to_tiles(x, tile_size):
     """
     Pads the input tensor to a size that is a multiple of the tile size.
@@ -612,11 +658,13 @@ def padding_to_tiles(x, tile_size):
         x = torch.nn.functional.pad(x, (pady_0, pady_1, padx_0, padx_1))
     return x, pady_0, pady_1, padx_0, padx_1
 
+
 def rip_padding(eps, pady_0, pady_1, padx_0, padx_1):
     """
     Removes the padding from the input tensor.
     """
     return eps[padx_0:-padx_1, pady_0:-pady_1]
+
 
 class ComplexL1Loss(torch.nn.MSELoss):
     def __init__(self, norm=False) -> None:
@@ -635,8 +683,13 @@ class ComplexL1Loss(torch.nn.MSELoss):
         """
         if self.norm:
             diff = torch.view_as_real(x - target)
-            return diff.norm(p=1, dim=[1, 2, 3, 4]).div(torch.view_as_real(target).norm(p=1, dim=[1, 2, 3, 4])).mean()
+            return (
+                diff.norm(p=1, dim=[1, 2, 3, 4])
+                .div(torch.view_as_real(target).norm(p=1, dim=[1, 2, 3, 4]))
+                .mean()
+            )
         return F.l1_loss(torch.view_as_real(x), torch.view_as_real(target))
+
 
 class NormalizedMSELoss(torch.nn.modules.loss._Loss):
     def __init__(self, reduce="mean"):
@@ -913,11 +966,13 @@ def padding_to_tiles(x, tile_size):
         x = torch.nn.functional.pad(x, (pady_0, pady_1, padx_0, padx_1))
     return x, pady_0, pady_1, padx_0, padx_1
 
+
 def rip_padding(eps, pady_0, pady_1, padx_0, padx_1):
     """
     Removes the padding from the input tensor.
     """
     return eps[padx_0:-padx_1, pady_0:-pady_1]
+
 
 # class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
 #     def __init__(
@@ -934,7 +989,7 @@ def rip_padding(eps, pady_0, pady_1, padx_0, padx_1):
 #         self.wl_list = torch.linspace(
 #             wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl
 #         )
-#         self.omegas = 2 * np.pi * C_0 / (self.wl_list * 1e-6)
+#         self.omegas = 2 * np.pi * C_0 / (self.wl_list * MICRON_UNIT)
 #         self.using_ALM = using_ALM
 
 #     def forward(self, Ez: Tensor, source: Tensor, As, transpose_A):
@@ -944,7 +999,7 @@ def rip_padding(eps, pady_0, pady_1, padx_0, padx_1):
 #         source = torch.view_as_real(source.resolve_conj()).permute(0, 3, 1, 2) # B, 2, H, W
 #         source = source.permute(0, 2, 3, 1).contiguous()
 #         source = torch.view_as_complex(source) # convert source to the required complex format
-        
+
 
 #         # there is only one omega in this case
 #         Ez = Ez.unsqueeze(1)
@@ -964,7 +1019,7 @@ def rip_padding(eps, pady_0, pady_1, padx_0, padx_1):
 #         for i in range(Ez.shape[0]): # loop over samples in a batch
 #             for j in range(Ez.shape[1]): # loop over different wavelengths
 #                 ez = Ez[i, j].flatten()
-#                 # omega = 2 * np.pi * C_0 / (self.wl_list[j] * 1e-6)
+#                 # omega = 2 * np.pi * C_0 / (self.wl_list[j] * MICRON_UNIT)
 #                 wl = round(self.wl_list[j].item()*100)/100
 #                 # print("this is the key of As", list(As.keys()), flush=True)
 #                 # quit()
@@ -1014,6 +1069,7 @@ def rip_padding(eps, pady_0, pady_1, padx_0, padx_1):
 #         loss = (torch.norm(difference, p=2, dim=(-2, -1)) / (torch.norm(b, p=2, dim=(-2, -1)) + 1e-6)).mean()
 #         return loss
 
+
 class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
     def __init__(
         self,
@@ -1024,22 +1080,26 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
         super().__init__(size_average, reduce, reduction)
 
     def forward(
-            self, 
-            Ez: Tensor, 
-            source: Tensor, 
-            As, 
-            transpose_A,
-            wl,
-            temp,
-        ):
+        self,
+        Ez: Tensor,
+        source: Tensor,
+        As,
+        transpose_A,
+        wl,
+        temp,
+    ):
         Ez = Ez[:, -2:, :, :]
         Ez = Ez.permute(0, 2, 3, 1).contiguous()
-        Ez = torch.view_as_complex(Ez) # convert Ez to the required complex format
-        source = torch.view_as_real(source.resolve_conj()).permute(0, 3, 1, 2) # B, 2, H, W
+        Ez = torch.view_as_complex(Ez)  # convert Ez to the required complex format
+        source = torch.view_as_real(source.resolve_conj()).permute(
+            0, 3, 1, 2
+        )  # B, 2, H, W
         source = source.permute(0, 2, 3, 1).contiguous()
-        source = torch.view_as_complex(source) # convert source to the required complex format
+        source = torch.view_as_complex(
+            source
+        )  # convert source to the required complex format
 
-        omega = torch.tensor(2 * np.pi * C_0 / (wl * 1e-6), device=Ez.device)
+        omega = torch.tensor(2 * np.pi * C_0 / (wl * MICRON_UNIT), device=Ez.device)
         ## Ez: [bs, n_wl, h, w] complex tensor
         ## eps_r: [bs, h, w] real tensor
         ## source: [bs, n_wl, h, w] complex tensor, source in sim.solve(source), not b, b = 1j * omega * source
@@ -1047,14 +1107,16 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
         # step 2: calculate loss
         lhs = []
 
-        for i in range(Ez.shape[0]): # loop over samples in a batch
+        for i in range(Ez.shape[0]):  # loop over samples in a batch
             ez = Ez[i].flatten()
-            wl = round(wl*100)/100
-            entries = As[f'A-wl-{wl}-temp-{temp}-entries_a'][i]
-            indices = As[f'A-wl-{wl}-temp-{temp}-indices_a'][i]
+            wl = round(wl * 100) / 100
+            entries = As[f"A-wl-{wl}-temp-{temp}-entries_a"][i]
+            indices = As[f"A-wl-{wl}-temp-{temp}-indices_a"][i]
             if transpose_A:
                 # print("this is the shape of the indices", indices.shape, flush=True) # this is the shape of the indices torch.Size([2, 405600])
-                indices = torch.flip(indices, [0]) # considering the batch dimension, the axis set to 1 corresponds to axis = 0 in solver.
+                indices = torch.flip(
+                    indices, [0]
+                )  # considering the batch dimension, the axis set to 1 corresponds to axis = 0 in solver.
                 # b = b / 1j / omega
             A_by_e = spmm(
                 indices,
@@ -1066,13 +1128,9 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
             lhs.append(A_by_e)
         lhs = torch.stack(lhs, 0)  # [bs*n_wl, h*w]
         if not transpose_A:
-            b = (
-                (source * (1j * omega)).flatten(1)
-            )  # [bs, h*w]
+            b = (source * (1j * omega)).flatten(1)  # [bs, h*w]
         else:
-            b = (
-                (source).flatten(1)
-            )
+            b = (source).flatten(1)
         difference = lhs - b
         # fig, ax = plt.subplots(1, 3, figsize=(15, 5))
         # diff = ax[0].imshow(torch.abs(difference[0]).reshape(Ez.shape[-2], Ez.shape[-1]).detach().cpu().numpy())
@@ -1086,19 +1144,22 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
         difference = torch.view_as_real(difference).double()
         b = torch.view_as_real(b).double()
         # print("this is the l2 norm of the b ", torch.norm(b, p=2, dim=(-2, -1)), flush=True) # ~e+22
-        loss = (torch.norm(difference, p=2, dim=(-2, -1)) / (torch.norm(b, p=2, dim=(-2, -1)) + 1e-6)).mean()
+        loss = (
+            torch.norm(difference, p=2, dim=(-2, -1))
+            / (torch.norm(b, p=2, dim=(-2, -1)) + 1e-6)
+        ).mean()
         return loss
 
-class SParamLoss(torch.nn.modules.loss._Loss):
 
+class SParamLoss(torch.nn.modules.loss._Loss):
     def __init__(self, reduce="mean"):
         super(SParamLoss, self).__init__()
 
         self.reduce = reduce
 
     def forward(
-        self, 
-        fields, # bs, 3, H, W, complex
+        self,
+        fields,  # bs, 3, H, W, complex
         ht_m,
         et_m,
         monitor_slices_x,
@@ -1107,7 +1168,7 @@ class SParamLoss(torch.nn.modules.loss._Loss):
     ):
         # Step 1: Resize all the fields to the target size
         Ez = fields[:, -2:, :, :].permute(0, 2, 3, 1).contiguous()
-        Ez = torch.view_as_complex(Ez) # convert Ez to the required complex format
+        Ez = torch.view_as_complex(Ez)  # convert Ez to the required complex format
 
         Hx = fields[:, :2, :, :].permute(0, 2, 3, 1).contiguous()
         Hx = torch.view_as_complex(Hx)
@@ -1137,7 +1198,7 @@ class SParamLoss(torch.nn.modules.loss._Loss):
                 ht_m=ht_m[i],
                 et_m=et_m[i],
                 monitor=monitor_slice,
-                grid_step=1/50,
+                grid_step=1 / 50,
                 direction="y",
                 autograd=True,
                 energy=True,
@@ -1147,32 +1208,48 @@ class SParamLoss(torch.nn.modules.loss._Loss):
         s_params_diff = s_params - target_SParam
         # Step 3: Calculate the loss
         # print("this is the l2 norm of the target_SParam ", torch.norm(target_SParam, p=2, dim=-1), flush=True) ~e-9
-        loss = (torch.norm(s_params_diff, p=2, dim=-1) / (torch.norm(target_SParam, p=2, dim=-1) + 1e-12)).mean()
+        loss = (
+            torch.norm(s_params_diff, p=2, dim=-1)
+            / (torch.norm(target_SParam, p=2, dim=-1) + 1e-12)
+        ).mean()
         return loss
-    
-class GradientLoss(torch.nn.modules.loss._Loss):
 
+
+class GradientLoss(torch.nn.modules.loss._Loss):
     def __init__(self, reduce="mean"):
         super(GradientLoss, self).__init__()
 
         self.reduce = reduce
 
     def forward(
-        self, 
+        self,
         forward_fields,
-        adjoint_fields,  
+        adjoint_fields,
         target_gradient,
         gradient_multiplier,
-        dr_mask = None,
+        dr_mask=None,
     ):
-        forward_fields_ez = forward_fields[:, -2:, :, :] # the forward fields has three components, we only need the Ez component
-        forward_fields_ez = torch.view_as_complex(forward_fields_ez.permute(0, 2, 3, 1).contiguous())
-        adjoint_fields = adjoint_fields[:, -2:, :, :] # the adjoint fields has three components, we only need the Ez component
-        adjoint_fields = torch.view_as_complex(adjoint_fields.permute(0, 2, 3, 1).contiguous()) # adjoint fields only Ez 
-        gradient = -(adjoint_fields*forward_fields_ez).real
+        forward_fields_ez = forward_fields[
+            :, -2:, :, :
+        ]  # the forward fields has three components, we only need the Ez component
+        forward_fields_ez = torch.view_as_complex(
+            forward_fields_ez.permute(0, 2, 3, 1).contiguous()
+        )
+        adjoint_fields = adjoint_fields[
+            :, -2:, :, :
+        ]  # the adjoint fields has three components, we only need the Ez component
+        adjoint_fields = torch.view_as_complex(
+            adjoint_fields.permute(0, 2, 3, 1).contiguous()
+        )  # adjoint fields only Ez
+        gradient = -(adjoint_fields * forward_fields_ez).real
         batch_size = gradient.shape[0]
         for i in range(batch_size):
-            gradient[i] = gradient[i] / gradient_multiplier["field_adj_normalizer-wl-1.55-port-in_port_1-mode-1"][i]
+            gradient[i] = (
+                gradient[i]
+                / gradient_multiplier[
+                    "field_adj_normalizer-wl-1.55-port-in_port_1-mode-1"
+                ][i]
+            )
         # Step 0: build one_mask from dr_mask
         ## This is not correct
         # need to build a design region mask whose size shold be b, H, W
@@ -1196,10 +1273,9 @@ class GradientLoss(torch.nn.modules.loss._Loss):
             dr_masks = torch.stack(dr_masks, 0)
         else:
             dr_masks = torch.ones_like(gradient)
-        
-        x = - EPSILON_0 * (2 * torch.pi * C_0 / (1.55 * 1e-6))**2 * (gradient)
+
+        x = -EPSILON_0 * (2 * torch.pi * C_0 / (1.55 * MICRON_UNIT)) ** 2 * (gradient)
         y = target_gradient
         error_energy = torch.norm((x - y) * dr_masks, p=2, dim=(-1, -2))
         field_energy = torch.norm(y * dr_masks, p=2, dim=(-1, -2)) + 1e-6
         return (error_energy / field_energy).mean()
-    

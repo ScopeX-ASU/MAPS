@@ -2,44 +2,20 @@
 Description:
 Author: Jiaqi Gu (jqgu@utexas.edu)
 Date: 2022-03-10 01:25:27
-LastEditors: Jiaqi Gu (jqgu@utexas.edu)
-LastEditTime: 2022-03-10 01:37:06
+LastEditors: Jiaqi Gu && jiaqigu@asu.edu
+LastEditTime: 2025-01-06 18:59:12
 """
 
-
-from turtle import pos
-from typing import List, Optional, Tuple
-
-import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from pyutils.activation import Swish
-from timm.models.layers import DropPath
-from torch import nn
-from torch.functional import Tensor
-from torch.types import Device
-from neuralop.models import FNO
-from neuralop.layers.mlp import MLP
-from neuralop.layers.fno_block import FNOBlocks
-from neuralop.layers.spectral_convolution import SpectralConv
-import matplotlib.pyplot as plt
-from core.utils import (
-    Si_eps,
-    SiO2_eps,
-)
-import copy
-from mmengine.registry import MODELS
-
-import torch.nn.functional as F
-from functools import lru_cache
-from pyutils.torch_train import set_torch_deterministic
-from core.train.utils import resize_to_targt_size
-from core.fdfd.fdfd import fdfd_ez
-from thirdparty.ceviche.ceviche.constants import *
 from einops import rearrange
-from .model_base import ModelBase, ConvBlock, LinearBlock
+from mmengine.registry import MODELS
+from torch.functional import Tensor
+
+from thirdparty.ceviche.constants import *
+
 from .fno_cnn import LearnableFourierFeatures
+from .model_base import ModelBase
 
 __all__ = ["UNet"]
 
@@ -52,6 +28,7 @@ def double_conv(in_channels, hidden, out_channels):
         nn.Conv2d(hidden, out_channels, 3, padding=1),
         nn.BatchNorm2d(out_channels),
     )
+
 
 @MODELS.register_module()
 class UNet(ModelBase):
@@ -91,11 +68,9 @@ class UNet(ModelBase):
         mapping_size=2,
         norm_cfg=dict(type="LayerNorm", data_format="channels_first"),
         act_cfg=dict(type="GELU"),
-
         wl=1.55,
         temp=300,
         mode=1,
-
         conv_cfg=dict(type="Conv2d", padding_mode="replicate"),
         linear_cfg=dict(type="Linear"),
         incident_field_fwd=False,
@@ -197,7 +172,6 @@ class UNet(ModelBase):
     def set_trainable_permittivity(self, mode: bool = True) -> None:
         self.trainable_permittivity = mode
 
-
     def requires_network_params_grad(self, mode: float = True) -> None:
         params = self.parameters()
         for p in params:
@@ -252,7 +226,11 @@ class UNet(ModelBase):
             eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1)
         else:
             enc_fwd = self.fourier_feature_mapping(eps)
-            eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1) if self.fourier_feature != "none" else eps
+            eps_enc_fwd = (
+                torch.cat((eps, enc_fwd), dim=1)
+                if self.fourier_feature != "none"
+                else eps
+            )
 
         if self.incident_field_fwd:
             x = torch.cat((eps_enc_fwd, incident_field_fwd), dim=1)
@@ -295,5 +273,5 @@ class UNet(ModelBase):
         x = self.dconv_up1(x)
 
         x = self.conv_last(x)  # [bs, outc, h, w] real
-        
+
         return x

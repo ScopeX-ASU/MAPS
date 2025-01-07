@@ -39,6 +39,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                             "Hz1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="eigenmode",  # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
+                        # type="flux",  # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
                         direction="y+",
                     ),
                     refl_trans=dict(

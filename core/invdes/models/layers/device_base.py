@@ -1,7 +1,7 @@
 """
 Date: 2024-10-02 20:59:04
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-05 22:17:12
+LastEditTime: 2025-01-06 19:01:55
 FilePath: /MAPS/core/invdes/models/layers/device_base.py
 """
 
@@ -23,11 +23,11 @@ from core.utils import (
     Si_eps,
     SiO2_eps,
     Slice,
-    get_flux,
     get_eigenmode_coefficients,
+    get_flux,
 )
-from thirdparty.ceviche.ceviche import fdfd_ez, fdfd_hz
-from thirdparty.ceviche.ceviche.constants import C_0
+from thirdparty.ceviche import fdfd_ez, fdfd_hz
+from thirdparty.ceviche.constants import C_0, MICRON_UNIT
 
 from .utils import (
     apply_regions_gpu,
@@ -863,14 +863,14 @@ class N_Ports(BaseDevice):
         source_modes: Tuple[int] = ("Ez1",),
     ):
         grid_step = grid_step or self.grid_step
-        dl = grid_step * 1e-6
+        dl = grid_step * MICRON_UNIT
         mode_profiles = {}
         for wl in np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl):
             for source_mode in source_modes:
                 # there is no need to calculate the modes for different temperatures
                 # since the eps is only modulated at active region
                 # current_eps = get_temp_related_eps(eps, wl, temp)
-                omega = 2 * np.pi * C_0 / (wl * 1e-6)
+                omega = 2 * np.pi * C_0 / (wl * MICRON_UNIT)
                 ht_m, et_m, _, mode = insert_mode(
                     omega, dl, slice.x, slice.y, eps, m=source_mode
                 )
@@ -968,9 +968,9 @@ class N_Ports(BaseDevice):
         this is only called in the norm run through solve() in _norm_run(), so we can pass port_name and the mode to be 'Norm' directly
         and there is no need to run the backward to store the adjoint source and adjoint fields, so we enable torch.no_grad() environment
         """
-        omega = 2 * np.pi * C_0 / (wl * 1e-6)
+        omega = 2 * np.pi * C_0 / (wl * MICRON_UNIT)
         grid_step = grid_step or self.grid_step
-        dl = grid_step * 1e-6
+        dl = grid_step * MICRON_UNIT
         # simulation = fdfd_ez(omega, dl, eps, [self.NPML[0], self.NPML[1]])
         simulation = self.create_simulation(
             omega, dl, eps, self.NPML, solver=solver, pol=pol
@@ -1110,7 +1110,7 @@ class N_Ports(BaseDevice):
                 else:
                     raise ValueError(f"Unknown polarization {pol}")
 
-                # _, ht_m, et_m, _ = source_profiles[k]
+                _, ht_m, et_m, _ = source_profiles[k]
                 # print("this is the type of Hx:", type(Hx), flush=True)
                 # print("this is the type of Hy:", type(Hy), flush=True)
                 # print("this is the type of Ez:", type(Ez), flush=True)
@@ -1118,19 +1118,19 @@ class N_Ports(BaseDevice):
                 # print("this is the type of et_m:", type(et_m), flush=True)
                 # ht_m = torch.from_numpy(ht_m).to(Ez.device)
                 # et_m = torch.from_numpy(et_m).to(Ez.device)
-                # eigen_energy = get_eigenmode_coefficients(
-                #     Fx,
-                #     Fy,
-                #     Fz,
-                #     ht_m,
-                #     et_m,
-                #     output_slice,
-                #     grid_step=self.grid_step,
-                #     direction=direction,
-                #     energy=True,
-                #     pol=pol,
-                # )
-                # print("eigen_energy:", eigen_energy)
+                eigen_energy = get_eigenmode_coefficients(
+                    Fx,
+                    Fy,
+                    Fz,
+                    ht_m,
+                    et_m,
+                    output_slice,
+                    grid_step=self.grid_step,
+                    direction=direction,
+                    energy=True,
+                    pol=pol,
+                )
+                print("eigen_energy:", eigen_energy)
                 ## used to verify eigen mode coefficients, need to be the same as eigen energy
                 flux = get_flux(
                     Fx,
@@ -1141,7 +1141,7 @@ class N_Ports(BaseDevice):
                     direction=direction,
                     pol=pol,
                 )
-                # print("norm flux:", flux)
+                print("norm flux:", flux)
                 if isinstance(flux, torch.Tensor):
                     flux = flux.item()
                 input_SCALE[k] = np.abs(flux)

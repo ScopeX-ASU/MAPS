@@ -1,8 +1,8 @@
 """
 Date: 2024-10-03 02:27:36
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-10-06 01:41:28
-FilePath: /Metasurface-Opt/unitest/test_device_base.py
+LastEditTime: 2025-01-06 18:59:45
+FilePath: /MAPS/data/fdfd/generate_metacoupler.py
 """
 
 """
@@ -11,31 +11,19 @@ LastEditors: Jiaqi Gu && jiaqigu@asu.edu
 LastEditTime: 2024-10-04 00:50:55
 FilePath: /Metasurface-Opt/unitest/test_device_base.py
 """
-import os
-from multiprocessing import Pool
-import numpy as np
-import scipy.sparse as sp
+import argparse
+
 import torch
 import torch.nn.functional as F
-from ceviche import fdfd_ez as ceviche_fdfd_ez
-from ceviche.constants import *
-from pyutils.general import print_stat
 
 from core.models import (
-    IsolatorOptimization,
     MetaCouplerOptimization,
-    MetaMirrorOptimization,
 )
-from core.models.base_optimization import BaseOptimization, DefaultSimulationConfig
-from core.models.fdfd.fdfd import fdfd_ez
-from core.models.fdfd.utils import torch_sparse_to_scipy_sparse
-from core.models.layers import Isolator, MetaCoupler, MetaMirror
-from core.models.layers.device_base import N_Ports, Si_eps
-from core.models.layers.utils import plot_eps_field
+from core.models.base_optimization import DefaultSimulationConfig
+from core.models.layers import MetaCoupler
 from core.utils import set_torch_deterministic
-from torch_sparse import spspmm
-import argparse
-import random
+from thirdparty.ceviche.constants import *
+
 
 def compare_designs(design_regions_1, design_regions_2):
     similarity = []
@@ -44,6 +32,7 @@ def compare_designs(design_regions_1, design_regions_2):
         v2 = design_regions_2[k]
         similarity.append(F.cosine_similarity(v1.flatten(), v2.flatten(), dim=0))
     return torch.mean(torch.stack(similarity)).item()
+
 
 def metacoupler_opt(device_id, operation_device):
     sim_cfg = DefaultSimulationConfig()
@@ -94,20 +83,22 @@ def metacoupler_opt(device_id, operation_device):
     )
 
     device = MetaCoupler(
-        sim_cfg=sim_cfg, 
+        sim_cfg=sim_cfg,
         aperture=aperture,
-        n_layers=1, # here to simplify the problem, we only consider 1 layer 
-        ridge_height_max=ridge_height_max, 
+        n_layers=1,  # here to simplify the problem, we only consider 1 layer
+        ridge_height_max=ridge_height_max,
         port_len=(port_len, port_len),
-        port_width=(
-            input_port_width,
-            output_port_width
-        ), 
-        device=operation_device
+        port_width=(input_port_width, output_port_width),
+        device=operation_device,
     )
     hr_device = device.copy(resolution=310)
     print(device)
-    opt = MetaCouplerOptimization(device=device, hr_device=hr_device, sim_cfg=sim_cfg, operation_device=operation_device).to(operation_device)
+    opt = MetaCouplerOptimization(
+        device=device,
+        hr_device=hr_device,
+        sim_cfg=sim_cfg,
+        operation_device=operation_device,
+    ).to(operation_device)
     print(opt)
 
     optimizer = torch.optim.Adam(opt.parameters(), lr=0.02)
@@ -128,7 +119,9 @@ def metacoupler_opt(device_id, operation_device):
         (-results["obj"]).backward()
         current_design_region_dict = opt.get_design_region_eps_dict()
         filename_h5 = f"./data/fdfd/metacoupler/mfs_raw_1_layer/metacoupler_id-{device_id}_opt_step_{step}.h5"
-        filename_yml = f"./data/fdfd/metacoupler/mfs_raw_1_layer/metacoupler_id-{device_id}.yml"
+        filename_yml = (
+            f"./data/fdfd/metacoupler/mfs_raw_1_layer/metacoupler_id-{device_id}.yml"
+        )
         if last_design_region_dict is None:
             opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
             last_design_region_dict = current_design_region_dict
@@ -151,9 +144,13 @@ def metacoupler_opt(device_id, operation_device):
                 exclude_port_names=["refl_port_1"],
             )
         else:
-            cosine_similarity = compare_designs(last_design_region_dict, current_design_region_dict)
+            cosine_similarity = compare_designs(
+                last_design_region_dict, current_design_region_dict
+            )
             if cosine_similarity < 0.998 or step == 9:
-                opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
+                opt.dump_data(
+                    filename_h5=filename_h5, filename_yml=filename_yml, step=step
+                )
                 last_design_region_dict = current_design_region_dict
                 opt.plot(
                     eps_map=opt._eps_map,
@@ -179,6 +176,7 @@ def metacoupler_opt(device_id, operation_device):
         optimizer.step()
         scheduler.step()
 
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--random_seed", type=int, default=0)
@@ -188,11 +186,11 @@ def main():
     torch.cuda.set_device(gpu_id)
     device = torch.device("cuda:" + str(gpu_id))
     torch.backends.cudnn.benchmark = True
-    set_torch_deterministic(int(41+random_seed))
+    set_torch_deterministic(int(41 + random_seed))
     metacoupler_opt(random_seed, device)
+
 
 if __name__ == "__main__":
     main()
-
 
     # metacoupler_opt(0, operation_device="cuda:0")

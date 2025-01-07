@@ -6,26 +6,21 @@ I changed it from NeurOLight MMI dataset
 need to accomodate different types of devices
 """
 
+import glob
 import os
+from typing import Callable, Dict, List, Optional, Tuple
+
+import h5py
 import numpy as np
 import torch
-import glob
 import yaml
-import h5py
 from torch import Tensor
 from torch.nn import functional as F
-from torchpack.datasets.dataset import Dataset
 from torchvision import transforms
 from torchvision.datasets import VisionDataset
-from torchvision.datasets.utils import download_url
-from typing import Any, Callable, Dict, List, Optional, Tuple
 from torchvision.transforms import InterpolationMode
-from core.utils import resize_to_targt_size, print_stat
-from thirdparty.ceviche.ceviche.constants import *
-from core.utils import (
-    Si_eps,
-    SiO2_eps,
-)
+
+from thirdparty.ceviche.constants import *
 
 resize_modes = {
     "bilinear": InterpolationMode.BILINEAR,
@@ -34,6 +29,7 @@ resize_modes = {
 }
 
 __all__ = ["FDFD", "FDFDDataset"]
+
 
 class FDFD(VisionDataset):
     url = None
@@ -83,9 +79,8 @@ class FDFD(VisionDataset):
             processed_dir, f"{self.train_filename}.yml"
         )
         processed_test_file = os.path.join(processed_dir, f"{self.test_filename}.yml")
-        if (
-            os.path.exists(processed_training_file)
-            and os.path.exists(processed_test_file)
+        if os.path.exists(processed_training_file) and os.path.exists(
+            processed_test_file
         ):
             print("Data already processed")
             return
@@ -111,9 +106,13 @@ class FDFD(VisionDataset):
     def _load_dataset(self) -> List:
         ## do not load actual data here, too slow. Just load the filenames
         all_samples = [
-                os.path.basename(i)
-                for i in glob.glob(os.path.join(self.root, self.device_type, "raw", f"{self.device_type}_*.h5"))
-            ]
+            os.path.basename(i)
+            for i in glob.glob(
+                os.path.join(
+                    self.root, self.device_type, "raw", f"{self.device_type}_*.h5"
+                )
+            )
+        ]
         total_device_id = []
         for filename in all_samples:
             device_id = filename.split("_")[1].split("-")[1]
@@ -123,6 +122,7 @@ class FDFD(VisionDataset):
 
     def _split_dataset(self, filenames) -> Tuple[List, ...]:
         from sklearn.model_selection import train_test_split
+
         print("this is the train ratio: ", self.train_ratio, flush=True)
         print("this is the length of the filenames: ", len(filenames), flush=True)
         (
@@ -142,19 +142,25 @@ class FDFD(VisionDataset):
             filenames_test,
         )
 
-    def _preprocess_dataset(self, data_train: Tensor, data_test: Tensor) -> Tuple[Tensor, Tensor]:
+    def _preprocess_dataset(
+        self, data_train: Tensor, data_test: Tensor
+    ) -> Tuple[Tensor, Tensor]:
         all_samples = [
-                os.path.basename(i)
-                for i in glob.glob(os.path.join(self.root, self.device_type, "raw", f"{self.device_type}_*.h5"))
-            ]
+            os.path.basename(i)
+            for i in glob.glob(
+                os.path.join(
+                    self.root, self.device_type, "raw", f"{self.device_type}_*.h5"
+                )
+            )
+        ]
         filename_train = []
         filename_test = []
         for filename in all_samples:
             device_id = filename.split("_")[1].split("-")[1]
             opt_step = eval(filename.split("_")[-1].split(".")[0])
-            if device_id in data_train: # only take the last step
+            if device_id in data_train:  # only take the last step
                 filename_train.append(filename)
-            elif device_id in data_test: # only take the last step
+            elif device_id in data_test:  # only take the last step
                 filename_test.append(filename)
         return filename_train, filename_test
 
@@ -176,7 +182,7 @@ class FDFD(VisionDataset):
         with open(processed_test_file, "w") as f:
             yaml.dump(data_test, f)
 
-        print(f"Processed dataset saved")
+        print("Processed dataset saved")
 
     def load(self, train: bool = True):
         filename = (
@@ -195,7 +201,12 @@ class FDFD(VisionDataset):
 
     def _check_integrity(self) -> bool:
         raise NotImplementedError
-        return all([os.path.exists(os.path.join(self.root, "raw", filename)) for filename in self.filenames])
+        return all(
+            [
+                os.path.exists(os.path.join(self.root, "raw", filename))
+                for filename in self.filenames
+            ]
+        )
 
     def __len__(self):
         return len(self.data)
@@ -208,7 +219,9 @@ class FDFD(VisionDataset):
             orgion_size = torch.from_numpy(f["eps_map"][()]).float().size()
             # eps_map = resize_to_targt_size(torch.from_numpy(f["eps_map"][()]).float(), (200, 300))
             # gradient = resize_to_targt_size(torch.from_numpy(f["gradient"][()]).float(), (200, 300))
-            eps_map = torch.from_numpy(f["eps_map"][()]).float() # sqrt the eps_map to get the refractive index TODO: I deleted the sqrt here, need to recheck the aux losses
+            eps_map = torch.from_numpy(
+                f["eps_map"][()]
+            ).float()  # sqrt the eps_map to get the refractive index TODO: I deleted the sqrt here, need to recheck the aux losses
             gradient = torch.from_numpy(f["gradient"][()]).float()
             field_solutions = {}
             s_params = {}
@@ -275,17 +288,21 @@ class FDFD(VisionDataset):
                     design_region_mask[key] = int(f[key][()])
                 elif key.startswith("ht_m"):
                     ht_m[key] = torch.from_numpy(f[key][()])
-                    ht_m[key+"-origin_size"] = torch.tensor(ht_m[key].shape)
+                    ht_m[key + "-origin_size"] = torch.tensor(ht_m[key].shape)
                     ht_m[key] = torch.view_as_real(ht_m[key]).permute(1, 0).unsqueeze(0)
-                    ht_m[key] = F.interpolate(ht_m[key], size=5000, mode='linear', align_corners=True)
+                    ht_m[key] = F.interpolate(
+                        ht_m[key], size=5000, mode="linear", align_corners=True
+                    )
                     ht_m[key] = ht_m[key].squeeze(0).permute(1, 0).contiguous()
                     ht_m[key] = torch.view_as_complex(ht_m[key])
                     # print("this is the dtype of the ht_m: ", ht_m[key].dtype, flush=True)
                 elif key.startswith("et_m"):
                     et_m[key] = torch.from_numpy(f[key][()])
-                    et_m[key+"-origin_size"] = torch.tensor(et_m[key].shape)
+                    et_m[key + "-origin_size"] = torch.tensor(et_m[key].shape)
                     et_m[key] = torch.view_as_real(et_m[key]).permute(1, 0).unsqueeze(0)
-                    et_m[key] = F.interpolate(et_m[key], size=5000, mode='linear', align_corners=True)
+                    et_m[key] = F.interpolate(
+                        et_m[key], size=5000, mode="linear", align_corners=True
+                    )
                     et_m[key] = et_m[key].squeeze(0).permute(1, 0).contiguous()
                     et_m[key] = torch.view_as_complex(et_m[key])
                     # print("this is the dtype of the et_m: ", et_m[key].dtype, flush=True)
@@ -300,7 +317,22 @@ class FDFD(VisionDataset):
                         monitor_slice[key] = torch.tensor([data])
                     else:
                         monitor_slice[key] = torch.tensor(data)
-        return eps_map, adj_srcs, gradient, field_solutions, s_params, src_profile, fields_adj, field_normalizer, design_region_mask, ht_m, et_m, monitor_slice, As, path
+        return (
+            eps_map,
+            adj_srcs,
+            gradient,
+            field_solutions,
+            s_params,
+            src_profile,
+            fields_adj,
+            field_normalizer,
+            design_region_mask,
+            ht_m,
+            et_m,
+            monitor_slice,
+            As,
+            path,
+        )
 
     def extra_repr(self) -> str:
         return "Split: {}".format("Train" if self.train is True else "Test")
@@ -320,7 +352,9 @@ class FDFDDataset:
         self.root = root
         self.split = split
         self.test_ratio = test_ratio
-        assert 0 < test_ratio < 1, print(f"Only support test_ratio from (0, 1), but got {test_ratio}")
+        assert 0 < test_ratio < 1, print(
+            f"Only support test_ratio from (0, 1), but got {test_ratio}"
+        )
         self.train_valid_split_ratio = train_valid_split_ratio
         self.data = None
         self.processed_dir = processed_dir
@@ -346,11 +380,14 @@ class FDFDDataset:
             )
 
             train_len = int(self.train_valid_split_ratio[0] * len(train_valid))
-            if self.train_valid_split_ratio[0] + self.train_valid_split_ratio[1] > 0.99999:
+            if (
+                self.train_valid_split_ratio[0] + self.train_valid_split_ratio[1]
+                > 0.99999
+            ):
                 valid_len = len(train_valid) - train_len
             else:
                 valid_len = int(self.train_valid_split_ratio[1] * len(train_valid))
-                train_valid.data = train_valid.data[:train_len+valid_len]
+                train_valid.data = train_valid.data[: train_len + valid_len]
 
             split = [train_len, valid_len]
             train_subset, valid_subset = torch.utils.data.random_split(
@@ -386,12 +423,21 @@ class FDFDDataset:
 
 
 def test_fdfd():
-    import pdb
-
     # pdb.set_trace()
-    fdfd = FDFD(device_type="metacoupler", root="../../data", download=False, processed_dir="metacoupler")
+    fdfd = FDFD(
+        device_type="metacoupler",
+        root="../../data",
+        download=False,
+        processed_dir="metacoupler",
+    )
     print(len(fdfd.data))
-    fdfd = FDFD(device_type="metacoupler", root="../../data", train=False, download=False, processed_dir="metacoupler")
+    fdfd = FDFD(
+        device_type="metacoupler",
+        root="../../data",
+        train=False,
+        download=False,
+        processed_dir="metacoupler",
+    )
     print(len(fdfd.data))
     fdfd = FDFDDataset(
         device_type="metacoupler",

@@ -13,12 +13,12 @@ import torch.distributed as dist
 import torch.fft
 import torch.nn.functional as F
 import torch.optim
+import yaml
 from torch import Tensor
 from torch.types import Device
 from torch_sparse import spmm
-import yaml
 
-from thirdparty.ceviche.ceviche.constants import *
+from thirdparty.ceviche.constants import *
 
 if TYPE_CHECKING:
     from torch.optim.optimizer import _params_t
@@ -300,7 +300,7 @@ def get_eigenmode_coefficients(
     # print("this is the type of em: ", type(em[2])) # ndarray
     # print("this is the type of hy: ", type(hy[monitor])) # torch.Tensor
 
-    dl = grid_step * 1e-6
+    dl = grid_step * MICRON_UNIT
     overlap1 = overlap(em, h, dl=dl, direction=direction)
     overlap2 = overlap(hm, e, dl=dl, direction=direction)
     normalization = overlap(em, hm, dl=dl, direction=direction)
@@ -371,8 +371,6 @@ def cal_total_field_adj_src_from_fwd_field(
     in_port_name,
     out_port_name,
 ) -> Tensor:
-    from core.fdfd.fdfd import fdfd_ez  # this is to avoid circular import
-
     if not return_adj_src:
         Hx, Hy = from_Ez_to_Hx_Hy_func(
             sim,
@@ -1448,7 +1446,7 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
         self.wl_list = torch.linspace(
             wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl
         )
-        self.omegas = 2 * np.pi * C_0 / (self.wl_list * 1e-6)
+        self.omegas = 2 * np.pi * C_0 / (self.wl_list * MICRON_UNIT)
         self.using_ALM = using_ALM
 
     def forward(self, Ez: Tensor, source: Tensor, As, transpose_A):
@@ -1479,7 +1477,7 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
         for i in range(Ez.shape[0]):  # loop over samples in a batch
             for j in range(Ez.shape[1]):  # loop over different wavelengths
                 ez = Ez[i, j].flatten()
-                # omega = 2 * np.pi * C_0 / (self.wl_list[j] * 1e-6)
+                # omega = 2 * np.pi * C_0 / (self.wl_list[j] * MICRON_UNIT)
                 wl = round(self.wl_list[j].item() * 100) / 100
                 entries = As[f"A-wl-{wl}-entries_a"][i]
                 indices = As[f"A-wl-{wl}-indices_a"][i]
@@ -1657,7 +1655,7 @@ class GradientLoss(torch.nn.modules.loss._Loss):
         else:
             dr_masks = torch.ones_like(gradient)
 
-        x = -EPSILON_0 * (2 * torch.pi * C_0 / (1.55 * 1e-6)) ** 2 * (gradient)
+        x = -EPSILON_0 * (2 * torch.pi * C_0 / (1.55 * MICRON_UNIT)) ** 2 * (gradient)
         y = target_gradient
         error_energy = torch.norm((x - y) * dr_masks, p=2, dim=(-1, -2))
         field_energy = torch.norm(y * dr_masks, p=2, dim=(-1, -2)) + 1e-6
@@ -1894,7 +1892,7 @@ def get_flux(
     if pol == "Hz":
         ## swap e and h
         e, h = h, e
-    s = 0.5 * real(overlap(e, h, dl=grid_step * 1e-6, direction=direction))
+    s = 0.5 * real(overlap(e, h, dl=grid_step * MICRON_UNIT, direction=direction))
 
     return s
 

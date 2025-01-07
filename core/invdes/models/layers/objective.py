@@ -16,8 +16,8 @@ from core.utils import (
     get_flux,
     get_shape_similarity,
 )
-from thirdparty.ceviche.ceviche import jacobian
-from thirdparty.ceviche.ceviche.constants import MU_0
+from thirdparty.ceviche import jacobian
+from thirdparty.ceviche.constants import MU_0
 
 
 class EigenmodeObjective(object):

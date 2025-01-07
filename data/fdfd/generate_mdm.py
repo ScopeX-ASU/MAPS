@@ -2,9 +2,7 @@ import os
 import sys
 
 # Add the project root to sys.path
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 import argparse
 import random
 
@@ -18,10 +16,9 @@ from core.invdes.models.base_optimization import (
     DefaultSimulationConfig,
 )
 from core.invdes.models.layers import MDM
-from core.utils import set_torch_deterministic
-from thirdparty.ceviche.ceviche.constants import *
+from core.utils import DeterministicCtx, print_stat, set_torch_deterministic
+from thirdparty.ceviche.constants import *
 
-from core.utils import DeterministicCtx, print_stat
 
 def compare_designs(design_regions_1, design_regions_2):
     similarity = []
@@ -38,14 +35,16 @@ def mdm_opt(device_id, operation_device, perturb_probs=[0.1, 0.3, 0.5]):
     sim_cfg = DefaultSimulationConfig()
     target_img_size = 256
     resolution = 50
-    target_cell_size = target_img_size / resolution # 10.24
+    target_cell_size = target_img_size / resolution  # 10.24
     port_len = round(random.uniform(1, 1.2) * resolution) / resolution
 
     mdm_region_size = [
         round((target_cell_size - 2 * port_len) * resolution) / resolution,
         round((target_cell_size - 2 * port_len) * resolution) / resolution,
     ]
-    assert round(mdm_region_size[0] + 2 * port_len, 2) == target_cell_size, f"right hand side: {mdm_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
+    assert (
+        round(mdm_region_size[0] + 2 * port_len, 2) == target_cell_size
+    ), f"right hand side: {mdm_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
 
     input_port_width = 0.8
     output_port_width = 0.8
@@ -101,7 +100,7 @@ def mdm_opt(device_id, operation_device, perturb_probs=[0.1, 0.3, 0.5]):
                 with torch.no_grad():
                     for p in opt.parameters():
                         mask = torch.rand_like(p) < flip_prob
-                        p.data[mask] =  -1 * p.data[mask]
+                        p.data[mask] = -1 * p.data[mask]
                         # p.data.add_(torch.randn_like(p) * perturb_scale)
 
                 # Forward and backward pass (isolate computation graph)
@@ -116,9 +115,14 @@ def mdm_opt(device_id, operation_device, perturb_probs=[0.1, 0.3, 0.5]):
                 (-results_perturbed["obj"]).backward()
 
                 # Dump data for the perturbed model
-                filename_h5 = dump_data_path + f"/mdm_id-{device_id}_opt_step_{step}_perturbed_{i}.h5"
+                filename_h5 = (
+                    dump_data_path
+                    + f"/mdm_id-{device_id}_opt_step_{step}_perturbed_{i}.h5"
+                )
                 filename_yml = dump_data_path + f"/mdm_id-{device_id}_perturbed_{i}.yml"
-                opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
+                opt.dump_data(
+                    filename_h5=filename_h5, filename_yml=filename_yml, step=step
+                )
 
                 opt.plot(
                     eps_map=opt._eps_map,
@@ -146,7 +150,6 @@ def mdm_opt(device_id, operation_device, perturb_probs=[0.1, 0.3, 0.5]):
                         p.copy_(original_p)
                 optimizer.load_state_dict(optimizer_state)
                 optimizer.zero_grad(set_to_none=True)  # Clear gradients completely
-
 
     for step in range(50):
         # for step in range(1):

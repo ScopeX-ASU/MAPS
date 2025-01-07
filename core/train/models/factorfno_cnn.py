@@ -1,36 +1,26 @@
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
 
 import numpy as np
-from sympy import Identity
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from pyutils.activation import Swish
-from timm.models.layers import DropPath, to_2tuple
-from torch import nn
+from einops import rearrange
+
+# from .constant import *
+from mmengine.registry import MODELS
 from torch.functional import Tensor
 from torch.types import Device
 from torch.utils.checkpoint import checkpoint
-# from .constant import *
-from .layers.activation import SIREN
-from .layers.ffno_conv2d import FFNOConv2d
-from torch.types import _size
-from .layers.layer_norm import MyLayerNorm
-from core.utils import resize_to_targt_size
-from mmengine.registry import MODELS
-from .model_base import ModelBase, ConvBlock, LinearBlock
-from .fno_cnn import LearnableFourierFeatures
-from core.fdfd.fdfd import fdfd_ez
-from thirdparty.ceviche.ceviche.constants import C_0
-from .layers.factorfno_conv2d import FactorFNOConv2d
+
 from core.utils import (
     Si_eps,
-    SiO2_eps,
 )
-from einops import rearrange
-from mmcv.cnn.bricks import build_activation_layer, build_conv_layer, build_norm_layer
+
+from .fno_cnn import LearnableFourierFeatures
+from .layers.factorfno_conv2d import FactorFNOConv2d
+from .model_base import ConvBlock, ModelBase
 
 __all__ = ["FactorFNO2d"]
+
 
 class FactorFNO2dBlock(nn.Module):
     expansion = 2
@@ -73,6 +63,7 @@ class FactorFNO2dBlock(nn.Module):
         else:
             return _inner_forward(x)
 
+
 @MODELS.register_module()
 class FactorFNO2d(ModelBase):
     """
@@ -95,7 +86,16 @@ class FactorFNO2d(ModelBase):
         kernel_size_list=[1, 1, 1, 1, 1, 1, 1, 1],
         padding_list=[0, 0, 0, 0, 0, 0, 0, 0],
         hidden_list=[32],
-        mode_list=[(33, 33), (33, 33), (33, 33), (33, 33), (33, 33), (33, 33), (33, 33), (33, 33)],
+        mode_list=[
+            (33, 33),
+            (33, 33),
+            (33, 33),
+            (33, 33),
+            (33, 33),
+            (33, 33),
+            (33, 33),
+            (33, 33),
+        ],
         dropout_rate=0.0,
         drop_path_rate=0.0,
         aux_head=False,
@@ -114,7 +114,6 @@ class FactorFNO2d(ModelBase):
         # norm_cfg=dict(type="MyLayerNorm", data_format="channels_first"),
         norm_cfg=dict(type="LayerNorm", data_format="channels_first"),
         act_cfg=dict(type="GELU"),
-
         img_size=512,  # image size
         img_res=50,  # image resolution
         pml_width=0.5,  # PML width
@@ -197,7 +196,7 @@ class FactorFNO2d(ModelBase):
             raise ValueError("fourier_feature only supports basic and gauss or none")
 
     def build_layers(self):
-        self.stem = ConvBlock( # just a regular conv 1*1 block
+        self.stem = ConvBlock(  # just a regular conv 1*1 block
             in_channels=self.in_channels,
             out_channels=self.dim,
             kernel_size=1,
@@ -234,7 +233,14 @@ class FactorFNO2d(ModelBase):
         hidden_list = [self.kernel_list[-1]] + self.hidden_list
         head = [
             nn.Sequential(
-                ConvBlock(inc, outc, kernel_size=1, padding=0, act_cfg=self.act_cfg, device=self.device),
+                ConvBlock(
+                    inc,
+                    outc,
+                    kernel_size=1,
+                    padding=0,
+                    act_cfg=self.act_cfg,
+                    device=self.device,
+                ),
                 nn.Dropout2d(self.dropout_rate),
             )
             for inc, outc in zip(hidden_list[:-1], hidden_list[1:])
@@ -258,7 +264,12 @@ class FactorFNO2d(ModelBase):
             head = [
                 nn.Sequential(
                     ConvBlock(
-                        inc, outc, kernel_size=1, padding=0, act_cfg=self.act_cfg, device=self.device
+                        inc,
+                        outc,
+                        kernel_size=1,
+                        padding=0,
+                        act_cfg=self.act_cfg,
+                        device=self.device,
                     ),
                     nn.Dropout2d(self.dropout_rate),
                 )
@@ -392,7 +403,11 @@ class FactorFNO2d(ModelBase):
             eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1)
         else:
             enc_fwd = self.fourier_feature_mapping(eps)
-            eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1) if self.fourier_feature != "none" else eps
+            eps_enc_fwd = (
+                torch.cat((eps, enc_fwd), dim=1)
+                if self.fourier_feature != "none"
+                else eps
+            )
 
         if self.incident_field_fwd:
             x = torch.cat((eps_enc_fwd, incident_field_fwd), dim=1)
