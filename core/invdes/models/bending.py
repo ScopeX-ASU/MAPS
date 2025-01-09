@@ -137,6 +137,7 @@ class BendingOptimization(BaseOptimization):
             design_region_param_cfgs[region_name] = dict(
                 method="levelset",
                 interpolation="gaussian",
+                # interpolation="bilinear",
                 rho_resolution=[25, 25],
                 transform=[
                     dict(type="transpose_symmetry", rot_k=3),

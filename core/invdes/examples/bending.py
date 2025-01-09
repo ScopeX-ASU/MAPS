@@ -1,9 +1,10 @@
 """
 Date: 2025-01-04 20:49:15
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-05 22:18:23
+LastEditTime: 2025-01-09 03:57:24
 FilePath: /MAPS/core/invdes/examples/bending.py
 """
+
 """
 this is a wrapper for the invdes module
 we call use InvDesign.optimize() to optimize the inventory design
@@ -40,14 +41,14 @@ if __name__ == "__main__":
     bending_region_size = (1.6, 1.6)
     port_len = 1.8
 
-    input_port_width = 0.48
-    output_port_width = 0.48
+    input_port_width = 0.5
+    output_port_width = 0.5
 
     sim_cfg.update(
         dict(
             solver="ceviche_torch",
             border_width=[0, port_len, port_len, 0],
-            resolution=100,
+            resolution=50,
             plot_root=f"./figs/bending_{'init_try'}",
             PML=[0.5, 0.5],
             neural_solver=None,
@@ -72,7 +73,15 @@ if __name__ == "__main__":
         sim_cfg=sim_cfg,
         operation_device=operation_device,
     ).to(operation_device)
-    invdesign = InvDesign(devOptimization=opt)
+    invdesign = InvDesign(
+        devOptimization=opt,
+        optimizer=dict(
+            name="lbfgs",
+            lr=1e-2,
+            line_search_fn="strong_wolfe",
+            weight_decay=0,
+        ),
+    )
     invdesign.optimize(
         plot=True,
         plot_filename=f"bending_{'init_try'}",

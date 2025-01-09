@@ -63,9 +63,9 @@ if __name__ == "__main__":
             fom = fom + obj["weight"] * obj["value"]
 
         ## add extra temp mul
-        product = breakdown["wl1_trans"]["value"] * breakdown["wl2_trans"]["value"] * 5
-        fom = fom + product
-        return fom, {"trans_product": {"weight": 5, "value": product}}
+        product = breakdown["wl1_trans"]["value"] * breakdown["wl2_trans"]["value"]
+        fom = fom + product * 10
+        return fom, {"trans_product": {"weight": 1, "value": product}}
 
     obj_cfgs = dict(_fusion_func=fom_func)
 
@@ -83,15 +83,23 @@ if __name__ == "__main__":
         device=device,
         hr_device=hr_device,
         sim_cfg=sim_cfg,
+        obj_cfgs=obj_cfgs,
         operation_device=operation_device,
     ).to(operation_device)
-    invdesign = InvDesign(devOptimization=opt)
+    invdesign = InvDesign(
+        devOptimization=opt,
+        optimizer=dict(
+            name="Adam",
+            lr=2e-2,
+            weight_decay=0,
+        ),
+    )
     invdesign.optimize(
         plot=True,
         plot_filename=f"wdm_{'init_try'}",
         objs=["wl1_trans", "wl2_trans"],
         field_keys=[
-            ("in_port_1", wl, 1, 300)
+            ("in_port_1", wl, "Ez1", 300)
             for wl in np.linspace(
                 sim_cfg["wl_cen"] - sim_cfg["wl_width"] / 2,
                 sim_cfg["wl_cen"] + sim_cfg["wl_width"] / 2,

@@ -34,12 +34,11 @@ class InvDesign:
     default_cfgs = Config(
         devOptimization=None,
         optimizer=Config(
-            # name="Adam",
-            # lr=2e-2,
-            name="lbfgs",
-            line_search_fn="strong_wolfe",
-            # line_search_fn=None,
-            lr=1e-2,
+            name="Adam",
+            lr=2e-2,
+            # name="lbfgs",
+            # line_search_fn="strong_wolfe",
+            # lr=1e-2,
             weight_decay=0,
         ),
         lr_scheduler=Config(
