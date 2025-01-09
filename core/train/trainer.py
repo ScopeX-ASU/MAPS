@@ -308,6 +308,7 @@ class PredTrainer(object):
         forward_field = output['forward_field']
         adjoint_field = output['adjoint_field']
         adjoint_source = output['adjoint_source']
+        s_params = output.get('s_params', None) # if it is not none, means that we have an S-param head to directly predict the S-params
         criterion = self.criterion
         if task.lower() == "train":
             aux_criterions = self.aux_criterion
@@ -393,7 +394,6 @@ class PredTrainer(object):
                     raise ValueError("The adjoint field is None, the gradient loss cannot be calculated")
             elif name == "s_param_loss": 
                 # make a warning saying that this loss is not ready yet
-                raise NotImplementedError("The S-parameter loss is not ready yet")
                 # there is also no need to distinguish the forward and adjoint field here
                 # the s_param_loss is calculated based on the forward field and there is no label for the adjoint field
                 # this is the key in data s_params:  
@@ -429,22 +429,26 @@ class PredTrainer(object):
                 aux_loss = [
                     weight * aux_criterion(
                         fields=field, 
-                        # fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"],
+                        # fields=data['field_solutions'][f"field_solutions-wl-1.55-port-in_port_1-mode-1-temp-{temp}"],
                         ht_m=data['ht_m'][f'ht_m-wl-{wl}-port-{out_port_name}-mode-{mode}'],
                         et_m=data['et_m'][f'et_m-wl-{wl}-port-{out_port_name}-mode-{mode}'],
                         monitor_slices_x=data['monitor_slices'][f"port_slice-{out_port_name}_x"],
                         monitor_slices_y=data['monitor_slices'][f"port_slice-{out_port_name}_y"],
                         target_SParam=data['s_params'][f's_params-port-{out_port_name}-wl-{wl}-type-{mode}-temp-{temp}'],
-                    ) for (wl, mode, temp, in_port_name, out_port_name), field in forward_field.items
+                    ) for (wl, mode, temp, in_port_name, out_port_name), field in forward_field.items()
                 ]
-                aux_loss = weight * aux_criterion(
-                    fields=forward_field, 
-                    # fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"],
-                    ht_m=data['ht_m']['ht_m-wl-1.55-port-out_port_1-mode-1'],
-                    et_m=data['et_m']['et_m-wl-1.55-port-out_port_1-mode-1'],
-                    monitor_slices=data['monitor_slices'], # 'port_slice-out_port_1_x', 'port_slice-out_port_1_y'
-                    target_SParam=data['s_params']['s_params-port-fwd_trans-wl-1.55-type-1-temp-300'],
-                )
+                aux_loss = torch.stack(aux_loss).mean()
+            elif name == "direct_s_param_loss":
+                # in this loss function, we don't calculate the S-params from the forward field, 
+                # we directly compare the S-params from the prediction and the GT S-params from the data
+                assert s_params is not None, "The s_params should not be None"
+                aux_loss = [
+                    weight * aux_criterion(
+                        s_param, 
+                        data['s_params'],
+                    ) for (wl, mode, temp, in_port_name, out_port_name), s_param in s_params.items()
+                ]
+                aux_loss = torch.stack(aux_loss).mean()
             elif name == "Hx_loss":
                 aux_loss = [
                     weight * aux_criterion(

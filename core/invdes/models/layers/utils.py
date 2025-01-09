@@ -695,14 +695,41 @@ def plot_eps_field(
             for m in monitors:
                 if isinstance(m[0], Slice):
                     m_slice, color = m
-                    if len(m_slice.x.shape) == 0:
-                        xs = m_slice.x * np.ones(len(m_slice.y))
-                        ys = m_slice.y
+                    if len(m_slice.x.shape) == 0:  # x is a single value
+                        xs = m_slice.x * np.ones(len(m_slice.y), dtype=float)  # Create a constant x array
+                        ys = m_slice.y.astype(float)  # Convert y to float to handle NaN
+
+                        # Identify discontinuities in `ys`
+                        gaps = np.where(np.diff(ys) > 1)[0]  # Find indices where gaps occur in `ys`
+                        if gaps.size > 0:
+                            # Insert NaNs to break the line at gaps
+                            for gap_idx in reversed(gaps):  # Reverse to avoid shifting indices
+                                xs = np.insert(xs, gap_idx + 1, np.nan)
+                                ys = np.insert(ys, gap_idx + 1, np.nan)
+                        
                         ax[i].plot(xs, ys, color, alpha=0.5)
-                    elif len(m_slice.y.shape) == 0:
-                        xs = m_slice.x
-                        ys = m_slice.y * np.ones(len(m_slice.x))
+                    elif len(m_slice.y.shape) == 0:  # y is a single value
+                        xs = m_slice.x.astype(float)  # Convert to float to handle NaN
+                        ys = (m_slice.y * np.ones(len(m_slice.x))).astype(float)  # Convert to float
+                        
+                        # Identify discontinuities in `xs`
+                        gaps = np.where(np.diff(xs) > 1)[0]  # Find indices where gaps occur
+                        if gaps.size > 0:
+                            # Insert NaNs to break the line at gaps
+                            for gap_idx in reversed(gaps):  # Reverse to avoid shifting indices
+                                xs = np.insert(xs, gap_idx + 1, np.nan)
+                                ys = np.insert(ys, gap_idx + 1, np.nan)
                         ax[i].plot(xs, ys, color, alpha=0.5)
+                    # if len(m_slice.x.shape) == 0:
+                    #     xs = m_slice.x * np.ones(len(m_slice.y))
+                    #     ys = m_slice.y
+                    #     # ax[i].plot(xs, ys, color, alpha=0.5)
+                    #     ax[i].scatter(xs, ys, color=color, alpha=0.05, s=0.5)
+                    # elif len(m_slice.y.shape) == 0:
+                    #     xs = m_slice.x
+                    #     ys = m_slice.y * np.ones(len(m_slice.x))
+                    #     # ax[i].plot(xs, ys, color, alpha=0.5)
+                    #     ax[i].scatter(xs, ys, color=color, alpha=0.05, s=0.5)
                     else:  # two axis are all arrays, this is a box, we draw its 4 edges
                         xs, ys = m_slice.x[:, 0], m_slice.y[0]
                         left_xs = xs[0] * np.ones(len(ys))
@@ -811,8 +838,8 @@ def plot_eps_field(
     else:
         zoom_eps_center = (0, 0)  # force to be origin if not zoomed
 
-    # plot_abs(eps, ax=ax[-1], cmap="Greys", cbar=True, font_size=label_fontsize)
-    plot_abs(torch.ones_like(torch.from_numpy(Ez)), ax=ax[-1], cmap="Greys", cbar=True, font_size=label_fontsize)
+    plot_abs(eps, ax=ax[-1], cmap="Greys", cbar=True, font_size=label_fontsize)
+    # plot_abs(torch.ones_like(torch.from_numpy(Ez)), ax=ax[-1], cmap="Greys", cbar=True, font_size=label_fontsize)
     xlabel = np.linspace(
         zoom_eps_center[0] - patch_size[0] / 2,
         zoom_eps_center[0] + patch_size[0] / 2,

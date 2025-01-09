@@ -14,7 +14,7 @@ from pyutils.general import ensure_dir, logger
 from pyutils.config import configs
 
 dataset = "fdfd"
-model = "fno"
+model = "unet"
 exp_name = "train"
 root = f"log/{dataset}/{model}/{exp_name}"
 script = './core/train/examples/dual_model_train.py'
@@ -24,7 +24,7 @@ configs.load(config_file, recursive=True)
 
 
 def task_launcher(args):
-    mixup, device_type, data_dir, alg, fourier_feature, dim, num_layers, mode1, mode2, id, description, gpu_id, epochs, alm, lr, criterion, criterion_weight, H_loss, maxwell_loss, grad_loss, s_param_loss, alm_lambda, alm_mu, mu_growth, constraint_tol, checkpt_fwd, checkpt_adj, bs = args
+    mixup, device_type, data_dir, alg, fourier_feature, dim, id, description, gpu_id, epochs, alm, lr, criterion, criterion_weight, H_loss, maxwell_loss, grad_loss, s_param_loss, alm_lambda, alm_mu, mu_growth, constraint_tol, checkpt_fwd, checkpt_adj, bs = args
     env = os.environ.copy()
     env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
     
@@ -93,8 +93,6 @@ def task_launcher(args):
             f"--model_fwd.train_field={'fwd'}",
             f"--model_fwd.dim={dim}",
             f"--model_fwd.img_size={img_size}",
-            f"--model_fwd.hidden_list={[128]}",
-            f"--model_fwd.mode_list={[(mode1, mode2)] * num_layers}",
             f"--model_fwd.mapping_size={64}",
             f"--model_fwd.fourier_feature={fourier_feature}",
             f"--model_fwd.temp={temp}",
@@ -107,8 +105,6 @@ def task_launcher(args):
             f"--model_adj.train_field={'adj'}",
             f"--model_adj.dim={dim}",
             f"--model_adj.img_size={img_size}",
-            f"--model_adj.hidden_list={[128]}",
-            f"--model_adj.mode_list={[(mode1, mode2)] * num_layers}",
             f"--model_adj.mapping_size={64}",
             f"--model_adj.fourier_feature={fourier_feature}",
             f"--model_adj.temp={temp}",
@@ -130,7 +126,7 @@ def task_launcher(args):
 if __name__ == '__main__':
     ensure_dir(root)
     tasks = [
-        [0.0, "bending", "raw_opt_traj_10", "FNO2d", "none", 32, 4, 60, 60, 38, "Exp1_FNO_dual", 0, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 4],
+        [0.0, "bending", "raw_opt_traj_10", "UNet", "none", 64, 1, "Exp1_UNet_dual", 2, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 4],
     ]   
 
     with Pool(8) as p:

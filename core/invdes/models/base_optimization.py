@@ -20,6 +20,7 @@ from pyutils.config import Config
 from pyutils.general import logger
 from torch import Tensor, nn
 from torch.types import Device
+from core.utils import print_stat
 
 from .layers.device_base import N_Ports
 from .layers.fom_layer import SimulatedFoM
@@ -368,12 +369,12 @@ class BaseOptimization(nn.Module):
             eps_map.detach().cpu().numpy(),
             filepath=os.path.join(self.sim_cfg["plot_root"], plot_filename),
             monitors=monitors,
-            x_width=self.device.cell_size[0],
+            x_width=self.device.cell_size[0] + (extended_Ez.shape[0] if extended_Ez is not None else 0) * self.device.grid_step,
             y_height=self.device.cell_size[1],
             NPML=self.device.NPML,
             title=f"|{field_component}|^2: {field_key}, FoM: {obj:.3f}",
             field_stat="intensity_real",
-            zoom_eps_factor=2,
+            zoom_eps_factor=1,
             zoom_eps_center=design_region_center,
             x_shift_coord=x_shift_coord if extended_Ez is not None else 0,
             x_shift_idx=x_shift_idx if extended_Ez is not None else 0,
@@ -508,9 +509,7 @@ class BaseOptimization(nn.Module):
                     f.create_dataset(
                         f"s_params-port-{port_name}-wl-{wl}-type-{obj_type}-temp-{temp}", data=store_s_params
                     )  # 3d numpy array
-                adj_srcs, fields_adj, field_adj_normalizer = (
-                    self.objective.obtain_adj_srcs()
-                )
+                adj_srcs, fields_adj, field_adj_normalizer = self.objective.obtain_adj_srcs()
                 for wl, adj_src in adj_srcs.items():
                     for (port_name, mode), b_adj in adj_src.items():
                         b_adj = b_adj.reshape(self.epsilon_map.shape)

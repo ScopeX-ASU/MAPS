@@ -19,7 +19,7 @@ from core.invdes.models.base_optimization import (
 from core.invdes.models.layers import Bending
 from core.utils import set_torch_deterministic
 from thirdparty.ceviche.ceviche.constants import *
-
+import random
 from core.utils import DeterministicCtx, print_stat
 
 def compare_designs(design_regions_1, design_regions_2):
@@ -32,10 +32,39 @@ def compare_designs(design_regions_1, design_regions_2):
 
 
 def bending_opt(device_id, operation_device, perturb_probs=[0.1, 0.3, 0.5]):
-    sim_cfg = DefaultSimulationConfig()
+    # sim_cfg = DefaultSimulationConfig()
 
-    bending_region_size = (1.6, 1.6)
-    port_len = 1.8
+    # bending_region_size = (1.6, 1.6)
+    # port_len = 1.8
+
+    # input_port_width = 0.48
+    # output_port_width = 0.48
+
+    # sim_cfg.update(
+    #     dict(
+    #         solver="ceviche_torch",
+    #         border_width=[0, port_len, port_len, 0],
+    #         resolution=50,
+    #         plot_root=f"./figs/mfs_bending_{device_id}",
+    #         PML=[0.5, 0.5],
+    #         neural_solver=None,
+    #         numerical_solver="solve_direct",
+    #         use_autodiff=False,
+    #     )
+    # )
+
+    dump_data_path = f"./data/fdfd/bending/raw_test"
+    sim_cfg = DefaultSimulationConfig()
+    target_img_size = 256
+    resolution = 50
+    target_cell_size = target_img_size / resolution
+    port_len = round(random.uniform(1.6, 1.8) * resolution) / resolution
+
+    bending_region_size = [
+        round((target_cell_size - 2 * port_len) * resolution) / resolution,
+        round((target_cell_size - 2 * port_len) * resolution) / resolution,
+    ]
+    assert round(bending_region_size[0] + 2 * port_len, 2) == target_cell_size, f"right hand side: {bending_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
 
     input_port_width = 0.48
     output_port_width = 0.48
@@ -44,14 +73,15 @@ def bending_opt(device_id, operation_device, perturb_probs=[0.1, 0.3, 0.5]):
         dict(
             solver="ceviche_torch",
             border_width=[0, port_len, port_len, 0],
-            resolution=50,
-            plot_root=f"./figs/mfs_bending_{device_id}",
+            resolution=resolution,
+            plot_root=f"./data/fdfd/bending/plot_test/bending_{device_id}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
             use_autodiff=False,
         )
     )
+
 
     device = Bending(
         sim_cfg=sim_cfg,
@@ -106,8 +136,8 @@ def bending_opt(device_id, operation_device, perturb_probs=[0.1, 0.3, 0.5]):
                 (-results_perturbed["obj"]).backward()
 
                 # Dump data for the perturbed model
-                filename_h5 = f"./data/fdfd/bending/mfs_raw_test_1/bending_id-{device_id}_opt_step_{step}_perturbed_{i}.h5"
-                filename_yml = f"./data/fdfd/bending/mfs_raw_test_1/bending_id-{device_id}_perturbed_{i}.yml"
+                filename_h5 = dump_data_path + f"/bending_id-{device_id}_opt_step_{step}_perturbed_{i}.h5"
+                filename_yml = dump_data_path + f"/bending_id-{device_id}_perturbed_{i}.yml"
                 opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
 
                 opt.plot(
@@ -141,8 +171,8 @@ def bending_opt(device_id, operation_device, perturb_probs=[0.1, 0.3, 0.5]):
 
         (-results["obj"]).backward()
         current_design_region_dict = opt.get_design_region_eps_dict()
-        filename_h5 = f"./data/fdfd/bending/mfs_raw_test_1/bending_id-{device_id}_opt_step_{step}.h5"
-        filename_yml = f"./data/fdfd/bending/mfs_raw_test_1/bending_id-{device_id}.yml"
+        filename_h5 = dump_data_path + f"/bending_id-{device_id}_opt_step_{step}.h5"
+        filename_yml = dump_data_path + f"/bending_id-{device_id}.yml"
         if last_design_region_dict is None:
             opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
             last_design_region_dict = current_design_region_dict
@@ -180,11 +210,10 @@ def bending_opt(device_id, operation_device, perturb_probs=[0.1, 0.3, 0.5]):
         # print_stat(list(opt.parameters())[0], f"step {step}: grad: ")
         optimizer.step()
         scheduler.step()
-        if dumped_data:
-            for i, prob in enumerate(perturb_probs):
-                perturb_and_dump(step, flip_prob=prob, i=i)
-            dumped_data = False
-            # quit()
+        # if dumped_data:
+        #     for i, prob in enumerate(perturb_probs):
+        #         perturb_and_dump(step, flip_prob=prob, i=i)
+        #     dumped_data = False
 
 
 def main():

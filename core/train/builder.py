@@ -42,6 +42,7 @@ from .utils import (
     MaxwellResidualLoss,
     GradientLoss,
     SParamLoss,
+    DirectCompareSParam,
     ComplexL1Loss,
 )
 
@@ -68,6 +69,7 @@ def make_dataloader(
                 FDFDDataset(
                     device_type=configs.dataset.device_type,
                     root=configs.dataset.root,
+                    data_dir=configs.dataset.data_dir,
                     split=split,
                     test_ratio=configs.dataset.test_ratio,
                     train_valid_split_ratio=configs.dataset.train_valid_split_ratio,
@@ -285,6 +287,8 @@ def make_criterion(name: str = None, cfg=None) -> nn.Module:
         criterion = GradientLoss()
     elif name == "s_param_loss":
         criterion = SParamLoss()
+    elif name == "direct_s_param_loss":
+        criterion = DirectCompareSParam()
     else:
         raise NotImplementedError(name)
     return criterion

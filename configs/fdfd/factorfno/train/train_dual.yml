@@ -1,5 +1,6 @@
 criterion:
-  name: distanceLoss
+  weight: 1.0
+  name: nmse
   min_distance: 0.12
 
 aux_criterion:
@@ -105,12 +106,20 @@ checkpoint:
   no_linear: 0
 
 model_fwd:
-  type: FNO2d
+  type: 'FactorFNO2d'
   train_field: "fwd"
+  temp: [300]
+  wl: [1.55]
+  mode: [1]
+  in_out_port_name: [["in_port_1", "out_port_1"]]
 
 model_adj:
-  type: FNO2d
+  type: 'FactorFNO2d'
   train_field: "adj"
+  temp: [300]
+  wl: [1.55]
+  mode: [1]
+  in_out_port_name: [["in_port_1", "out_port_1"]]
 
 debug:
   verbose: 1

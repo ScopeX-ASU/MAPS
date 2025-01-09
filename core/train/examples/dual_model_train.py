@@ -23,6 +23,7 @@ from core.utils import cal_total_field_adj_src_from_fwd_field
 from core.train.models.utils import from_Ez_to_Hx_Hy
 from core.train.trainer import PredTrainer
 import copy
+import matplotlib.pyplot as plt
 
 class dual_predictor(nn.Module):
     def __init__(self, model_fwd, model_adj):
@@ -46,6 +47,7 @@ class dual_predictor(nn.Module):
         x_fwd = {}
         forward_field = {}
         adjoint_field = {}
+        # ['eps_map', 'adj_srcs', 'gradient', 'field_solutions', 's_params', 'src_profiles', 'fields_adj', 'field_normalizer', 'design_region_mask', 'ht_m', 'et_m', 'monitor_slices', 'As', 'opt_cfg_file_path']
         # this is the key of data htms:  
         # [
         #     'ht_m-wl-1.55-port-in_port_1-mode-1', 
@@ -63,6 +65,8 @@ class dual_predictor(nn.Module):
         # ]
         # this is the keys in adjoint field:  
         # ['fields_adj-wl-1.55-port-in_port_1-mode-1', 'fields_adj-wl-1.55-port-in_port_1-mode-2']
+        # keys in field solutions:
+        # ['field_solutions-wl-1.55-port-in_port_1-mode-1-temp-300', 'field_solutions-wl-1.55-port-out_port_1-mode-1-temp-300', 'field_solutions-wl-1.55-port-refl_port_1-mode-1-temp-300']
         for key, model in self.model_fwd.items():
             wl, mode, temp, in_port_name, out_port_name = key.split("-")
             wl, mode, temp = float(wl.replace('p', '.')), int(mode), eval(temp)
@@ -71,6 +75,7 @@ class dual_predictor(nn.Module):
             with torch.enable_grad():
                 forward_field[(wl, mode, temp, in_port_name, out_port_name)], adj_source = cal_total_field_adj_src_from_fwd_field(
                     Ez=x_fwd[(wl, mode, temp, in_port_name, out_port_name)],
+                    # Ez=data["field_solutions"]["field_solutions-wl-1.55-port-in_port_1-mode-1-temp-300"][:, -2:, ...],
                     eps=eps,
                     ht_ms=data["ht_m"], # this two only used for adjoint field calculation, we don't need it here in forward pass
                     et_ms=data["et_m"],
@@ -86,6 +91,7 @@ class dual_predictor(nn.Module):
                     in_port_name=in_port_name,
                     out_port_name=out_port_name,
                 )
+            # the adjoint source calculated with the one that stored in the dataset have a scale factor difference since we want to normalize the adjoint source power to be 1e-8
             adjoint_source[(wl, mode, temp, in_port_name, out_port_name)] = adj_source = adj_source.detach()
             adj_model = self.model_adj[key]
             x_adj = adj_model(eps, adj_source)

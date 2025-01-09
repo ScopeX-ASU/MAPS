@@ -447,6 +447,10 @@ class N_Ports(BaseDevice):
         size: Tuple[int, int],
         direction: str | None = None,
     ):
+        '''
+        the center is the center of the slice in um within the coordinate system where the center is (0, 0)
+        the size is in the unit of um
+        '''
         assert size[0] == 0 or size[1] == 0, "Only 1D slice is supported"
         if direction is None:
             direction = "x" if size[0] == 0 else "y"
@@ -483,7 +487,7 @@ class N_Ports(BaseDevice):
         xs = (-(self.Nx - 1) / 2 + monitor_slice.x) * self.grid_step
         ys = (-(self.Ny - 1) / 2 + monitor_slice.y) * self.grid_step
         self.port_monitor_slices[slice_name] = monitor_slice
-        self.port_monitor_slices_info[slice_name] = dict(
+        self.port_monitor_slices_info[slice_name] = dict( # please note that the radiation monitor info can only use the direction
             center=center,
             size=size,
             xs=xs,
@@ -650,13 +654,69 @@ class N_Ports(BaseDevice):
         monitor_slice = self.add_monitor_slice(slice_name, center, size, direction)
         ## need to check the slice of eps is homogeneous medium
         eps_slice = self.epsilon_map[monitor_slice.x, monitor_slice.y]
-        if not (np.unique(eps_slice).size == 1):
-            print(f"Near2far slice {slice_name} is not in a homogeneous medium", flush=True)
+        assert(np.unique(eps_slice).size == 1), f"Near2far slice {slice_name} is not in a homogeneous medium"
         return monitor_slice
 
     def build_radiation_monitor(
         self, monitor_name: str = "rad_monitor", distance_to_PML=[0.2, 0.2]
-    ):
+    ):  
+        '''
+        Currently, the way to build the radiation monitor is through
+        1. build a zeros_like epsilon map
+        2. set the surrounding region of the epsilon map to 1
+        3. set the ports region to 0 so that the monitor will not include the ports and the transmission will not be calculated as radiation
+        so the radiation monitor is a 2D boolean array, not like other monitors which are the Slice object
+
+        we need to make the monitor uniform, the radiation monitor should be a Slice object too
+        '''
+        xp_slice_name = monitor_name + "_xp"
+        xp_center = (self.cell_size[0] / 2 - self.sim_cfg["PML"][0] - distance_to_PML[0], 0)
+        monitor_size_x = [0, self.cell_size[1] - 2 * distance_to_PML[1] - 2 * self.sim_cfg["PML"][1]]
+        radiation_monitor_xp = self.add_monitor_slice(
+            xp_slice_name, xp_center, monitor_size_x, "x", 
+        )
+        xm_slice_name = monitor_name + "_xm"
+        xm_center = (-self.cell_size[0] / 2 + self.sim_cfg["PML"][0] + distance_to_PML[0], 0)
+        radiation_monitor_xm = self.add_monitor_slice(
+            xm_slice_name, xm_center, monitor_size_x, "x",
+        )
+        yp_slice_name = monitor_name + "_yp"
+        yp_center = (0, self.cell_size[1] / 2 - self.sim_cfg["PML"][1] - distance_to_PML[1])
+        monitor_size_y = [self.cell_size[0] - 2 * distance_to_PML[0] - 2 * self.sim_cfg["PML"][0], 0]
+        radiation_monitor_yp = self.add_monitor_slice(
+            yp_slice_name, yp_center, monitor_size_y, "y",
+        )
+        ym_slice_name = monitor_name + "_ym"
+        ym_center = (0, -self.cell_size[1] / 2 + self.sim_cfg["PML"][1] + distance_to_PML[1])
+        radiation_monitor_ym = self.add_monitor_slice(
+            ym_slice_name, ym_center, monitor_size_y, "y",
+        )
+        # quit()
+        def exclude_ports(slice_obj):
+            if slice_obj.x.size > 1:  # x is a range, y is a single value
+                y_coord = int(slice_obj.y)  # Fixed y coordinate
+                x_filtered = np.array([x for x in slice_obj.x if not self.ports_regions[x, y_coord]])
+                y_filtered = slice_obj.y  # y remains unchanged
+            elif slice_obj.y.size > 1:  # y is a range, x is a single value
+                x_coord = int(slice_obj.x)  # Fixed x coordinate
+                y_filtered = np.array([y for y in slice_obj.y if not self.ports_regions[x_coord, y]])
+                x_filtered = slice_obj.x  # x remains unchanged
+            else:
+                raise ValueError("Both x and y are single values")
+
+            return Slice(x=x_filtered, y=y_filtered)
+
+        self.port_monitor_slices[xp_slice_name] = exclude_ports(self.port_monitor_slices[xp_slice_name])
+        self.port_monitor_slices[xm_slice_name] = exclude_ports(self.port_monitor_slices[xm_slice_name])
+        self.port_monitor_slices[yp_slice_name] = exclude_ports(self.port_monitor_slices[yp_slice_name])
+        self.port_monitor_slices[ym_slice_name] = exclude_ports(self.port_monitor_slices[ym_slice_name])
+        return (
+            self.port_monitor_slices[xp_slice_name],
+            self.port_monitor_slices[xm_slice_name],
+            self.port_monitor_slices[yp_slice_name],
+            self.port_monitor_slices[ym_slice_name],
+        )
+
         radiation_monitor_xp = np.zeros_like(self.epsilon_map, dtype=np.bool_)
         radiation_monitor_xm = np.zeros_like(self.epsilon_map, dtype=np.bool_)
         radiation_monitor_yp = np.zeros_like(self.epsilon_map, dtype=np.bool_)

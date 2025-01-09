@@ -18,6 +18,8 @@ aux_criterion:
     norm: False
   maxwell_residual_loss:
     weight: 0.0
+  direct_s_param_loss:
+    weight: 0.0
 
 log_criterion:
   curl_loss:
@@ -27,6 +29,8 @@ log_criterion:
     norm: False
   maxwell_residual_loss:
     weight: 0.0
+  direct_s_param_loss:
+    weight: 1
 
 optimizer:
   name: adam

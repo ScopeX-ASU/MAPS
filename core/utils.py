@@ -407,26 +407,10 @@ def cal_total_field_adj_src_from_fwd_field(
                 if weight == 0 or in_mode != mode or temp not in temperture or input_port_name != in_port_name:
                     continue
                 if opt_cfg["type"] == "eigenmode":
-                    if 'x' in direction:
-                        monitor = Slice(
-                            x=monitors[f"port_slice-{out_slice_name}_x"][i],
-                            y=torch.arange(
-                                monitors[f"port_slice-{out_slice_name}_y"][i][0],
-                                monitors[f"port_slice-{out_slice_name}_y"][i][1],
-                            ).to(monitors[f"port_slice-{out_slice_name}_y"][i].device),
-                        )
-                    else:
-                        monitor = Slice(
-                            y=monitors[f"port_slice-{out_slice_name}_y"][i],
-                            x=torch.arange(
-                                monitors[f"port_slice-{out_slice_name}_x"][i][0],
-                                monitors[f"port_slice-{out_slice_name}_x"][i][1],
-                            ).to(monitors[f"port_slice-{out_slice_name}_x"][i].device),
-                        )
-                    # print("this is the shape of Hx_i: ", Hx_i.shape)
-                    # print("this is the shape of Hy_i: ", Hy_i.shape)
-                    # print("this is the shape of Ez_i: ", Ez_i.shape)
-                    # print("this is the shape of ht_ms: ", ht_ms[f"ht_m-wl-{wl}-port-{out_slice_name}-mode-{mode}"].shape)
+                    monitor = Slice(
+                        x=monitors[f"port_slice-{out_slice_name}_x"][i],
+                        y=monitors[f"port_slice-{out_slice_name}_y"][i],
+                    )
                     fom, _ = get_eigenmode_coefficients(
                         hx=Hx_i,
                         hy=Hy_i,
@@ -440,27 +424,10 @@ def cal_total_field_adj_src_from_fwd_field(
                     )
                     fom = weight * fom / 1e-8  # normalize with the input power
                 elif "flux" in opt_cfg["type"]: # flux or flux_minus_src
-                    if "xm" in out_slice_name or "ym" in out_slice_name or "xp" in out_slice_name or "yp" in out_slice_name:
-                        monitor = monitors[f"port_slice-{out_slice_name}"][i]
-                    elif 'x' in direction:
-                        monitor = Slice(
-                            x=monitors[f"port_slice-{out_slice_name}_x"][i],
-                            y=torch.arange(
-                                monitors[f"port_slice-{out_slice_name}_y"][i][0],
-                                monitors[f"port_slice-{out_slice_name}_y"][i][1],
-                            ).to(monitors[f"port_slice-{out_slice_name}_y"][i].device),
-                        )
-                    else:
-                        monitor = Slice(
-                            y=monitors[f"port_slice-{out_slice_name}_y"][i],
-                            x=torch.arange(
-                                monitors[f"port_slice-{out_slice_name}_x"][i][0],
-                                monitors[f"port_slice-{out_slice_name}_x"][i][1],
-                            ).to(monitors[f"port_slice-{out_slice_name}_x"][i].device),
-                        )
-                    # print("this is the obj type: ", opt_cfg["type"])
-                    # print("this is the monitor: ", monitor.shape)
-                    # quit()
+                    monitor = Slice(
+                        x=monitors[f"port_slice-{out_slice_name}_x"][i],
+                        y=monitors[f"port_slice-{out_slice_name}_y"][i],
+                    )
                     fom = get_flux(
                         hx=Hx_i,
                         hy=Hy_i,
@@ -1501,72 +1468,6 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
         loss = (
             torch.norm(difference, p=2, dim=(-2, -1))
             / (torch.norm(b, p=2, dim=(-2, -1)) + 1e-6)
-        ).mean()
-        return loss
-
-
-class SParamLoss(torch.nn.modules.loss._Loss):
-    def __init__(self, reduce="mean"):
-        super(SParamLoss, self).__init__()
-
-        self.reduce = reduce
-
-    def forward(
-        self,
-        fields,  # bs, 3, H, W, complex
-        ht_m,
-        et_m,
-        monitor_slices,
-        target_SParam,
-    ):
-        # Step 1: Resize all the fields to the target size
-        Ez = fields[:, -2:, :, :].permute(0, 2, 3, 1).contiguous()
-        Ez = torch.view_as_complex(Ez)  # convert Ez to the required complex format
-
-        Hx = fields[:, :2, :, :].permute(0, 2, 3, 1).contiguous()
-        Hx = torch.view_as_complex(Hx)
-
-        Hy = fields[:, 2:4, :, :].permute(0, 2, 3, 1).contiguous()
-        Hy = torch.view_as_complex(Hy)
-
-        monitor_slices_x = monitor_slices["port_slice-out_port_1_x"]
-        monitor_slices_y = monitor_slices["port_slice-out_port_1_y"]
-
-        # print("this is the monitor_slices_x", monitor_slices_x, flush=True)
-        # print("this is the monitor_slices_y", monitor_slices_y, flush=True)
-        ## Hx, Hy, Ez: [bs, h, w] complex tensor
-        # Stpe 2: Calculate the S-parameters
-        batch_size = Ez.shape[0]
-        s_params = []
-        for i in range(batch_size):
-            monitor_slice = Slice(
-                y=monitor_slices_y[i],
-                x=torch.arange(
-                    monitor_slices_x[i][0],
-                    monitor_slices_x[i][1],
-                ).to(monitor_slices_y[i].device),
-            )
-            # ht_m and et_m are lists
-            s_p, s_m = get_eigenmode_coefficients(
-                hx=Hx[i],
-                hy=Hy[i],
-                ez=Ez[i],
-                ht_m=ht_m[i],
-                et_m=et_m[i],
-                monitor=monitor_slice,
-                grid_step=1 / 50,
-                direction="y",
-                autograd=True,
-                energy=True,
-            )
-            s_params.append(torch.tensor([s_p, s_m], device=Ez.device))
-        s_params = torch.stack(s_params, 0)
-        s_params_diff = s_params - target_SParam
-        # Step 3: Calculate the loss
-        # print("this is the l2 norm of the target_SParam ", torch.norm(target_SParam, p=2, dim=-1), flush=True) ~e-9
-        loss = (
-            torch.norm(s_params_diff, p=2, dim=-1)
-            / (torch.norm(target_SParam, p=2, dim=-1) + 1e-12)
         ).mean()
         return loss
 

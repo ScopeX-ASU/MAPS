@@ -44,8 +44,8 @@ if __name__ == "__main__":
             solver="ceviche_torch",
             # border_width=[port_len, port_len, 2, 2],
             border_width=[0, 0, 2, 2],
-            resolution=50,
-            plot_root=f"./figs/mdm_{'init_try'}",
+            resolution=100,
+            plot_root=f"./figs/mdm_{'init_try_test'}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -61,7 +61,7 @@ if __name__ == "__main__":
         device=operation_device,
     )
 
-    hr_device = device.copy(resolution=50)
+    hr_device = device.copy(resolution=100)
     print(device)
     opt = MDMOptimization(
         device=device,
@@ -72,9 +72,9 @@ if __name__ == "__main__":
     invdesign = InvDesign(devOptimization=opt)
     invdesign.optimize(
         plot=True,
-        plot_filename=f"mdm_{'init_try'}",
-        objs=["mode1_trans", "mode3_trans"],
-        field_keys=[("in_port_1", 1.55, 1, 300), ("in_port_1", 1.55, 3, 300)],
+        plot_filename=f"mdm_{'init_try_test'}",
+        objs=["mode1_trans", "mode2_trans"],
+        field_keys=[("in_port_1", 1.55, 1, 300), ("in_port_1", 1.55, 2, 300)],
         in_port_names=["in_port_1", "in_port_1"],
         exclude_port_names=[],
     )

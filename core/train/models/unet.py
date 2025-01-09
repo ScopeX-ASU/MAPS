@@ -89,6 +89,7 @@ class UNet(ModelBase):
         with_cp=False,
         fourier_feature="none",
         mapping_size=2,
+        output_sparam=False,
         norm_cfg=dict(type="LayerNorm", data_format="channels_first"),
         act_cfg=dict(type="GELU"),
 
@@ -194,6 +195,9 @@ class UNet(ModelBase):
         self.drop_out = nn.Dropout2d(self.dropout_rate)
         self.conv_last = nn.Conv2d(dim, self.out_channels, 1)
 
+        if self.output_sparam:
+            self.build_sparam_head()
+
     def set_trainable_permittivity(self, mode: bool = True) -> None:
         self.trainable_permittivity = mode
 
@@ -294,6 +298,11 @@ class UNet(ModelBase):
 
         x = self.dconv_up1(x)
 
-        x = self.conv_last(x)  # [bs, outc, h, w] real
+        forward_Ez_field = self.conv_last(x)  # [bs, outc, h, w] real
         
-        return x
+        if self.output_sparam:
+            assert hasattr(self, "sparam_head"), "sparam_head is not defined"
+            s_parameter = self.sparam_head(forward_Ez_field)
+            return forward_Ez_field, s_parameter
+
+        return forward_Ez_field

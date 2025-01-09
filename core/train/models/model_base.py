@@ -199,6 +199,69 @@ class LayerBlock(nn.Module):
             x += y
         return x
 
+class ProgressiveConvDecoder(nn.Module):
+    def __init__(
+        self,
+        img_size: int,
+        in_channels: int,
+        num_classes: int,
+        dropout_rate: float = 0.0,
+        act_cfg: dict = dict(type="ReLU", inplace=True),
+        norm_cfg: dict = dict(type="BN", affine=True),
+        device: Device = torch.device("cuda:0"),
+    ):
+        super().__init__()
+        number_of_layers = int(np.log2(img_size // 16)) + 1
+        kernel_list = [in_channels * 2 ** i for i in range(number_of_layers)]
+        head = [
+            nn.Sequential(
+                ConvBlock(
+                    inc, 
+                    outc, 
+                    kernel_size=3, 
+                    stride=2,
+                    padding=1, 
+                    act_cfg=act_cfg, 
+                    norm_cfg=norm_cfg,
+                    skip=True,
+                    device=device
+                ),
+                nn.Dropout2d(dropout_rate),
+            )
+            for inc, outc in zip(kernel_list[:-1], kernel_list[1:])
+        ]
+        head = head + [
+            ConvBlock(
+                kernel_list[-1],
+                kernel_list[-1],
+                kernel_size=3,
+                stride=2,
+                padding=1,
+                act_cfg=None,
+                norm_cfg=None,
+                skip=True,
+                device=device,
+            )
+        ] # from 16 --> 8
+        self.head = nn.Sequential(*head)
+        self.avg = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(kernel_list[-1], num_classes)
+
+    def forward(self, x):
+        """
+        Forward pass for the decoder.
+        
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch_size, in_channels, height, width).
+        
+        Returns:
+            torch.Tensor: Logits for classification with shape (batch_size, num_classes).
+        """
+        x = self.head(x)  # Progressive downsampling
+        x = self.avg(x)  # Global average pooling
+        x = x.view(x.size(0), -1)  # Flatten to (batch_size, channels)
+        x = self.fc(x)  # Fully connected layer
+        return x
 
 class ModelBase(nn.Module):
     # default_cfgs = dict(
@@ -275,6 +338,17 @@ class ModelBase(nn.Module):
                 dist = max(dist_to_left, dist_to_right, dist_to_top, dist_to_bottom)
                 if dist > 0:
                     self.pml_mask[i, j] = torch.exp(-damping_factor * dist)
+
+    def build_sparam_head(self):
+        self.sparam_head = ProgressiveConvDecoder(
+            self.img_size,
+            2,
+            2,
+            dropout_rate=0.0,
+            act_cfg=self.act_cfg,
+            norm_cfg=self.norm_cfg,
+            device=self.device,
+        )
 
     def get_grid(self, shape, device: Device, mode: str = "linear", epsilon=None, wavelength=None, grid_step=None):
         # epsilon must be real permittivity without normalization

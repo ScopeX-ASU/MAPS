@@ -13,6 +13,7 @@ class MetaLens(N_Ports):
     def __init__(
         self,
         material_r: str = "Si",  # waveguide material
+        material_inport = None,  # background material
         material_bg: str = "Air",  # background material
         material_sub: str = "SiO2",  # substrate material
         sim_cfg: dict = {

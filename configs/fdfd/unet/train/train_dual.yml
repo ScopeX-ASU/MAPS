@@ -1,5 +1,6 @@
 criterion:
-  name: distanceLoss
+  weight: 1.0
+  name: nmse
   min_distance: 0.12
 
 aux_criterion:
@@ -34,19 +35,13 @@ aux_criterion:
 log_criterion:
   maxwell_residual_loss:
     weight: 0
-    # wl_cen: 1.55
-    # wl_width: 0
-    # n_wl: 1
+    wl_cen: 1.55
+    wl_width: 0
+    n_wl: 1
   grad_loss:
     weight: 0
   s_param_loss:
     weight: 1
-  err_corr_Ez:
-    weight: 0
-  err_corr_Hx:
-    weight: 0
-  err_corr_Hy:
-    weight: 0
   Hx_loss:
     weight: 1
   Hy_loss:
@@ -105,12 +100,20 @@ checkpoint:
   no_linear: 0
 
 model_fwd:
-  type: FNO2d
+  type: "UNet"
   train_field: "fwd"
+  temp: [300]
+  wl: [1.55]
+  mode: [1]
+  in_out_port_name: [["in_port_1", "out_port_1"]]
 
 model_adj:
-  type: FNO2d
+  type: "UNet"
   train_field: "adj"
+  temp: [300]
+  wl: [1.55]
+  mode: [1]
+  in_out_port_name: [["in_port_1", "out_port_1"]]
 
 debug:
   verbose: 1

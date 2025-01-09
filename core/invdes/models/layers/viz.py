@@ -61,7 +61,7 @@ def abs(
     """Plots the absolute value of 'val', optionally overlaying an outline of 'outline'"""
     if ax is None:
         fig, ax = plt.subplots(1, 1, constrained_layout=True)
-
+    # print("this is the shape of val", val.shape, flush=True)
     vmax = np.abs(val).max()
     h = ax.imshow(
         np.abs(val.T), cmap=cmap, origin="lower", vmin=0, vmax=vmax, alpha=alpha

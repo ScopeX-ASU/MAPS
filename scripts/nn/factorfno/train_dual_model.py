@@ -14,7 +14,7 @@ from pyutils.general import ensure_dir, logger
 from pyutils.config import configs
 
 dataset = "fdfd"
-model = "fno"
+model = "factorfno"
 exp_name = "train"
 root = f"log/{dataset}/{model}/{exp_name}"
 script = './core/train/examples/dual_model_train.py'
@@ -92,8 +92,9 @@ def task_launcher(args):
             f"--model_fwd.type={alg}",
             f"--model_fwd.train_field={'fwd'}",
             f"--model_fwd.dim={dim}",
+            f"--model_fwd.in_channels={3}",
+            f"--model_fwd.out_channels={2}",
             f"--model_fwd.img_size={img_size}",
-            f"--model_fwd.hidden_list={[128]}",
             f"--model_fwd.mode_list={[(mode1, mode2)] * num_layers}",
             f"--model_fwd.mapping_size={64}",
             f"--model_fwd.fourier_feature={fourier_feature}",
@@ -102,12 +103,20 @@ def task_launcher(args):
             f"--model_fwd.mode={mode}",
             f"--model_fwd.in_out_port_name={in_out_port_name}",
             # f"--model_fwd.in_out_port_name={[['in_port_1', f'out_port_{i}'] for i in range(1, 3)]}",
+            f"--model_fwd.kernel_list={[dim]*num_layers}",
+            f"--model_fwd.kernel_size_list={[1]*num_layers}",
+            f"--model_fwd.padding_list={[1]*num_layers}",
+            f"--model_fwd.hidden_list={[dim*2]}",
+
+# ---------------------- adjoint model ----------------------
+
 
             f"--model_adj.type={alg}",
             f"--model_adj.train_field={'adj'}",
             f"--model_adj.dim={dim}",
+            f"--model_adj.in_channels={3}",
+            f"--model_adj.out_channels={2}",
             f"--model_adj.img_size={img_size}",
-            f"--model_adj.hidden_list={[128]}",
             f"--model_adj.mode_list={[(mode1, mode2)] * num_layers}",
             f"--model_adj.mapping_size={64}",
             f"--model_adj.fourier_feature={fourier_feature}",
@@ -116,6 +125,11 @@ def task_launcher(args):
             f"--model_adj.mode={mode}",
             f"--model_adj.in_out_port_name={in_out_port_name}",
             # f"--model_adj.in_out_port_name={[['in_port_1', f'out_port_{i}'] for i in range(1, 3)]}",
+            f"--model_adj.kernel_list={[dim]*num_layers}",
+            f"--model_adj.kernel_size_list={[1]*num_layers}",
+            f"--model_adj.padding_list={[1]*num_layers}",
+            f"--model_adj.hidden_list={[dim*2]}",
+
 
             f"--checkpoint.model_comment={suffix}",
             f"--checkpoint.resume={False}" if checkpt_fwd == "none" else f"--checkpoint.resume={True}",
@@ -130,7 +144,7 @@ def task_launcher(args):
 if __name__ == '__main__':
     ensure_dir(root)
     tasks = [
-        [0.0, "bending", "raw_opt_traj_10", "FNO2d", "none", 32, 4, 60, 60, 38, "Exp1_FNO_dual", 0, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 4],
+        [0.0, "bending", "raw_opt_traj_10", "FactorFNO2d", "none", 64, 12, 60, 60, 1, "Exp1_FactorFNO_dual", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 4],
     ]   
 
     with Pool(8) as p:

@@ -171,3 +171,4 @@ cython_debug/
 *.csv
 *.png
 data/fdfd/mdm/raw/*.yml
+unitest/*.mp4

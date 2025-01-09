@@ -28,6 +28,8 @@ log_criterion:
     norm: False
   maxwell_residual_loss:
     using_ALM: False
+  direct_s_param_loss:
+    weight: 1
 
 optimizer:
   name: adam

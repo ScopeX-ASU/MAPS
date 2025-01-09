@@ -35,38 +35,68 @@ class fwd_predictor(nn.Module):
             for (wl, mode, temp, in_port_name, out_port_name), model in model_fwd.items()
         }) # this is now a dictionary of models [wl, mode, temp, in_port_name, out_port_name] -> model # most of the time it should contain at most 2 models
 
-    def forward(self, data):
+    def forward(
+        self, 
+        data
+    ):
         eps = data["eps_map"]
-        # this is the keys of the src_profiles:  
-        # [
-        #     'source_profile-wl-1.55-port-in_port_1-mode-1', 
-        #     'source_profile-wl-1.55-port-in_port_1-mode-2', 
-        #     'source_profile-wl-1.55-port-out_port_1-mode-1', 
-        #     'source_profile-wl-1.55-port-out_port_2-mode-2', 
-        #     'source_profile-wl-1.55-port-refl_port_1-mode-1', 
-        #     'source_profile-wl-1.55-port-refl_port_1-mode-2'
-        # ]
         src = {}
         x_fwd = {}
         forward_field = {}
+        s_params = {} # we may have an aux head to predict s_params
+        # ['eps_map', 'adj_srcs', 'gradient', 'field_solutions', 's_params', 'src_profiles', 'fields_adj', 'field_normalizer', 'design_region_mask', 'ht_m', 'et_m', 'monitor_slices', 'As', 'opt_cfg_file_path']
+        # this is the key of data htms:  
+        # [
+        #     'ht_m-wl-1.55-port-in_port_1-mode-1', 
+        #     'ht_m-wl-1.55-port-in_port_1-mode-1-origin_size', 
+        #     'ht_m-wl-1.55-port-in_port_1-mode-2', 
+        #     'ht_m-wl-1.55-port-in_port_1-mode-2-origin_size', 
+        #     'ht_m-wl-1.55-port-out_port_1-mode-1', 
+        #     'ht_m-wl-1.55-port-out_port_1-mode-1-origin_size', 
+        #     'ht_m-wl-1.55-port-out_port_2-mode-2', 
+        #     'ht_m-wl-1.55-port-out_port_2-mode-2-origin_size', 
+        #     'ht_m-wl-1.55-port-refl_port_1-mode-1', 
+        #     'ht_m-wl-1.55-port-refl_port_1-mode-1-origin_size', 
+        #     'ht_m-wl-1.55-port-refl_port_1-mode-2', 
+        #     'ht_m-wl-1.55-port-refl_port_1-mode-2-origin_size'
+        # ]
+        # this is the keys in adjoint field:  
+        # ['fields_adj-wl-1.55-port-in_port_1-mode-1', 'fields_adj-wl-1.55-port-in_port_1-mode-2']
+        # keys in field solutions:
+        # ['field_solutions-wl-1.55-port-in_port_1-mode-1-temp-300', 'field_solutions-wl-1.55-port-out_port_1-mode-1-temp-300', 'field_solutions-wl-1.55-port-refl_port_1-mode-1-temp-300']
         for key, model in self.model_fwd.items():
             wl, mode, temp, in_port_name, out_port_name = key.split("-")
             wl, mode, temp = float(wl.replace('p', '.')), int(mode), eval(temp)
             src[(wl, mode, in_port_name)] = data["src_profiles"][f"source_profile-wl-{wl}-port-{in_port_name}-mode-{mode}"]
-            x_fwd[(wl, mode, temp, in_port_name, out_port_name)] = model(eps, src[(wl, mode, in_port_name)])
-            forward_field[(wl, mode, temp, in_port_name, out_port_name)], _ = cal_total_field_adj_src_from_fwd_field(
-                Ez=x_fwd[(wl, mode, temp, in_port_name, out_port_name)],
-                eps=eps,
-                ht_ms=data["ht_m"], # this two only used for adjoint field calculation, we don't need it here in forward pass
-                et_ms=data["et_m"],
-                monitors=data["monitor_slices"],
-                pml_mask=model.pml_mask,
-                from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
-                return_adj_src=False,
-                sim=model.sim,
-            )
+            fwd_model_output = model(eps, src[(wl, mode, in_port_name)])
+            if isinstance(fwd_model_output, tuple):
+                assert len(fwd_model_output) == 2, "fwd_model_output should be a tuple of length 2"
+                x_fwd[(wl, mode, temp, in_port_name, out_port_name)] = fwd_model_output[0]
+                s_params[(wl, mode, temp, in_port_name, out_port_name)] = fwd_model_output[1]
+            else:
+                x_fwd[(wl, mode, temp, in_port_name, out_port_name)] = fwd_model_output
+            with torch.enable_grad():
+                forward_field[(wl, mode, temp, in_port_name, out_port_name)], _ = cal_total_field_adj_src_from_fwd_field(
+                    Ez=x_fwd[(wl, mode, temp, in_port_name, out_port_name)],
+                    # Ez=data["field_solutions"]["field_solutions-wl-1.55-port-in_port_1-mode-1-temp-300"][:, -2:, ...],
+                    eps=eps,
+                    ht_ms=data["ht_m"], # this two only used for adjoint field calculation, we don't need it here in forward pass
+                    et_ms=data["et_m"],
+                    monitors=data["monitor_slices"],
+                    pml_mask=model.pml_mask,
+                    from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
+                    return_adj_src=False,
+                    sim=model.sim,
+                    opt_cfg_file_path=data['opt_cfg_file_path'],
+                    wl=wl,
+                    mode=mode,
+                    temp=temp,
+                    in_port_name=in_port_name,
+                    out_port_name=out_port_name,
+                )
         return {
-            "forward_field": forward_field, # now this is a dictionary of forward fields [wl, mode, temp, in_port_name, out_port_name] -> forward field
+            "forward_field": forward_field,
+            "s_params": s_params if len(s_params) > 0 else None, # only pass s_params if we have s-param head to predict s_params
             "adjoint_field": None,
             "adjoint_source": None,
         }

@@ -46,6 +46,7 @@ class FDFD(VisionDataset):
         self,
         device_type: str,
         root: str,
+        data_dir: str = "raw",
         train: bool = True,
         transform: Optional[Callable] = None,
         target_transform: Optional[Callable] = None,
@@ -54,6 +55,7 @@ class FDFD(VisionDataset):
         download: bool = False,
     ) -> None:
         self.device_type = device_type
+        self.data_dir = data_dir
         self.processed_dir = processed_dir
         root = os.path.join(os.path.expanduser(root), self.folder)
         if transform is None:
@@ -112,7 +114,7 @@ class FDFD(VisionDataset):
         ## do not load actual data here, too slow. Just load the filenames
         all_samples = [
                 os.path.basename(i)
-                for i in glob.glob(os.path.join(self.root, self.device_type, "raw", f"{self.device_type}_*.h5"))
+                for i in glob.glob(os.path.join(self.root, self.device_type, self.data_dir, f"{self.device_type}_*.h5"))
             ]
         total_device_id = []
         for filename in all_samples:
@@ -145,7 +147,7 @@ class FDFD(VisionDataset):
     def _preprocess_dataset(self, data_train: Tensor, data_test: Tensor) -> Tuple[Tensor, Tensor]:
         all_samples = [
                 os.path.basename(i)
-                for i in glob.glob(os.path.join(self.root, self.device_type, "raw", f"{self.device_type}_*.h5"))
+                for i in glob.glob(os.path.join(self.root, self.device_type, self.data_dir, f"{self.device_type}_*.h5"))
             ]
         filename_train = []
         filename_test = []
@@ -195,14 +197,14 @@ class FDFD(VisionDataset):
 
     def _check_integrity(self) -> bool:
         raise NotImplementedError
-        return all([os.path.exists(os.path.join(self.root, "raw", filename)) for filename in self.filenames])
+        return all([os.path.exists(os.path.join(self.root, self.data_dir, filename)) for filename in self.filenames])
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, item):
         device_file = self.data[item]
-        path = os.path.join(self.root, self.device_type, "raw", device_file)
+        path = os.path.join(self.root, self.device_type, self.data_dir, device_file)
         with h5py.File(path, "r") as f:
             keys = list(f.keys())
             orgion_size = torch.from_numpy(f["eps_map"][()]).float().size()
@@ -294,9 +296,9 @@ class FDFD(VisionDataset):
                 elif key.startswith("port_slice"):
                     data = f[key][()]
                     # print("this is the key: ", key, type(data), data, flush=True)
-                    if isinstance(data, np.ndarray) and len(data.shape) == 1:
-                        monitor_slice[key] = torch.tensor([data[0], data[-1] + 1])
-                    elif isinstance(data, np.int64):
+                    # if isinstance(data, np.ndarray) and len(data.shape) == 1:
+                    #     monitor_slice[key] = torch.tensor([data[0], data[-1] + 1])
+                    if isinstance(data, np.int64):
                         monitor_slice[key] = torch.tensor([data])
                     else:
                         monitor_slice[key] = torch.tensor(data)
@@ -311,6 +313,7 @@ class FDFDDataset:
         self,
         device_type: str,
         root: str,
+        data_dir: str,
         split: str,
         test_ratio: float,
         train_valid_split_ratio: List[float],
@@ -318,6 +321,7 @@ class FDFDDataset:
     ):
         self.device_type = device_type
         self.root = root
+        self.data_dir = data_dir
         self.split = split
         self.test_ratio = test_ratio
         assert 0 < test_ratio < 1, print(f"Only support test_ratio from (0, 1), but got {test_ratio}")
@@ -338,6 +342,7 @@ class FDFDDataset:
             train_valid = FDFD(
                 self.device_type,
                 self.root,
+                data_dir=self.data_dir,
                 train=True,
                 download=False,
                 transform=transform,
@@ -366,6 +371,7 @@ class FDFDDataset:
             test = FDFD(
                 self.device_type,
                 self.root,
+                data_dir=self.data_dir,
                 train=False,
                 download=False,
                 transform=transform,

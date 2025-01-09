@@ -18,7 +18,7 @@ from core.utils import (
 )
 from thirdparty.ceviche.ceviche import jacobian
 from thirdparty.ceviche.ceviche.constants import MU_0
-
+from core.utils import print_stat
 
 class EigenmodeObjective(object):
     def __init__(
@@ -874,7 +874,6 @@ class ObjectiveFunc(object):
         field_adj = {}
         field_adj_normalizer = {}
         for key, sim in self.sims.items():
-            adj_sources[key] = sim.solver.adj_src  # this is the b_adj
             ez_adj, hx_adj, hy_adj, flux = sim.norm_adj_power()
             # field_adj[key] = {"Ez": ez_adj, "Hx": hx_adj, "Hy": hy_adj}
             field_adj[key] = {}
@@ -885,6 +884,7 @@ class ObjectiveFunc(object):
                     "Hy": hy_adj[(port_name, mode)],
                 }
             field_adj_normalizer[key] = flux
+            adj_sources[key] = sim.solver.adj_src  # this is the b_adj
         return adj_sources, field_adj, field_adj_normalizer
 
     def obtain_objective(

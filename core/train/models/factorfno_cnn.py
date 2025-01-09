@@ -107,6 +107,7 @@ class FactorFNO2d(ModelBase):
         fourier_feature="none",
         pos_encoding="none",
         mapping_size=2,
+        output_sparam=False,
         incident_field_fwd=False,
         device=torch.device("cuda"),
         conv_cfg=dict(type="Conv2d", padding_mode="replicate"),
@@ -280,6 +281,9 @@ class FactorFNO2d(ModelBase):
         else:
             self.aux_head = None
 
+        if self.output_sparam:
+            self.build_sparam_head()
+
     def fourier_feature_mapping(self, x: Tensor) -> Tensor:
         if self.fourier_feature == "none":
             return x
@@ -415,5 +419,10 @@ class FactorFNO2d(ModelBase):
         x = self.features(x)
 
         forward_Ez_field = self.head(x)  # 1x1 conv
+
+        if self.output_sparam:
+            assert hasattr(self, "sparam_head"), "sparam_head is not defined"
+            s_parameter = self.sparam_head(forward_Ez_field)
+            return forward_Ez_field, s_parameter
 
         return forward_Ez_field

@@ -42,7 +42,7 @@ if __name__ == "__main__":
             solver="ceviche_torch",
             border_width=[0, port_len, port_len, 0],
             resolution=50,
-            plot_root=f"./figs/bending_{'init_try'}",
+            plot_root=f"./figs/bending_{'init_try_test'}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -69,7 +69,7 @@ if __name__ == "__main__":
     invdesign = InvDesign(devOptimization=opt)
     invdesign.optimize(
         plot=True,
-        plot_filename=f"bending_{'init_try'}",
+        plot_filename=f"bending_{'init_try_test'}",
         objs=["fwd_trans"],
         field_keys=[("in_port_1", 1.55, 1, 300)],
         in_port_names=["in_port_1"],

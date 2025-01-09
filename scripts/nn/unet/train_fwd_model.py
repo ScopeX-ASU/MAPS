@@ -24,7 +24,7 @@ configs.load(config_file, recursive=True)
 
 
 def task_launcher(args):
-    mixup, device_type, alg, train_field, include_adjoint_NN, fourier_feature, fno_block_only, mode1, mode2, id, description, gpu_id, epochs, alm, lr, criterion, criterion_weight, H_loss, maxwell_loss, grad_loss, s_param_loss, alm_lambda, alm_mu, mu_growth, constraint_tol, checkpt_fwd, checkpt_adj, bs = args
+    mixup, device_type, data_dir, alg, output_sparam, fourier_feature, dim, id, description, gpu_id, epochs, alm, lr, criterion, criterion_weight, H_loss, maxwell_loss, grad_loss, s_param_loss, direct_s_param_loss, alm_lambda, alm_mu, mu_growth, constraint_tol, checkpt_fwd, checkpt_adj, bs = args
     env = os.environ.copy()
     env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
     
@@ -33,10 +33,19 @@ def task_launcher(args):
             script,
             config_file
             ]
-    suffix = f"model-{alg}_dev-{device_type}_id-{id}_dcrp-{description}"
+    suffix = f"model-{alg}_dev-{device_type}_field-fwd_id-{id}_dcrp-{description}"
+    if "bending" in device_type.lower():
+        temp = [300]
+        wl = [1.55]
+        mode = [1]
+        in_out_port_name = [['in_port_1', 'out_port_1']]
+        img_size = 256
+    else:
+        raise ValueError(f"device_type {device_type} not supported")
     with open(os.path.join(root, f'{suffix}.log'), 'w') as wfid:
         exp = [
             f"--dataset.device_type={device_type}",
+            f"--dataset.data_dir={data_dir}",
             f"--dataset.processed_dir={device_type}",
             f"--dataset.num_workers={4}",
             f"--dataset.augment.prob={mixup}",
@@ -45,10 +54,9 @@ def task_launcher(args):
             f"--run.batch_size={bs}",
             f"--run.use_cuda={1}",
             f"--run.gpu_id={gpu_id}",
-            f"--run.log_interval={80}",
+            f"--run.log_interval={40}",
             f"--run.random_state={59}",
             f"--run.fp16={False}",
-            f"--run.include_adjoint_NN={include_adjoint_NN}",
 
             f"--criterion.name={criterion}",
             f"--criterion.weight={criterion_weight}",
@@ -59,8 +67,10 @@ def task_launcher(args):
             f"--aux_criterion.s_param_loss.weight={s_param_loss}",
             f"--aux_criterion.Hx_loss.weight={H_loss}",
             f"--aux_criterion.Hy_loss.weight={H_loss}",
+            f"--aux_criterion.direct_s_param_loss.weight={direct_s_param_loss}",
 
             f"--log_criterion.maxwell_residual_loss.using_ALM={alm}",
+            f"--log_criterion.direct_s_param_loss.weight={direct_s_param_loss}",
 
             f"--test_criterion.name={'nmse'}",
             f"--test_criterion.weighted_frames={0}",
@@ -69,7 +79,7 @@ def task_launcher(args):
             f"--scheduler.lr_min={lr*5e-3}",
 
             f"--plot.train={True}",
-            f"--plot.val={True}",
+            f"--plot.valid={True}",
             f"--plot.test={True}",
             f"--plot.interval=1",
             f"--plot.dir_name={model}_{exp_name}_id-{id}_des-{description}",
@@ -81,15 +91,18 @@ def task_launcher(args):
             f"--optimizer.ALM_mu_growth={mu_growth}",
             f"--optimizer.ALM_constraint_tol={constraint_tol}",
 
-            # f"--model.name={alg}",
-            f"--model_fwd.hidden_list={[128]}",
+            f"--model_fwd.type={alg}",
+            f"--model_fwd.train_field={'fwd'}",
+            f"--model_fwd.dim={dim}",
+            f"--model_fwd.img_size={img_size}",
             f"--model_fwd.mapping_size={64}",
             f"--model_fwd.fourier_feature={fourier_feature}",
-
-            f"--model_fwd.temp={[300] * 2}",
-            f"--model_fwd.wl={[1.55] * 2}",
-            f"--model_fwd.mode={[1, 2]}",
-            f"--model_fwd.in_out_port_name={[['in_port_1', f'out_port_{i}'] for i in range(1, 3)]}",
+            f"--model_fwd.temp={temp}",
+            f"--model_fwd.wl={wl}",
+            f"--model_fwd.mode={mode}",
+            f"--model_fwd.in_out_port_name={in_out_port_name}",
+            # f"--model_fwd.in_out_port_name={[['in_port_1', f'out_port_{i}'] for i in range(1, 3)]}",
+            f"--model_fwd.output_sparam={output_sparam}",
 
             f"--checkpoint.model_comment={suffix}",
             f"--checkpoint.resume={False}" if checkpt_fwd == "none" else f"--checkpoint.resume={True}",
@@ -103,9 +116,8 @@ def task_launcher(args):
 
 if __name__ == '__main__':
     ensure_dir(root)
-    # mlflow.set_experiment(configs.run.experiment)  # set experiments first
     tasks = [
-        [0.0, "mdm", "UNet", "fwd", False, "none", True, 33, 66, 1, "test_unet", 2, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 8],
+        [0.0, "bending", "raw_opt_traj_10", "UNet", True, "none", 64, 2, "Exp1_UNet_S_param_only", 2, 50, False, 0.002, "nmse", 0, 0, 0, 0, 0, 1, 0, 1, 2, 1e-4, "none", "none", 4],
     ]   
 
     with Pool(8) as p:

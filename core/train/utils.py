@@ -1090,15 +1090,14 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
         return loss
 
 class SParamLoss(torch.nn.modules.loss._Loss):
-
     def __init__(self, reduce="mean"):
         super(SParamLoss, self).__init__()
 
         self.reduce = reduce
 
     def forward(
-        self, 
-        fields, # bs, 3, H, W, complex
+        self,
+        fields,  # bs, 3, H, W, complex
         ht_m,
         et_m,
         monitor_slices_x,
@@ -1107,7 +1106,7 @@ class SParamLoss(torch.nn.modules.loss._Loss):
     ):
         # Step 1: Resize all the fields to the target size
         Ez = fields[:, -2:, :, :].permute(0, 2, 3, 1).contiguous()
-        Ez = torch.view_as_complex(Ez) # convert Ez to the required complex format
+        Ez = torch.view_as_complex(Ez)  # convert Ez to the required complex format
 
         Hx = fields[:, :2, :, :].permute(0, 2, 3, 1).contiguous()
         Hx = torch.view_as_complex(Hx)
@@ -1124,12 +1123,8 @@ class SParamLoss(torch.nn.modules.loss._Loss):
         for i in range(batch_size):
             monitor_slice = Slice(
                 y=monitor_slices_y[i],
-                x=torch.arange(
-                    monitor_slices_x[i][0],
-                    monitor_slices_x[i][1],
-                ).to(monitor_slices_y[i].device),
+                x=monitor_slices_x[i],
             )
-            # ht_m and et_m are lists
             s_p, s_m = get_eigenmode_coefficients(
                 hx=Hx[i],
                 hy=Hy[i],
@@ -1137,19 +1132,52 @@ class SParamLoss(torch.nn.modules.loss._Loss):
                 ht_m=ht_m[i],
                 et_m=et_m[i],
                 monitor=monitor_slice,
-                grid_step=1/50,
+                grid_step=1 / 50,
                 direction="y",
                 autograd=True,
                 energy=True,
             )
             s_params.append(torch.tensor([s_p, s_m], device=Ez.device))
-        s_params = torch.stack(s_params, 0)
+        s_params = torch.stack(s_params, 0) / 1e-8
         s_params_diff = s_params - target_SParam
         # Step 3: Calculate the loss
         # print("this is the l2 norm of the target_SParam ", torch.norm(target_SParam, p=2, dim=-1), flush=True) ~e-9
-        loss = (torch.norm(s_params_diff, p=2, dim=-1) / (torch.norm(target_SParam, p=2, dim=-1) + 1e-12)).mean()
+        loss = (
+            torch.norm(s_params_diff, p=2, dim=-1)
+            / (torch.norm(target_SParam, p=2, dim=-1) + 1e-12)
+        ).mean()
         return loss
     
+class DirectCompareSParam(torch.nn.modules.loss._Loss):
+    '''
+    There is no need to calculate the S from the field
+    Only need to compare the S parameters GT and the predicted S parameters
+    '''
+    def __init__(self, reduce="mean"):
+        super(DirectCompareSParam, self).__init__()
+
+        self.reduce = reduce
+
+    def forward(
+        self,
+        s_params_pred,  # bs, 2, real
+        s_params_GT,  # bs, 2, real
+    ):
+        # read the required S parameters from the s_params_GT
+        # print("this is the shape and dtye of the predicted S parameters", s_params_pred.shape, s_params_pred.dtype, flush=True)
+        # print("this is the keys in the s_params_GT", list(s_params_GT.keys()), flush=True)
+        # quit()
+        # ['s_params-port-out_port_1-wl-1.55-type-1-temp-300', 's_params-port-rad_monitor_xm-wl-1.55-type-flux-temp-300', 's_params-port-rad_monitor_xp-wl-1.55-type-flux-temp-300', 's_params-port-rad_monitor_ym-wl-1.55-type-flux-temp-300', 's_params-port-rad_monitor_yp-wl-1.55-type-flux-temp-300', 's_params-port-refl_port_1-wl-1.55-type-flux_minus_src-temp-300']
+        fwd_trans_GT = s_params_GT['s_params-port-out_port_1-wl-1.55-type-1-temp-300']
+        ref_GT = s_params_GT['s_params-port-refl_port_1-wl-1.55-type-flux_minus_src-temp-300']
+
+        target_s = torch.cat((fwd_trans_GT[:, 0].unsqueeze(1), ref_GT[:, 1].unsqueeze(1)), 1)
+
+        prediction_error = s_params_pred - target_s
+        normalizeMSE = (prediction_error.norm(p=2, dim=-1) / (target_s.norm(p=2, dim=-1)).mean() + 1e-9)
+        return normalizeMSE
+
+
 class GradientLoss(torch.nn.modules.loss._Loss):
 
     def __init__(self, reduce="mean"):
