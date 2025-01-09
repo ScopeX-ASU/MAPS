@@ -14,6 +14,7 @@ project_root = os.path.abspath(
 sys.path.insert(0, project_root)
 import torch
 from pyutils.config import Config
+from pyutils.general import logger
 
 from core.invdes import builder
 from core.invdes.models import (
@@ -33,8 +34,12 @@ class InvDesign:
     default_cfgs = Config(
         devOptimization=None,
         optimizer=Config(
-            name="Adam",
-            lr=2e-2,
+            # name="Adam",
+            # lr=2e-2,
+            name="lbfgs",
+            line_search_fn="strong_wolfe",
+            # line_search_fn=None,
+            lr=1e-2,
             weight_decay=0,
         ),
         lr_scheduler=Config(
@@ -101,20 +106,50 @@ class InvDesign:
             assert len(in_port_names) > 0, "in_port_names must be provided"
             if len(exclude_port_names) == 0:
                 exclude_port_names = [[]] * len(objs)
+
+        class Closure(object):
+            def __init__(
+                self,
+                optimizer,  # optimizer
+                devOptimization,  # device optimization model,
+            ):
+                self.results = None
+                self.optimizer = optimizer
+                self.devOptimization = devOptimization
+                self.sharpness = 1
+
+            def __call__(self):
+                # clear grad here
+                self.optimizer.zero_grad()
+                # forward pass
+                results = self.devOptimization.forward(sharpness=self.sharpness)
+
+                # need backward to compute grad
+                (-results["obj"]).backward()
+
+                # store any results for plot/log
+                self.results = results
+
+                ## return the loss for gradient descent
+                return -results["obj"]
+
+        closure = Closure(
+            optimizer=self.optimizer,
+            devOptimization=self.devOptimization,
+        )
+
         for i in range(self._cfg.run.n_epochs):
-            # train the model
-            self.optimizer.zero_grad()
             sharpness = self.sharp_scheduler.get_sharpness()
-            # forward pass
-            results = self.devOptimization.forward(sharpness=sharpness)
-            print(f"Step {i}:", end=" ")
-            for k, obj in results["breakdown"].items():
-                print(f"{k}: {obj['value']:.3f}", end=", ")
-            print()
-            # backward pass
-            (-results["obj"]).backward()
-            # update the weights
-            self.optimizer.step()
+            closure.sharpness = sharpness
+
+            self.optimizer.step(closure)
+            results = closure.results
+
+            log = f"Step {i:3d} (sharp: {sharpness:.1f}) "
+            log += ", ".join(
+                [f"{k}: {obj['value']:.3f}" for k, obj in results["breakdown"].items()]
+            )
+            logger.info(log)
             # update the learning rate
             self.lr_scheduler.step()
             # update the sharpness

@@ -1,7 +1,7 @@
 """
 Date: 2024-10-02 20:59:04
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-06 19:01:55
+LastEditTime: 2025-01-09 02:57:17
 FilePath: /MAPS/core/invdes/models/layers/device_base.py
 """
 
@@ -33,6 +33,7 @@ from .utils import (
     apply_regions_gpu,
     get_grid,
     insert_mode,
+    insert_mode_spins,
     plot_eps_field,
 )
 
@@ -871,9 +872,16 @@ class N_Ports(BaseDevice):
                 # since the eps is only modulated at active region
                 # current_eps = get_temp_related_eps(eps, wl, temp)
                 omega = 2 * np.pi * C_0 / (wl * MICRON_UNIT)
+             
                 ht_m, et_m, _, mode = insert_mode(
                     omega, dl, slice.x, slice.y, eps, m=source_mode
                 )
+                # print(ht_m)
+                # ht_m, et_m, _, mode = insert_mode_spins(
+                #     omega, dl, slice.x, slice.y, eps, m=source_mode
+                # )
+                # print(ht_m)
+                # exit(0)
                 if power_scales is not None:
                     power_scale = power_scales[(wl, source_mode)]
                     ht_m = ht_m * power_scale
@@ -1110,7 +1118,7 @@ class N_Ports(BaseDevice):
                 else:
                     raise ValueError(f"Unknown polarization {pol}")
 
-                _, ht_m, et_m, _ = source_profiles[k]
+                # _, ht_m, et_m, _ = source_profiles[k]
                 # print("this is the type of Hx:", type(Hx), flush=True)
                 # print("this is the type of Hy:", type(Hy), flush=True)
                 # print("this is the type of Ez:", type(Ez), flush=True)
@@ -1118,19 +1126,19 @@ class N_Ports(BaseDevice):
                 # print("this is the type of et_m:", type(et_m), flush=True)
                 # ht_m = torch.from_numpy(ht_m).to(Ez.device)
                 # et_m = torch.from_numpy(et_m).to(Ez.device)
-                eigen_energy = get_eigenmode_coefficients(
-                    Fx,
-                    Fy,
-                    Fz,
-                    ht_m,
-                    et_m,
-                    output_slice,
-                    grid_step=self.grid_step,
-                    direction=direction,
-                    energy=True,
-                    pol=pol,
-                )
-                print("eigen_energy:", eigen_energy)
+                # eigen_energy = get_eigenmode_coefficients(
+                #     Fx,
+                #     Fy,
+                #     Fz,
+                #     ht_m,
+                #     et_m,
+                #     output_slice,
+                #     grid_step=self.grid_step,
+                #     direction=direction,
+                #     energy=True,
+                #     pol=pol,
+                # )
+                # print("eigen_energy:", eigen_energy)
                 ## used to verify eigen mode coefficients, need to be the same as eigen energy
                 flux = get_flux(
                     Fx,
@@ -1141,7 +1149,7 @@ class N_Ports(BaseDevice):
                     direction=direction,
                     pol=pol,
                 )
-                print("norm flux:", flux)
+                # print("norm flux:", flux)
                 if isinstance(flux, torch.Tensor):
                     flux = flux.item()
                 input_SCALE[k] = np.abs(flux)
