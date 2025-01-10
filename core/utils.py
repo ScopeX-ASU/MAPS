@@ -17,7 +17,7 @@ from torch import Tensor
 from torch.types import Device
 from torch_sparse import spmm
 import yaml
-
+from pyutils.config import Config
 from thirdparty.ceviche.ceviche.constants import *
 
 if TYPE_CHECKING:
@@ -1834,3 +1834,6 @@ material_fn_dict = {
     "SiN": SiN_eps,
     "Air": Air_eps,
 }
+
+train_configs = Config()
+inverse_configs = Config()

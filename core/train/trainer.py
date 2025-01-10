@@ -5,16 +5,16 @@ import torch.amp as amp
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from thirdparty.pyutility.pyutils.config import train_configs as configs
-from thirdparty.pyutility.pyutils.general import AverageMeter, logger as lg
-from thirdparty.pyutility.pyutils.torch_train import (
+from pyutils.config import train_configs as configs
+from pyutils.general import AverageMeter, logger as lg
+from pyutils.torch_train import (
     BestKModelSaver,
     count_parameters,
     get_learning_rate,
     load_model,
     set_torch_deterministic,
 )
-from thirdparty.pyutility.pyutils.typing import Criterion, DataLoader, Optimizer, Scheduler
+from pyutils.typing import Criterion, DataLoader, Optimizer, Scheduler
 import torch.fft
 from core.train import builder
 from core.utils import DeterministicCtx
