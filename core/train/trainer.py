@@ -5,7 +5,7 @@ import torch.amp as amp
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from pyutils.config import train_configs as configs
+from core.utils import train_configs as configs
 from pyutils.general import AverageMeter, logger as lg
 from pyutils.torch_train import (
     BestKModelSaver,

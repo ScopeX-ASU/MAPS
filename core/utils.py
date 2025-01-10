@@ -8,16 +8,18 @@ from typing import TYPE_CHECKING, Any, Tuple
 import autograd.numpy as npa
 import matplotlib.pyplot as plt
 import numpy as np
+import ryaml
 import torch
 import torch.distributed as dist
 import torch.fft
 import torch.nn.functional as F
 import torch.optim
+from pyutils.config import Config
+from pyutils.general import TimerCtx
 from torch import Tensor
 from torch.types import Device
 from torch_sparse import spmm
-import yaml
-from pyutils.config import Config
+
 from thirdparty.ceviche.ceviche.constants import *
 
 if TYPE_CHECKING:
@@ -338,6 +340,18 @@ def cal_fom_from_fields(
 
     return total_fom
 
+
+@lru_cache(maxsize=1024)
+def _load_opt_cfgs(opt_cfg_file_path):
+    with open(opt_cfg_file_path, "r") as opt_cfg_file:
+        opt_cfgs = ryaml.load(opt_cfg_file)
+        resolution = opt_cfgs["sim_cfg"]["resolution"]
+        opt_cfgs = opt_cfgs["obj_cfgs"]
+        # fusion_fn = opt_cfgs["_fusion_func"]
+        del opt_cfgs["_fusion_func"]
+    return opt_cfgs, resolution
+
+
 def cal_total_field_adj_src_from_fwd_field(
     Ez,
     eps,
@@ -355,8 +369,8 @@ def cal_total_field_adj_src_from_fwd_field(
     in_port_name,
     out_port_name,
 ) -> Tensor:
-    from core.fdfd.fdfd import fdfd_ez  # this is to avoid circular import
-
+    # from core.fdfd.fdfd import fdfd_ez  # this is to avoid circular import
+    Ez = Ez.detach()
     if not return_adj_src:
         Hx, Hy = from_Ez_to_Hx_Hy_func(
             sim,
@@ -367,14 +381,14 @@ def cal_total_field_adj_src_from_fwd_field(
         total_field = pml_mask.unsqueeze(0).unsqueeze(0) * total_field
         return total_field, None
     else:
-        Ez_copy = Ez.clone()
+        Ez_copy = Ez
         Ez = Ez.permute(0, 2, 3, 1).contiguous()
         Ez = torch.view_as_complex(Ez)
         gradient_list = []
         Hx_list = []
         Hy_list = []
         for i in range(Ez.shape[0]):
-            Ez_i = Ez[i].clone().requires_grad_()
+            Ez_i = Ez[i].requires_grad_()
 
             sim.eps_r = eps[i]
             Hx_vec, Hy_vec = sim._Ez_to_Hx_Hy(Ez_i.flatten())
@@ -387,14 +401,10 @@ def cal_total_field_adj_src_from_fwd_field(
             Hx_list.append(Hx_to_append)
             Hy_list.append(Hy_to_append)
 
-            total_fom = torch.tensor(0.0).to(Ez_i.device)
+            total_fom = torch.tensor(0.0, device=Ez_i.device)
 
-            with open(opt_cfg_file_path[i], "r") as opt_cfg_file:
-                opt_cfgs = yaml.safe_load(opt_cfg_file)
-                resolution = opt_cfgs["sim_cfg"]["resolution"]
-                opt_cfgs = opt_cfgs["obj_cfgs"]
-                fusion_fn = opt_cfgs["_fusion_func"]
-                del opt_cfgs["_fusion_func"]
+            opt_cfgs, resolution = _load_opt_cfgs(opt_cfg_file_path[i])
+
             for obj_name, opt_cfg in opt_cfgs.items():
                 weight = float(opt_cfg["weight"])
                 direction = opt_cfg["direction"]
@@ -404,7 +414,12 @@ def cal_total_field_adj_src_from_fwd_field(
                 input_port_name = opt_cfg["in_port_name"]
                 # print(f"this is the wl: {wl}, mode: {mode}, temp: {temp}, in_port_name: {in_port_name}")
                 # print(f"this is the corresponding we read from current obj mode: {in_mode}, temp: {temperture}, in_port_name: {input_port_name}")
-                if weight == 0 or in_mode != mode or temp not in temperture or input_port_name != in_port_name:
+                if (
+                    weight == 0
+                    or in_mode != mode
+                    or temp not in temperture
+                    or input_port_name != in_port_name
+                ):
                     continue
                 if opt_cfg["type"] == "eigenmode":
                     monitor = Slice(
@@ -415,15 +430,19 @@ def cal_total_field_adj_src_from_fwd_field(
                         hx=Hx_i,
                         hy=Hy_i,
                         ez=Ez_i,
-                        ht_m=ht_ms[f"ht_m-wl-{wl}-port-{out_slice_name}-mode-{mode}"][i],
-                        et_m=et_ms[f"et_m-wl-{wl}-port-{out_slice_name}-mode-{mode}"][i],
+                        ht_m=ht_ms[f"ht_m-wl-{wl}-port-{out_slice_name}-mode-{mode}"][
+                            i
+                        ],
+                        et_m=et_ms[f"et_m-wl-{wl}-port-{out_slice_name}-mode-{mode}"][
+                            i
+                        ],
                         monitor=monitor,
                         grid_step=1 / resolution,
                         direction=direction,
                         energy=True,
                     )
                     fom = weight * fom / 1e-8  # normalize with the input power
-                elif "flux" in opt_cfg["type"]: # flux or flux_minus_src
+                elif "flux" in opt_cfg["type"]:  # flux or flux_minus_src
                     monitor = Slice(
                         x=monitors[f"port_slice-{out_slice_name}_x"][i],
                         y=monitors[f"port_slice-{out_slice_name}_y"][i],
@@ -437,9 +456,7 @@ def cal_total_field_adj_src_from_fwd_field(
                         direction=direction,
                     )
                     if "minus_src" in opt_cfg["type"]:
-                        fom = torch.abs(
-                            torch.abs(fom / 1e-8) - 1
-                        )
+                        fom = torch.abs(torch.abs(fom / 1e-8) - 1)
                     else:
                         fom = torch.abs(fom / 1e-8)
                     fom = weight * fom
@@ -456,7 +473,6 @@ def cal_total_field_adj_src_from_fwd_field(
         adj_src = torch.conj(torch.stack(gradient_list, dim=0))
         return total_field, adj_src
         for i in range(Ez.shape[0]):
-
             monitor_slice_out = Slice(
                 y=monitor_out_y[i],
                 x=torch.arange(
