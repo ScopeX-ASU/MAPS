@@ -7,11 +7,15 @@ basically, this should be like the training logic like in train_NN.py
 import os
 import sys
 
+from pyutils.general import TimerCtx
+
 # Add the project root to sys.path
 project_root = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "/home/pingchua/projects/MAPS")
 )
 sys.path.insert(0, project_root)
+from concurrent.futures import ThreadPoolExecutor
+
 import torch
 from pyutils.config import Config
 from pyutils.general import logger
@@ -78,6 +82,7 @@ class InvDesign:
             scheduler_type="sharp_scheduler",
             config_total=self._cfg,
         )
+        self.plot_thread = ThreadPoolExecutor(2)
 
     def load_cfgs(self, **cfgs):
         # Start with default configurations
@@ -160,7 +165,8 @@ class InvDesign:
                 for j in range(len(objs)):
                     # (port_name, wl, mode, temp), extract pol from mode, e.g., Ez1 -> Ez
                     pol = field_keys[j][2][:2]
-                    self.devOptimization.plot(
+                    self.plot_thread.submit(
+                        self.devOptimization.plot,
                         eps_map=self.devOptimization._eps_map,
                         obj=results["breakdown"][objs[j]]["value"],
                         plot_filename=plot_filename + f"_{i}" + f"_{objs[j]}.jpg",
@@ -172,6 +178,7 @@ class InvDesign:
                         # exclude_port_names=["refl_port_2"],
                         exclude_port_names=exclude_port_names[j],
                     )
+
         if dump_gds:
             if plot_filename.endswith(".png"):
                 plot_filename = plot_filename[:-4]
@@ -197,7 +204,7 @@ if __name__ == "__main__":
         dict(
             solver="ceviche_torch",
             border_width=[0, port_len, port_len, 0],
-            resolution=50,
+            resolution=100,
             plot_root=f"./figs/test_mfs_bending_{500}",
             PML=[0.5, 0.5],
             neural_solver=None,

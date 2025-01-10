@@ -14,10 +14,12 @@ import torch.fft
 import torch.nn.functional as F
 import torch.optim
 import yaml
+from pyutils.config import Config
 from torch import Tensor
 from torch.types import Device
 from torch_sparse import spmm
 
+train_configs = Config()
 from thirdparty.ceviche.constants import *
 
 if TYPE_CHECKING:

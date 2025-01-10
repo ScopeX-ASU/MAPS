@@ -23,7 +23,7 @@ from core.train import builder
 from core.train.models.utils import from_Ez_to_Hx_Hy
 from core.train.trainer import PredTrainer
 from core.utils import cal_total_field_adj_src_from_fwd_field
-from thirdparty.pyutility.pyutils.config import train_configs as configs
+from core.utils import train_configs as configs
 import numpy as np
 import copy
 

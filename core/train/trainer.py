@@ -7,9 +7,9 @@ import torch.nn.functional as F
 
 from core.utils import plot_fields
 from thirdparty.ceviche.constants import *
-from thirdparty.pyutility.pyutils.config import train_configs as configs
-from thirdparty.pyutility.pyutils.general import AverageMeter
-from thirdparty.pyutility.pyutils.general import logger as lg
+from core.utils import train_configs as configs
+from pyutils.general import AverageMeter
+from pyutils.general import logger as lg
 
 
 class PredTrainer(object):

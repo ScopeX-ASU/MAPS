@@ -1,7 +1,7 @@
 """
 Date: 2025-01-04 20:49:15
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-09 03:57:24
+LastEditTime: 2025-01-09 18:31:40
 FilePath: /MAPS/core/invdes/examples/bending.py
 """
 
