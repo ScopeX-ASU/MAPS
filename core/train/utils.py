@@ -919,101 +919,6 @@ def rip_padding(eps, pady_0, pady_1, padx_0, padx_1):
     """
     return eps[padx_0:-padx_1, pady_0:-pady_1]
 
-# class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
-#     def __init__(
-#         self,
-#         wl_cen: float = 1.55,
-#         wl_width: float = 0,
-#         n_wl: int = 1,
-#         size_average=None,
-#         reduce=None,
-#         reduction: str = "mean",
-#         using_ALM: bool = False,
-#     ):
-#         super().__init__(size_average, reduce, reduction)
-#         self.wl_list = torch.linspace(
-#             wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl
-#         )
-#         self.omegas = 2 * np.pi * C_0 / (self.wl_list * 1e-6)
-#         self.using_ALM = using_ALM
-
-#     def forward(self, Ez: Tensor, source: Tensor, As, transpose_A):
-#         Ez = Ez[:, -2:, :, :]
-#         Ez = Ez.permute(0, 2, 3, 1).contiguous()
-#         Ez = torch.view_as_complex(Ez) # convert Ez to the required complex format
-#         source = torch.view_as_real(source.resolve_conj()).permute(0, 3, 1, 2) # B, 2, H, W
-#         source = source.permute(0, 2, 3, 1).contiguous()
-#         source = torch.view_as_complex(source) # convert source to the required complex format
-        
-
-#         # there is only one omega in this case
-#         Ez = Ez.unsqueeze(1)
-#         source = source.unsqueeze(1)
-
-#         free_space_mask = source.abs() <= 1e-10
-#         free_space_mask = free_space_mask.flatten(0, 1).flatten(1)
-
-#         ## Ez: [bs, n_wl, h, w] complex tensor
-#         ## eps_r: [bs, h, w] real tensor
-#         ## source: [bs, n_wl, h, w] complex tensor, source in sim.solve(source), not b, b = 1j * omega * source
-
-#         # step 2: calculate loss
-#         lhs = []
-#         if self.omegas.device != source.device:
-#             self.omegas = self.omegas.to(source.device)
-#         for i in range(Ez.shape[0]): # loop over samples in a batch
-#             for j in range(Ez.shape[1]): # loop over different wavelengths
-#                 ez = Ez[i, j].flatten()
-#                 # omega = 2 * np.pi * C_0 / (self.wl_list[j] * 1e-6)
-#                 wl = round(self.wl_list[j].item()*100)/100
-#                 # print("this is the key of As", list(As.keys()), flush=True)
-#                 # quit()
-#                 # wl-1.55-temp-300
-#                 entries = As[f'A-wl-{wl}-temp-{300}-entries_a'][i]
-#                 indices = As[f'A-wl-{wl}-temp-{300}-indices_a'][i]
-#                 # b = source[i, j].flatten() * (1j * omega)
-#                 # print("this is the shape of the indices", indices.shape, flush=True) # this is the shape of the indices torch.Size([2, 405600])
-#                 # assert len(indices.shape) == 3
-#                 if transpose_A:
-#                     # print("this is the shape of the indices", indices.shape, flush=True) # this is the shape of the indices torch.Size([2, 405600])
-#                     indices = torch.flip(indices, [0]) # considering the batch dimension, the axis set to 1 corresponds to axis = 0 in solver.
-#                     # b = b / 1j / omega
-#                 A_by_e = spmm(
-#                     indices,
-#                     entries,
-#                     m=ez.shape[0],
-#                     n=ez.shape[0],
-#                     matrix=ez[:, None],
-#                 )[:, 0]
-#                 lhs.append(A_by_e)
-#         lhs = torch.stack(lhs, 0)  # [bs*n_wl, h*w]
-#         if not transpose_A:
-#             b = (
-#                 (source * (1j * self.omegas[None, :, None, None])).flatten(0, 1).flatten(1)
-#             )  # [bs*n_wl, h*w]
-#         else:
-#             b = (
-#                 (source).flatten(0, 1).flatten(1)
-#             )
-#         difference = lhs - b
-#         if not self.using_ALM: # when we are not using ALM, we set the difference to zero in the free space region
-#             difference[~free_space_mask] = 0
-#         # b[~free_space_mask] = 0
-#         # fig, ax = plt.subplots(1, 3, figsize=(15, 5))
-#         # diff = ax[0].imshow(torch.abs(difference[0]).reshape(Ez.shape[-2], Ez.shape[-1]).detach().cpu().numpy())
-#         # lhs_plot = ax[1].imshow(torch.abs(lhs[0]).reshape(Ez.shape[-2], Ez.shape[-1]).detach().cpu().numpy())
-#         # b_plot = ax[2].imshow(torch.abs(b[0]).reshape(Ez.shape[-2], Ez.shape[-1]).detach().cpu().numpy())
-#         # plt.colorbar(diff, ax=ax[0])
-#         # plt.colorbar(lhs_plot, ax=ax[1])
-#         # plt.colorbar(b_plot, ax=ax[2])
-#         # plt.savefig("./figs/maxwell_residual_plot.png", dpi = 300)
-#         # plt.close()
-#         difference = torch.view_as_real(difference).double()
-#         b = torch.view_as_real(b).double()
-#         # print("this is the l2 norm of the b ", torch.norm(b, p=2, dim=(-2, -1)), flush=True) # ~e+22
-#         loss = (torch.norm(difference, p=2, dim=(-2, -1)) / (torch.norm(b, p=2, dim=(-2, -1)) + 1e-6)).mean()
-#         return loss
-
 class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
     def __init__(
         self,
@@ -1100,10 +1005,17 @@ class SParamLoss(torch.nn.modules.loss._Loss):
         fields,  # bs, 3, H, W, complex
         ht_m,
         et_m,
-        monitor_slices_x,
-        monitor_slices_y,
+        monitor_slices_x_output,
+        monitor_slices_y_output,
+        monitor_slices_x_input,
+        monitor_slices_y_input,
         target_SParam,
     ):
+        fwd_trans_GT = target_SParam['s_params-port-out_port_1-wl-1.55-type-1-temp-300']
+        ref_GT = target_SParam['s_params-port-refl_port_1-wl-1.55-type-flux_minus_src-temp-300']
+
+        target_s = torch.cat((fwd_trans_GT[:, 0].unsqueeze(1), ref_GT[:, 1].unsqueeze(1)), 1)
+
         # Step 1: Resize all the fields to the target size
         Ez = fields[:, -2:, :, :].permute(0, 2, 3, 1).contiguous()
         Ez = torch.view_as_complex(Ez)  # convert Ez to the required complex format
@@ -1119,11 +1031,16 @@ class SParamLoss(torch.nn.modules.loss._Loss):
         ## Hx, Hy, Ez: [bs, h, w] complex tensor
         # Stpe 2: Calculate the S-parameters
         batch_size = Ez.shape[0]
-        s_params = []
+        output_s_params = []
+        input_s_params = []
         for i in range(batch_size):
-            monitor_slice = Slice(
-                y=monitor_slices_y[i],
-                x=monitor_slices_x[i],
+            monitor_slice_output = Slice(
+                y=monitor_slices_y_output[i],
+                x=monitor_slices_x_output[i],
+            )
+            monitor_slice_input = Slice(
+                y=monitor_slices_y_input[i],
+                x=monitor_slices_x_input[i],
             )
             s_p, s_m = get_eigenmode_coefficients(
                 hx=Hx[i],
@@ -1131,22 +1048,30 @@ class SParamLoss(torch.nn.modules.loss._Loss):
                 ez=Ez[i],
                 ht_m=ht_m[i],
                 et_m=et_m[i],
-                monitor=monitor_slice,
+                monitor=monitor_slice_output,
                 grid_step=1 / 50,
                 direction="y",
                 autograd=True,
                 energy=True,
             )
-            s_params.append(torch.tensor([s_p, s_m], device=Ez.device))
-        s_params = torch.stack(s_params, 0) / 1e-8
-        s_params_diff = s_params - target_SParam
-        # Step 3: Calculate the loss
-        # print("this is the l2 norm of the target_SParam ", torch.norm(target_SParam, p=2, dim=-1), flush=True) ~e-9
-        loss = (
-            torch.norm(s_params_diff, p=2, dim=-1)
-            / (torch.norm(target_SParam, p=2, dim=-1) + 1e-12)
-        ).mean()
-        return loss
+            output_s_params.append(s_p / 1e-8)
+            refl_fom = get_flux(
+                        hx=Hx[i],
+                        hy=Hy[i],
+                        ez=Ez[i],
+                        monitor=monitor_slice_input,
+                        grid_step=1 / 50,
+                        direction="x",
+                    )
+            refl_fom = torch.abs(torch.abs(refl_fom / 1e-8) - 1) # normalize with the input power
+            input_s_params.append(refl_fom)
+        output_s_params = torch.stack(output_s_params, 0).unsqueeze(1)
+        input_s_params = torch.stack(input_s_params, 0).unsqueeze(1)
+        s_params = torch.cat((output_s_params, input_s_params), 1)
+
+        s_params_diff = s_params - target_s
+        normalizeMSE = (s_params_diff.norm(p=2, dim=-1) / (target_s.norm(p=2, dim=-1)).mean() + 1e-9)
+        return normalizeMSE
     
 class DirectCompareSParam(torch.nn.modules.loss._Loss):
     '''

@@ -70,6 +70,7 @@ def task_launcher(args):
             f"--aux_criterion.direct_s_param_loss.weight={direct_s_param_loss}",
 
             f"--log_criterion.maxwell_residual_loss.using_ALM={alm}",
+            f"--log_criterion.direct_s_param_loss.weight={direct_s_param_loss}",
 
             f"--test_criterion.name={'nmse'}",
             f"--test_criterion.weighted_frames={0}",
@@ -123,7 +124,8 @@ def task_launcher(args):
 if __name__ == '__main__':
     ensure_dir(root)
     tasks = [
-        [0.0, "bending", "raw_opt_traj_10", "FactorFNO2d", True, "none", 64, 12, 60, 60, 2, "Exp1_FactorFNO_S_param_only", 1, 50, False, 0.002, "nmse", 0, 0, 0, 0, 0, 1, 0, 1, 2, 1e-4, "none", "none", 4],
+        # [0.0, "bending", "raw_opt_traj_10", "FactorFNO2d", True, "none", 64, 12, 60, 60, 2, "Exp1_FactorFNO_S_param_only", 1, 50, False, 0.002, "nmse", 0, 0, 0, 0, 0, 1, 0, 1, 2, 1e-4, "none", "none", 4],
+        [0.0, "bending", "raw_opt_traj_10", "FactorFNO2d", True, "none", 64, 12, 60, 60, 2, "Exp1_FactorFNO_S_param_only_rerun", 1, 50, False, 0.002, "nmse", 0, 0, 0, 0, 0, 1, 0, 1, 2, 1e-4, "none", "none", 4],
     ]   
 
     with Pool(8) as p:

@@ -6,6 +6,7 @@ from torch_sparse import spmm
 from core.utils import (
     Slice,
     get_flux,
+    print_stat,
 )
 from thirdparty.ceviche.ceviche import fdfd_ez as fdfd_ez_ceviche
 from thirdparty.ceviche.ceviche.constants import *
@@ -17,7 +18,6 @@ from .solver import SparseSolveTorch, sparse_solve_torch
 
 # notataion is similar to that used in: http://www.jpier.org/PIERB/pierb36/11.11092006.pdf
 from .utils import sparse_mm, sparse_mv
-
 __all__ = ["fdfd", "fdfd_ez"]
 
 
@@ -274,7 +274,7 @@ class fdfd_ez(fdfd_ez_ceviche):
         neural_solver=None,
         numerical_solver="solve_direct",
         use_autodiff: bool = False,
-        sym_precond: bool = True,
+        sym_precond: bool = False,
     ):
         self.power = power
         self.A = None
@@ -462,11 +462,25 @@ class fdfd_ez(fdfd_ez_ceviche):
                 J_adj = self.solver.adj_src[key] / 1j / self.omega  # b_adj --> J_adj
                 # print("this is the state of the J_adj")
                 # print_stat(torch.abs(J_adj))
-                ez_adj = self.solver.adj_field[key]
-                hx_adj, hy_adj = self._Ez_to_Hx_Hy(ez_adj) # no need to solve the adjoint field again
+                # ----modified-----
+                # ez_adj_stored = self.solver.adj_field[key]
+                # ez_adj_stored = ez_adj_stored.reshape(self.shape)
+                hx_adj, hy_adj, ez_adj = self.solve(source_z=J_adj, port_name="adj", mode="adj")
                 ez_adj = ez_adj.reshape(self.shape)
                 hx_adj = hx_adj.reshape(self.shape)
                 hy_adj = hy_adj.reshape(self.shape)
+                # print("this is the state of the ez_adj calculated")
+                # print_stat(torch.abs(ez_adj))
+                # print("this is the state of the ez_adj stored")
+                # print_stat(torch.abs(ez_adj_stored))
+                # -----------------
+                # -----before------
+                # ez_adj = self.solver.adj_field[key]
+                # hx_adj, hy_adj = self._Ez_to_Hx_Hy(ez_adj) # no need to solve the adjoint field again
+                # ez_adj = ez_adj.reshape(self.shape)
+                # hx_adj = hx_adj.reshape(self.shape)
+                # hy_adj = hy_adj.reshape(self.shape)
+                # -----------------
                 # hx_adj, hy_adj, ez_adj = self.solve(
                 #     J_adj, "adj", "adj"
                 # )  # J_adj --> Hx_adj, Hy_adj, Ez_adj

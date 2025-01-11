@@ -290,7 +290,7 @@ class FNO2d(ModelBase):
             self.aux_head = None
 
         if self.output_sparam:
-            self.build_sparam_head()
+            self.build_sparam_head(self.kernel_list[-1])
 
     def fourier_feature_mapping(self, x: Tensor) -> Tensor:
         if self.fourier_feature == "none":

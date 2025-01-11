@@ -14,6 +14,7 @@ import h5py
 import numpy as np
 import torch
 import yaml
+import ryaml
 from autograd.numpy.numpy_boxes import ArrayBox
 from ceviche.constants import C_0
 from pyutils.config import Config
@@ -559,6 +560,7 @@ class BaseOptimization(nn.Module):
                             data=normalizer,
                         )  # 2d numpy array
                 if hasattr(self, "current_eps_grad"):
+                    raise NotImplementedError("current_eps_grad is deprecated")
                     if isinstance(self.current_eps_grad, ArrayBox):
                         self.current_eps_grad = self.current_eps_grad._value
                     f.create_dataset(
@@ -588,13 +590,16 @@ class BaseOptimization(nn.Module):
                         f"design_region_mask-{design_region_name}_y_stop",
                         data=design_region_mask.y.stop,
                     )
+                for name, item in self.objective.breakdown.items(): # store the breakdown of the objective
+                    f.create_dataset(f"breakdown_{name}_weight_step-{step}", data=item["weight"])
+                    f.create_dataset(f"breakdown_{name}_value_step-{step}", data=float(item["value"].item()))
 
         # Check if the file exists using os.path.exists
         if os.path.exists(filename_yml):
             # File exists, read its content
             with open(filename_yml, "r") as f:
                 existing_data = (
-                    yaml.safe_load(f) or {}
+                    ryaml.load(f) or {}
                 )  # Load existing data or use an empty dict if file is empty
         else:
             # File does not exist, start with an empty dictionary

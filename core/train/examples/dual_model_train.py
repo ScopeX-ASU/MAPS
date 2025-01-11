@@ -223,7 +223,7 @@ def main():
         grad_scaler=grad_scaler,
         device=device, 
     )
-
+    # trainer.single_batch_check()
     for epoch in range(1, int(configs.run.n_epochs) + 1):
         trainer.train(
             data_loader=train_loader,

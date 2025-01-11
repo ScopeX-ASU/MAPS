@@ -124,7 +124,8 @@ def task_launcher(args):
 if __name__ == '__main__':
     ensure_dir(root)
     tasks = [
-        [0.0, "bending", "raw_opt_traj_10", "NeurOLight2d", True, "none", 64, 12, 60, 60, 2, "Exp1_NeurOLight_S_param_only", 3, 50, False, 0.002, "nmse", 0, 0, 0, 0, 0, 1, 0, 1, 2, 1e-4, "none", "none", 4],
+        # [0.0, "bending", "raw_opt_traj_10", "NeurOLight2d", True, "none", 64, 12, 60, 60, 2, "Exp1_NeurOLight_S_param_only", 3, 50, False, 0.002, "nmse", 0, 0, 0, 0, 0, 1, 0, 1, 2, 1e-4, "none", "none", 4],
+        [0.0, "bending", "raw_opt_traj_10", "NeurOLight2d", True, "none", 64, 12, 60, 60, 2, "Exp1_NeurOLight_S_param_only_rerun", 3, 50, False, 0.002, "nmse", 0, 0, 0, 0, 0, 1, 0, 1, 2, 1e-4, "none", "none", 4],
     ]   
 
     with Pool(8) as p:

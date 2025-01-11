@@ -144,7 +144,8 @@ def task_launcher(args):
 if __name__ == '__main__':
     ensure_dir(root)
     tasks = [
-        [0.0, "bending", "raw_opt_traj_10", "FactorFNO2d", "none", 64, 12, 60, 60, 1, "Exp1_FactorFNO_dual", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 4],
+        # [0.0, "bending", "raw_opt_traj_10", "FactorFNO2d", "none", 64, 12, 60, 60, 1, "Exp1_FactorFNO_dual_rerun", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 4],
+        [0.0, "bending", "raw_random", "FactorFNO2d", "none", 64, 12, 60, 60, 1, "Exp1_FactorFNO_dual_random", 1, 50, False, 0.002, "nmse", 1, 1, 0.0, 0.0, 0.0, 0.0, 1, 2, 1e-4, "none", "none", 4],
     ]   
 
     with Pool(8) as p:

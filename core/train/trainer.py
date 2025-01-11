@@ -17,7 +17,7 @@ from pyutils.torch_train import (
 from pyutils.typing import Criterion, DataLoader, Optimizer, Scheduler
 import torch.fft
 from core.train import builder
-from core.utils import DeterministicCtx
+from core.utils import DeterministicCtx, print_stat
 import wandb
 import datetime
 import random
@@ -25,6 +25,76 @@ from core.utils import plot_fields, cal_total_field_adj_src_from_fwd_field
 from thirdparty.ceviche.ceviche.constants import *
 from core.train.models.utils import from_Ez_to_Hx_Hy
 import math
+
+def data_preprocess(data, device):
+    eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask, ht_m, et_m, monitor_slices, As, data_file_path = data
+    eps_map = eps_map.to(device, non_blocking=True)
+    gradient = gradient.to(device, non_blocking=True)
+    for key, field in field_solutions.items():
+        field = torch.view_as_real(field).permute(0, 1, 4, 2, 3)
+        field = field.flatten(1, 2)
+        field_solutions[key] = field.to(device, non_blocking=True)
+    for key, s_param in s_params.items():
+        s_params[key] = s_param.to(device, non_blocking=True)
+    for key, adj_src in adj_srcs.items():
+        adj_srcs[key] = adj_src.to(device, non_blocking=True)
+    for key, src_profile in src_profiles.items():
+        src_profiles[key] = src_profile.to(device, non_blocking=True)
+    for key, field_adj in fields_adj.items():
+        field_adj = torch.view_as_real(field_adj).permute(0, 1, 4, 2, 3)
+        field_adj = field_adj.flatten(1, 2)
+        fields_adj[key] = field_adj.to(device, non_blocking=True)
+    for key, field_norm in field_normalizer.items():
+        field_normalizer[key] = field_norm.to(device, non_blocking=True)
+    for key, monitor_slice in monitor_slices.items():
+        monitor_slices[key] = monitor_slice.to(device, non_blocking=True)
+    for key, ht in ht_m.items():
+        if key.endswith("-origin_size"):
+            continue
+        else:
+            size = ht_m[key + "-origin_size"]
+            ht_list = []
+            for i in range(size.shape[0]):
+                item_to_add = torch.view_as_real(ht[i]).permute(1, 0).unsqueeze(0)
+                item_to_add = F.interpolate(item_to_add, size=size[i].item(), mode='linear', align_corners=True)
+                item_to_add = item_to_add.squeeze(0).permute(1, 0).contiguous()
+                ht_list.append(torch.view_as_complex(item_to_add).to(device, non_blocking=True))
+            ht_m[key] = ht_list
+    for key, et in et_m.items():
+        if key.endswith("-origin_size"):
+            continue
+        else:
+            size = et_m[key + "-origin_size"]
+            et_list = []
+            for i in range(size.shape[0]):
+                item_to_add = torch.view_as_real(et[i]).permute(1, 0).unsqueeze(0)
+                item_to_add = F.interpolate(item_to_add, size=size[i].item(), mode='linear', align_corners=True)
+                item_to_add = item_to_add.squeeze(0).permute(1, 0).contiguous()
+                et_list.append(torch.view_as_complex(item_to_add).to(device, non_blocking=True))
+            et_m[key] = et_list
+    for key, A in As.items():
+        As[key] = A.to(device, non_blocking=True)
+
+    opt_cfg_file_path = [filepath.split("_opt_step")[0] + ".yml" for filepath in data_file_path]
+
+    return_dict = {
+        "eps_map": eps_map,
+        "adj_srcs": adj_srcs,
+        "gradient": gradient,
+        "field_solutions": field_solutions,
+        "s_params": s_params,
+        "src_profiles": src_profiles,
+        "fields_adj": fields_adj,
+        "field_normalizer": field_normalizer,
+        "design_region_mask": design_region_mask,
+        "ht_m": ht_m,
+        "et_m": et_m,
+        "monitor_slices": monitor_slices,
+        "As": As,
+        "opt_cfg_file_path": opt_cfg_file_path,
+    }
+
+    return return_dict
 
 class PredTrainer(object):
     """Base class for a trainer used to train a field predictor."""
@@ -79,7 +149,7 @@ class PredTrainer(object):
                 iterator = iter(data_loader)
                 data = next(iterator)
 
-            data = self.data_preprocess(data)
+            data = data_preprocess(data, self.device)
             with amp.autocast('cuda', enabled=self.grad_scaler._enabled):
                 if task.lower() != "train":
                     with torch.no_grad():
@@ -145,7 +215,7 @@ class PredTrainer(object):
 
         iterator = iter(data_loader)
         data = next(iterator)
-        data = self.data_preprocess(data)
+        data = data_preprocess(data, self.device)
         local_step = 0
         while local_step < num_batches:
 
@@ -202,76 +272,6 @@ class PredTrainer(object):
             save_model=False,
             print_msg=True,
         )
-
-    def data_preprocess(self, data):
-        eps_map, adj_srcs, gradient, field_solutions, s_params, src_profiles, fields_adj, field_normalizer, design_region_mask, ht_m, et_m, monitor_slices, As, data_file_path = data
-        eps_map = eps_map.to(self.device, non_blocking=True)
-        gradient = gradient.to(self.device, non_blocking=True)
-        for key, field in field_solutions.items():
-            field = torch.view_as_real(field).permute(0, 1, 4, 2, 3)
-            field = field.flatten(1, 2)
-            field_solutions[key] = field.to(self.device, non_blocking=True)
-        for key, s_param in s_params.items():
-            s_params[key] = s_param.to(self.device, non_blocking=True)
-        for key, adj_src in adj_srcs.items():
-            adj_srcs[key] = adj_src.to(self.device, non_blocking=True)
-        for key, src_profile in src_profiles.items():
-            src_profiles[key] = src_profile.to(self.device, non_blocking=True)
-        for key, field_adj in fields_adj.items():
-            field_adj = torch.view_as_real(field_adj).permute(0, 1, 4, 2, 3)
-            field_adj = field_adj.flatten(1, 2)
-            fields_adj[key] = field_adj.to(self.device, non_blocking=True)
-        for key, field_norm in field_normalizer.items():
-            field_normalizer[key] = field_norm.to(self.device, non_blocking=True)
-        for key, monitor_slice in monitor_slices.items():
-            monitor_slices[key] = monitor_slice.to(self.device, non_blocking=True)
-        for key, ht in ht_m.items():
-            if key.endswith("-origin_size"):
-                continue
-            else:
-                size = ht_m[key + "-origin_size"]
-                ht_list = []
-                for i in range(size.shape[0]):
-                    item_to_add = torch.view_as_real(ht[i]).permute(1, 0).unsqueeze(0)
-                    item_to_add = F.interpolate(item_to_add, size=size[i].item(), mode='linear', align_corners=True)
-                    item_to_add = item_to_add.squeeze(0).permute(1, 0).contiguous()
-                    ht_list.append(torch.view_as_complex(item_to_add).to(self.device, non_blocking=True))
-                ht_m[key] = ht_list
-        for key, et in et_m.items():
-            if key.endswith("-origin_size"):
-                continue
-            else:
-                size = et_m[key + "-origin_size"]
-                et_list = []
-                for i in range(size.shape[0]):
-                    item_to_add = torch.view_as_real(et[i]).permute(1, 0).unsqueeze(0)
-                    item_to_add = F.interpolate(item_to_add, size=size[i].item(), mode='linear', align_corners=True)
-                    item_to_add = item_to_add.squeeze(0).permute(1, 0).contiguous()
-                    et_list.append(torch.view_as_complex(item_to_add).to(self.device, non_blocking=True))
-                et_m[key] = et_list
-        for key, A in As.items():
-            As[key] = A.to(self.device, non_blocking=True)
-
-        opt_cfg_file_path = [filepath.split("_opt_step")[0] + ".yml" for filepath in data_file_path]
-
-        return_dict = {
-            "eps_map": eps_map,
-            "adj_srcs": adj_srcs,
-            "gradient": gradient,
-            "field_solutions": field_solutions,
-            "s_params": s_params,
-            "src_profiles": src_profiles,
-            "fields_adj": fields_adj,
-            "field_normalizer": field_normalizer,
-            "design_region_mask": design_region_mask,
-            "ht_m": ht_m,
-            "et_m": et_m,
-            "monitor_slices": monitor_slices,
-            "As": As,
-            "opt_cfg_file_path": opt_cfg_file_path,
-        }
-
-        return return_dict
 
     def set_model_status(self, task):
         if task.lower() == "train":
@@ -393,6 +393,7 @@ class PredTrainer(object):
                 else:
                     raise ValueError("The adjoint field is None, the gradient loss cannot be calculated")
             elif name == "s_param_loss": 
+                # TODO: The S-parameter is only used for the bending case, not supported for complicated cases
                 # make a warning saying that this loss is not ready yet
                 # there is also no need to distinguish the forward and adjoint field here
                 # the s_param_loss is calculated based on the forward field and there is no label for the adjoint field
@@ -432,9 +433,12 @@ class PredTrainer(object):
                         # fields=data['field_solutions'][f"field_solutions-wl-1.55-port-in_port_1-mode-1-temp-{temp}"],
                         ht_m=data['ht_m'][f'ht_m-wl-{wl}-port-{out_port_name}-mode-{mode}'],
                         et_m=data['et_m'][f'et_m-wl-{wl}-port-{out_port_name}-mode-{mode}'],
-                        monitor_slices_x=data['monitor_slices'][f"port_slice-{out_port_name}_x"],
-                        monitor_slices_y=data['monitor_slices'][f"port_slice-{out_port_name}_y"],
-                        target_SParam=data['s_params'][f's_params-port-{out_port_name}-wl-{wl}-type-{mode}-temp-{temp}'],
+                        monitor_slices_x_output=data['monitor_slices'][f"port_slice-{out_port_name}_x"],
+                        monitor_slices_y_output=data['monitor_slices'][f"port_slice-{out_port_name}_y"],
+                        monitor_slices_x_input=data['monitor_slices'][f"port_slice-{in_port_name}_x"],
+                        monitor_slices_y_input=data['monitor_slices'][f"port_slice-{in_port_name}_y"],
+                        # target_SParam=data['s_params'][f's_params-port-{out_port_name}-wl-{wl}-type-{mode}-temp-{temp}'],
+                        target_SParam=data['s_params'],
                     ) for (wl, mode, temp, in_port_name, out_port_name), field in forward_field.items()
                 ]
                 aux_loss = torch.stack(aux_loss).mean()

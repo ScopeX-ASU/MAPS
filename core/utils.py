@@ -351,6 +351,96 @@ def _load_opt_cfgs(opt_cfg_file_path):
         del opt_cfgs["_fusion_func"]
     return opt_cfgs, resolution
 
+def cal_fom_from_fwd_field(
+    Ez,
+    eps,
+    ht_ms,
+    et_ms,
+    monitors,
+    sim,
+    opt_cfg_file_path,
+    wl,
+    mode,
+    temp,
+    in_port_name,
+):
+    Ez = Ez.permute(0, 2, 3, 1).contiguous()
+    Ez = torch.view_as_complex(Ez)
+    total_fom_list = []
+    for i in range(Ez.shape[0]):
+        Ez_i = Ez[i].requires_grad_()
+
+        sim.eps_r = eps[i]
+        Hx_vec, Hy_vec = sim._Ez_to_Hx_Hy(Ez_i.flatten())
+        Hx_i = Hx_vec.reshape(Ez_i.shape)
+        Hy_i = Hy_vec.reshape(Ez_i.shape)
+
+        total_fom = torch.tensor(0.0, device=Ez_i.device)
+
+        opt_cfgs, resolution = _load_opt_cfgs(opt_cfg_file_path[i])
+
+        for obj_name, opt_cfg in opt_cfgs.items():
+            weight = float(opt_cfg["weight"])
+            direction = opt_cfg["direction"]
+            out_slice_name = opt_cfg["out_port_name"]
+            in_mode = opt_cfg["in_mode"]
+            temperture = opt_cfg["temp"]
+            input_port_name = opt_cfg["in_port_name"]
+            # print(f"this is the wl: {wl}, mode: {mode}, temp: {temp}, in_port_name: {in_port_name}")
+            # print(f"this is the corresponding we read from current obj mode: {in_mode}, temp: {temperture}, in_port_name: {input_port_name}")
+            if (
+                weight == 0
+                or in_mode != mode
+                or temp not in temperture
+                or input_port_name != in_port_name
+            ):
+                continue
+            if opt_cfg["type"] == "eigenmode":
+                monitor = Slice(
+                    x=monitors[f"port_slice-{out_slice_name}_x"][i],
+                    y=monitors[f"port_slice-{out_slice_name}_y"][i],
+                )
+                fom, _ = get_eigenmode_coefficients(
+                    hx=Hx_i,
+                    hy=Hy_i,
+                    ez=Ez_i,
+                    ht_m=ht_ms[f"ht_m-wl-{wl}-port-{out_slice_name}-mode-{mode}"][
+                        i
+                    ],
+                    et_m=et_ms[f"et_m-wl-{wl}-port-{out_slice_name}-mode-{mode}"][
+                        i
+                    ],
+                    monitor=monitor,
+                    grid_step=1 / resolution,
+                    direction=direction,
+                    energy=True,
+                )
+                fom = weight * fom / 1e-8  # normalize with the input power
+            elif "flux" in opt_cfg["type"]:  # flux or flux_minus_src
+                monitor = Slice(
+                    x=monitors[f"port_slice-{out_slice_name}_x"][i],
+                    y=monitors[f"port_slice-{out_slice_name}_y"][i],
+                )
+                fom = get_flux(
+                    hx=Hx_i,
+                    hy=Hy_i,
+                    ez=Ez_i,
+                    monitor=monitor,
+                    grid_step=1 / resolution,
+                    direction=direction,
+                )
+                if "minus_src" in opt_cfg["type"]:
+                    fom = torch.abs(torch.abs(fom / 1e-8) - 1)
+                else:
+                    fom = torch.abs(fom / 1e-8)
+                fom = weight * fom
+            else:
+                raise ValueError(f"Unknown optimization type: {opt_cfg['type']}")
+            total_fom = total_fom + fom
+        total_fom_list.append(total_fom)
+    total_fom = torch.stack(total_fom_list, dim=0)
+    return total_fom
+
 
 def cal_total_field_adj_src_from_fwd_field(
     Ez,
@@ -370,7 +460,7 @@ def cal_total_field_adj_src_from_fwd_field(
     out_port_name,
 ) -> Tensor:
     # from core.fdfd.fdfd import fdfd_ez  # this is to avoid circular import
-    Ez = Ez.detach()
+    # Ez = Ez.detach()
     if not return_adj_src:
         Hx, Hy = from_Ez_to_Hx_Hy_func(
             sim,
@@ -465,38 +555,6 @@ def cal_total_field_adj_src_from_fwd_field(
                 total_fom = total_fom + fom
             total_fom = total_fom * (-1)
             gradient = torch.autograd.grad(total_fom, Ez_i, create_graph=True)[0]
-            gradient_list.append(gradient)
-        Hx = torch.stack(Hx_list, dim=0)
-        Hy = torch.stack(Hy_list, dim=0)
-        total_field = torch.cat((Hx, Hy, Ez_copy), dim=1)
-        total_field = pml_mask.unsqueeze(0).unsqueeze(0) * total_field
-        adj_src = torch.conj(torch.stack(gradient_list, dim=0))
-        return total_field, adj_src
-        for i in range(Ez.shape[0]):
-            monitor_slice_out = Slice(
-                y=monitor_out_y[i],
-                x=torch.arange(
-                    monitor_out_x[i][0],
-                    monitor_out_x[i][1],
-                ).to(monitor_out_y[i].device),
-            )
-            monitor_slice_refl = Slice(
-                x=monitor_refl_x[i],
-                y=torch.arange(
-                    monitor_refl_y[i][0],
-                    monitor_refl_y[i][1],
-                ).to(monitor_refl_x[i].device),
-            )
-            fom = cal_fom_from_fields(
-                Ez_i,
-                Hx_i,
-                Hy_i,
-                ht_m[i],
-                et_m[i],
-                monitor_slice_out,
-                monitor_slice_refl,
-            )
-            gradient = torch.autograd.grad(fom, Ez_i, create_graph=True)[0]
             gradient_list.append(gradient)
         Hx = torch.stack(Hx_list, dim=0)
         Hy = torch.stack(Hy_list, dim=0)

@@ -25,10 +25,12 @@ def worker_process(queue):
 
 if __name__ == "__main__":
     num_gpus = 4  # Number of GPUs
-    # taskid_begin, taskid_end = (250, 260)
-    # taskid_begin, taskid_end = (8, 16)
-    # taskid_begin, taskid_end = (16, 24)
-    taskid_begin, taskid_end = (0, 1)
+    # taskid_begin, taskid_end = (0, 615)
+    # taskid_begin, taskid_end = (615, 1230)
+    # taskid_begin, taskid_end = (10000, 10050)
+    # taskid_begin, taskid_end = (10025, 10050)
+    taskid_begin, taskid_end = (20, 40)
+    # taskid_begin, taskid_end = (50, 100)
 
     # Manager's queue allows inter-process communication for tasks
     manager = Manager()

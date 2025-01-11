@@ -1,0 +1,156 @@
+dataset:
+  name: fdfd
+  root: ./data
+  test_ratio: 0.9
+  train_valid_split_ratio: [0.9, 0.1]
+  num_workers: 4
+  shuffle: False
+  device_type: bending
+  data_dir: raw_opt_traj_10
+  # data_dir: raw_test
+  processed_dir: bending
+  augment:
+    prob: 0.0
+
+criterion:
+  weight: 1.0
+  name: nmse
+  min_distance: 0.12
+
+aux_criterion:
+  aspect_ratio_loss:
+    aspect_ratio: 0.1
+    weight: 0
+  curl_loss:
+    weight: 0.0
+  tv_loss:
+    weight: 0.0
+    norm: False
+  maxwell_residual_loss:
+    weight: 0.0
+    # wl_cen: 1.55
+    # wl_width: 0
+    # n_wl: 1
+  grad_loss:
+    weight: 0.0
+  s_param_loss:
+    weight: 0.0
+  err_corr_Ez:
+    weight: 0.0
+  err_corr_Hx:
+    weight: 0.0
+  err_corr_Hy:
+    weight: 0.0
+  Hx_loss:
+    weight: 0.0
+  Hy_loss:
+    weight: 0.0
+
+log_criterion:
+  maxwell_residual_loss:
+    weight: 0
+    # wl_cen: 1.55
+    # wl_width: 0
+    # n_wl: 1
+  direct_s_param_loss:
+    weight: 1
+  grad_loss:
+    weight: 0
+  s_param_loss:
+    weight: 0
+  err_corr_Ez:
+    weight: 0
+  err_corr_Hx:
+    weight: 0
+  err_corr_Hy:
+    weight: 0
+  Hx_loss:
+    weight: 1
+  Hy_loss:
+    weight: 1
+
+test_criterion:
+  name: mse
+
+optimizer:
+  name: adam
+  lr: 0.1
+  weight_decay: 0.000
+  line_search_fn: None
+
+lr_scheduler:
+  name: cosine
+  lr_gamma: 0.99
+  lr_min: 1e-3
+
+sharp_scheduler:
+  name: sharpness
+  init_sharp: 1
+  final_sharp: 20
+  sharp_threshold: 0.05
+
+res_scheduler:
+  name: resolution
+  init_res: 20
+  final_res: 20
+  test_res: 20
+
+run:
+  experiment: fno2d
+  n_epochs: 50
+  use_cuda: 1
+  gpu_id: 0
+  deterministic: 1
+  random_state: 59
+  log_interval: 40
+  fp16: False
+  wandb:
+    project: MAPS
+    entity: scopex
+    name: local_search
+  batch_size: 4
+
+quantize:
+  weight_bit: 32
+  input_bit: 32
+
+checkpoint:
+  save_best_model_k: 3
+  checkpoint_dir: "metacoupler/local_search/train_local_search"
+  model_comment: ""
+  resume: 1
+  restore_checkpoint: "./checkpoint/fdfd/neurolight/train/dual_predictor_model-NeurOLight2d_dev-bending_field-fwd_id-2_dcrp-Exp1_NeurOLight_S_param_only_err-5.4029_epoch-50.pt"
+  no_linear: 0
+
+model_fwd:
+  type: NeurOLight2d
+  train_field: fwd
+  temp: [300]
+  wl: [1.55]
+  mode: [1]
+  in_out_port_name: [['in_port_1', 'out_port_1']]
+  dim: 64
+  in_channels: 3
+  out_channels: 2
+  img_size: 256
+  hidden_list: [56]
+  mode_list: [(60, 60), (60, 60), (60, 60), (60, 60), (60, 60), (60, 60), (60, 60), (60, 60), (60, 60), (60, 60), (60, 60), (60, 60)]
+  mapping_size: 64
+  fourier_feature: none
+  kernel_list: [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]
+  kernel_size_list: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+  padding_list: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+  output_sparam: True
+
+debug:
+  verbose: 1
+
+plot:
+  train: True
+  valid: True
+  test: True
+  interval: 1
+  phase_intensity_profile_interval: 5
+  dir_name: local_search
+  output_video: False
+  solve_cw: False

@@ -53,7 +53,7 @@ def bending_opt(device_id, operation_device, perturb_probs=[0.1, 0.3, 0.5]):
     #     )
     # )
 
-    dump_data_path = f"./data/fdfd/bending/raw_test"
+    dump_data_path = f"./data/fdfd/bending/raw_opt_traj_10_ptb"
     sim_cfg = DefaultSimulationConfig()
     target_img_size = 256
     resolution = 50
@@ -74,7 +74,7 @@ def bending_opt(device_id, operation_device, perturb_probs=[0.1, 0.3, 0.5]):
             solver="ceviche_torch",
             border_width=[0, port_len, port_len, 0],
             resolution=resolution,
-            plot_root=f"./data/fdfd/bending/plot_test/bending_{device_id}",
+            plot_root=f"./data/fdfd/bending/plot_opt_traj_10_ptb/bending_{device_id}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -100,7 +100,7 @@ def bending_opt(device_id, operation_device, perturb_probs=[0.1, 0.3, 0.5]):
     ).to(operation_device)
     print(opt)
 
-    optimizer = torch.optim.Adam(opt.parameters(), lr=0.02)
+    optimizer = torch.optim.Adam(opt.parameters(), lr=0.01)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=70, eta_min=0.0002
     )
@@ -191,6 +191,7 @@ def bending_opt(device_id, operation_device, perturb_probs=[0.1, 0.3, 0.5]):
                 last_design_region_dict, current_design_region_dict
             )
             if cosine_similarity < 0.996 or step == 9:
+            # if cosine_similarity < 1: # sample each step
                 opt.dump_data(
                     filename_h5=filename_h5, filename_yml=filename_yml, step=step
                 )
@@ -210,10 +211,10 @@ def bending_opt(device_id, operation_device, perturb_probs=[0.1, 0.3, 0.5]):
         # print_stat(list(opt.parameters())[0], f"step {step}: grad: ")
         optimizer.step()
         scheduler.step()
-        # if dumped_data:
-        #     for i, prob in enumerate(perturb_probs):
-        #         perturb_and_dump(step, flip_prob=prob, i=i)
-        #     dumped_data = False
+        if dumped_data:
+            for i, prob in enumerate(perturb_probs):
+                perturb_and_dump(step, flip_prob=prob, i=i)
+            dumped_data = False
 
 
 def main():

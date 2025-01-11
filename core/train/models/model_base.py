@@ -339,9 +339,10 @@ class ModelBase(nn.Module):
                 if dist > 0:
                     self.pml_mask[i, j] = torch.exp(-damping_factor * dist)
 
-    def build_sparam_head(self):
+    def build_sparam_head(self, in_channels):
         self.sparam_head = ProgressiveConvDecoder(
             self.img_size,
+            # in_channels,
             2,
             2,
             dropout_rate=0.0,

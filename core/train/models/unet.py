@@ -196,7 +196,7 @@ class UNet(ModelBase):
         self.conv_last = nn.Conv2d(dim, self.out_channels, 1)
 
         if self.output_sparam:
-            self.build_sparam_head()
+            self.build_sparam_head(dim)
 
     def set_trainable_permittivity(self, mode: bool = True) -> None:
         self.trainable_permittivity = mode

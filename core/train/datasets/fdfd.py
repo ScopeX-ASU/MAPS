@@ -11,6 +11,7 @@ import numpy as np
 import torch
 import glob
 import yaml
+import ryaml
 import h5py
 from torch import Tensor
 from torch.nn import functional as F
@@ -82,9 +83,9 @@ class FDFD(VisionDataset):
         processed_dir = os.path.join(self.root, self.processed_dir)
         # no matter the preprocessed file exists or not, we will always process the data, won't take too much time
         processed_training_file = os.path.join(
-            processed_dir, f"{self.train_filename}.yml"
+            processed_dir, self.data_dir, f"{self.train_filename}.yml"
         )
-        processed_test_file = os.path.join(processed_dir, f"{self.test_filename}.yml")
+        processed_test_file = os.path.join(processed_dir, self.data_dir, f"{self.test_filename}.yml")
         if (
             os.path.exists(processed_training_file)
             and os.path.exists(processed_test_file)
@@ -184,10 +185,10 @@ class FDFD(VisionDataset):
         filename = (
             f"{self.train_filename}.yml" if train else f"{self.test_filename}.yml"
         )
-        path_to_file = os.path.join(self.root, self.processed_dir, filename)
+        path_to_file = os.path.join(self.root, self.processed_dir, self.data_dir, filename)
         print(f"Loading data from {path_to_file}")
         with open(path_to_file, "r") as f:
-            data = yaml.safe_load(f)
+            data = ryaml.load(f)
         return data
 
     def download(self) -> None:
