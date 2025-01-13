@@ -172,3 +172,10 @@ cython_debug/
 *.png
 data/fdfd/mdm/raw/*.yml
 unitest/*.mp4
+
+# Ignore all .yml files
+*.yml
+
+# Exclude the ./config directory and its subdirectories
+!config/
+!config/**/*.yml

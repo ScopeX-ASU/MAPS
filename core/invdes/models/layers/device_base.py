@@ -1018,7 +1018,7 @@ class N_Ports(BaseDevice):
         simulation = self.create_simulation(omega, dl, eps, self.NPML, solver=solver)
         if hasattr(simulation, "solver"):  # which means that it is a torch simulation
             with torch.no_grad():
-                Hx, Hy, Ez = simulation.solve(source, port_name="Norm", mode="Norm")
+                Hx, Hy, Ez = simulation.solve(source, slice_name="Norm", mode="Norm", temp="Norm")
         else:
             Hx, Hy, Ez = simulation.solve(source)
 
@@ -1064,7 +1064,7 @@ class N_Ports(BaseDevice):
         self,
         source_modes: Tuple[int] = (1,),
         input_port_name: str = "in_port_1",
-        input_slice_name: str = "in_port_1",
+        input_slice_name: str = "in_slice_1",
         wl_cen=1.55,
         wl_width=0,
         n_wl=1,
@@ -1072,6 +1072,7 @@ class N_Ports(BaseDevice):
         power: float = 1e-8,
         source_type: str = "mode",
         plot=False,
+        require_sim: bool = True,
     ):
         assert source_type in {
             "mode",
@@ -1181,6 +1182,7 @@ class N_Ports(BaseDevice):
             k: [e * input_scale[k] for e in v[:-1]] + [power]
             for k, v in source_profiles.items()
         }
+        source_profiles["require_sim"] = require_sim
         # input_SCALE, fields, source_profiles = _norm_run(power_scales=input_scale)
 
         if plot:

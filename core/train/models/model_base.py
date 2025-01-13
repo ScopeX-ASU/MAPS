@@ -298,16 +298,18 @@ class ModelBase(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def build_sim(self):
-        omega = 2 * np.pi * C_0 / (self.wl * 1e-6)
-        self.sim = fdfd_ez(
-            omega=omega,
-            dL=1 / self.img_res * 1e-6,
-            eps_r=torch.randn((self.img_size, self.img_size), device=self.device),  # random permittivity
-            npml=(
-                round(self.pml_width * self.img_res),
-                round(self.pml_width * self.img_res),
-            ),
-        )
+        self.sim = {}
+        for wl in self.wl:
+            omega = 2 * np.pi * C_0 / (wl * 1e-6)
+            self.sim[wl] = fdfd_ez(
+                omega=omega,
+                dL=1 / self.img_res * 1e-6,
+                eps_r=torch.randn((self.img_size, self.img_size), device=self.device),  # random permittivity
+                npml=(
+                    round(self.pml_width * self.img_res),
+                    round(self.pml_width * self.img_res),
+                ),
+            )
 
     def build_pml_mask(self):
         pml_thickness = self.pml_width * self.img_res

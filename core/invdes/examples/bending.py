@@ -71,8 +71,8 @@ if __name__ == "__main__":
         plot=True,
         plot_filename=f"bending_{'init_try_test'}",
         objs=["fwd_trans"],
-        field_keys=[("in_port_1", 1.55, 1, 300)],
-        in_port_names=["in_port_1"],
-        exclude_port_names=[],
+        field_keys=[("in_slice_1", 1.55, 1, 300)],
+        in_slice_names=["in_slice_1"],
+        exclude_slice_names=[],
         dump_gds=True,
     )

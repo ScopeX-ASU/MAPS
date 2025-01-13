@@ -24,98 +24,106 @@ from core.train.models.utils import from_Ez_to_Hx_Hy
 from core.train.trainer import PredTrainer
 import copy
 import matplotlib.pyplot as plt
+import numpy as np
+from thirdparty.ceviche.ceviche.constants import C_0
 
 class dual_predictor(nn.Module):
     def __init__(self, model_fwd, model_adj):
         super(dual_predictor, self).__init__()
-        self.model_fwd = nn.ModuleDict({
-            f"{str(wl).replace('.', 'p')}-{mode}-{temp}-{in_port_name}-{out_port_name}": model
-            for (wl, mode, temp, in_port_name, out_port_name), model in model_fwd.items()
-        }) # this is now a dictionary of models [wl, mode, temp, in_port_name, out_port_name] -> model # most of the time it should contain at most 2 models
-        self.model_adj = nn.ModuleDict({
-            f"{str(wl).replace('.', 'p')}-{mode}-{temp}-{in_port_name}-{out_port_name}": model
-            for (wl, mode, temp, in_port_name, out_port_name), model in model_adj.items()
-        }) # this is now a dictionary of models [wl, mode, temp, in_port_name, out_port_name] -> model # most of the time it should contain at most 2 models
+        # self.model_fwd = nn.ModuleDict({
+        #     f"{str(wl).replace('.', 'p')}-{mode}-{temp}-{in_port_name}-{out_port_name}": model
+        #     for (wl, mode, temp, in_port_name, out_port_name), model in model_fwd.items()
+        # }) # this is now a dictionary of models [wl, mode, temp, in_port_name, out_port_name] -> model # most of the time it should contain at most 2 models
+        # self.model_adj = nn.ModuleDict({
+        #     f"{str(wl).replace('.', 'p')}-{mode}-{temp}-{in_port_name}-{out_port_name}": model
+        #     for (wl, mode, temp, in_port_name, out_port_name), model in model_adj.items()
+        # }) # this is now a dictionary of models [wl, mode, temp, in_port_name, out_port_name] -> model # most of the time it should contain at most 2 model
+        self.model_fwd = model_fwd
+        self.model_adj = model_adj
 
     def forward(
         self, 
         data
     ):
+    # return_dict = {
+    #     "eps_map": eps_map,
+    #     "adj_src": adj_src,
+    #     "gradient": gradient,
+    #     "fwd_field": fwd_field,
+    #     "s_params": s_params,
+    #     "src_profile": src_profile,
+    #     "adj_field": adj_field,
+    #     "field_normalizer": field_adj_normalizer,
+    #     "design_region_mask": design_region_mask,
+    #     "ht_m": ht_m,
+    #     "et_m": et_m,
+    #     "monitor_slices": monitor_slices,
+    #     "A": A,
+    #     "opt_cfg_file_path": opt_cfg_file_path,
+    #     "input_slice": input_slice,
+    #     "wavelength": wavelength,
+    #     "mode": mode,
+    #     "temp": temp,
+    # }
         eps = data["eps_map"]
         src = {}
-        adjoint_source = {}
-        x_fwd = {}
-        forward_field = {}
-        adjoint_field = {}
-        # ['eps_map', 'adj_srcs', 'gradient', 'field_solutions', 's_params', 'src_profiles', 'fields_adj', 'field_normalizer', 'design_region_mask', 'ht_m', 'et_m', 'monitor_slices', 'As', 'opt_cfg_file_path']
-        # this is the key of data htms:  
-        # [
-        #     'ht_m-wl-1.55-port-in_port_1-mode-1', 
-        #     'ht_m-wl-1.55-port-in_port_1-mode-1-origin_size', 
-        #     'ht_m-wl-1.55-port-in_port_1-mode-2', 
-        #     'ht_m-wl-1.55-port-in_port_1-mode-2-origin_size', 
-        #     'ht_m-wl-1.55-port-out_port_1-mode-1', 
-        #     'ht_m-wl-1.55-port-out_port_1-mode-1-origin_size', 
-        #     'ht_m-wl-1.55-port-out_port_2-mode-2', 
-        #     'ht_m-wl-1.55-port-out_port_2-mode-2-origin_size', 
-        #     'ht_m-wl-1.55-port-refl_port_1-mode-1', 
-        #     'ht_m-wl-1.55-port-refl_port_1-mode-1-origin_size', 
-        #     'ht_m-wl-1.55-port-refl_port_1-mode-2', 
-        #     'ht_m-wl-1.55-port-refl_port_1-mode-2-origin_size'
-        # ]
-        # this is the keys in adjoint field:  
-        # ['fields_adj-wl-1.55-port-in_port_1-mode-1', 'fields_adj-wl-1.55-port-in_port_1-mode-2']
-        # keys in field solutions:
-        # ['field_solutions-wl-1.55-port-in_port_1-mode-1-temp-300', 'field_solutions-wl-1.55-port-out_port_1-mode-1-temp-300', 'field_solutions-wl-1.55-port-refl_port_1-mode-1-temp-300']
-        for key, model in self.model_fwd.items():
-            wl, mode, temp, in_port_name, out_port_name = key.split("-")
-            wl, mode, temp = float(wl.replace('p', '.')), int(mode), eval(temp)
-            src[(wl, mode, in_port_name)] = data["src_profiles"][f"source_profile-wl-{wl}-port-{in_port_name}-mode-{mode}"]
-            x_fwd[(wl, mode, temp, in_port_name, out_port_name)] = model(eps, src[(wl, mode, in_port_name)])
-            with torch.enable_grad():
-                forward_field[(wl, mode, temp, in_port_name, out_port_name)], adj_source = cal_total_field_adj_src_from_fwd_field(
-                    Ez=x_fwd[(wl, mode, temp, in_port_name, out_port_name)],
-                    # Ez=data["field_solutions"]["field_solutions-wl-1.55-port-in_port_1-mode-1-temp-300"][:, -2:, ...],
-                    eps=eps,
-                    ht_ms=data["ht_m"], # this two only used for adjoint field calculation, we don't need it here in forward pass
-                    et_ms=data["et_m"],
-                    monitors=data["monitor_slices"],
-                    pml_mask=model.pml_mask,
-                    from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
-                    return_adj_src=True,
-                    sim=model.sim,
-                    opt_cfg_file_path=data['opt_cfg_file_path'],
-                    wl=wl,
-                    mode=mode,
-                    temp=temp,
-                    in_port_name=in_port_name,
-                    out_port_name=out_port_name,
-                )
-            # the adjoint source calculated with the one that stored in the dataset have a scale factor difference since we want to normalize the adjoint source power to be 1e-8
-            adjoint_source[(wl, mode, temp, in_port_name, out_port_name)] = adj_source = adj_source.detach()
-            adj_model = self.model_adj[key]
-            x_adj = adj_model(eps, adj_source)
-            adjoint_field[(wl, mode, temp, in_port_name, out_port_name)], _ = cal_total_field_adj_src_from_fwd_field(
-                                            Ez=x_adj,
-                                            eps=eps,
-                                            ht_ms=data['ht_m'],
-                                            et_ms=data['et_m'],
-                                            monitors=data['monitor_slices'],
-                                            pml_mask=adj_model.pml_mask,
-                                            from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
-                                            return_adj_src=False,
-                                            sim=adj_model.sim,
-                                            opt_cfg_file_path=data['opt_cfg_file_path'],
-                                            wl=wl,
-                                            mode=mode,
-                                            temp=temp,
-                                            in_port_name=in_port_name,
-                                            out_port_name=out_port_name,
-                                        )
+        wl = data["wavelength"]
+        mode = data["mode"]
+        temp = data["temp"]
+        in_slice_name = data["input_slice"]
+        src = data["src_profile"]
+        fwd_Ez_field = self.model_fwd(eps, src)
+        with torch.enable_grad():
+            fwd_field, adj_source = cal_total_field_adj_src_from_fwd_field(
+                # Ez=fwd_Ez_field,
+                Ez=data["fwd_field"][:, -2:, ...],
+                eps=eps,
+                ht_ms=data["ht_m"], # this two only used for adjoint field calculation, we don't need it here in forward pass
+                et_ms=data["et_m"],
+                monitors=data["monitor_slices"],
+                pml_mask=self.model_fwd.pml_mask,
+                return_adj_src=True,
+                sim=self.model_fwd.sim,
+                opt_cfg_file_path=data['opt_cfg_file_path'],
+                wl=wl,
+                mode=mode,
+                temp=temp,
+                src_in_slice_name=in_slice_name,
+            )
+        # the adjoint source calculated with the one that stored in the dataset have a scale factor difference since we want to normalize the adjoint source power to be 1e-8
+        adj_source = adj_source.detach()
+        # checked !
+        # adj_source = adj_source.to(torch.complex128)
+        # omega = 2 * np.pi * C_0 / (wl * 1e-6)
+        # adj_source = adj_source / 1j / omega.unsqueeze(-1).unsqueeze(-1).to(adj_source.device) * data["field_normalizer"].unsqueeze(-1)
+        # adj_source_gt = data["adj_src"].to(torch.complex128)
+        # error = adj_source - adj_source_gt
+        # error_norm = torch.norm(error[3].abs(), dim=(-1, -2))
+        # adj_source_gt_norm = torch.norm(adj_source_gt[3].abs(), dim=(-1, -2)) + 1e-6
+        # normalized_componentwise = error_norm / adj_source_gt_norm
+        # normalized_L2norm = normalized_componentwise.sum()
+        # print(f"normalized L2 norm of adjoint source: {normalized_L2norm.item()}")
+        # quit()
+        adj_Ez_field = self.model_adj(eps, adj_source)
+        adj_field, _ = cal_total_field_adj_src_from_fwd_field(
+                                        Ez=adj_Ez_field,
+                                        eps=eps,
+                                        ht_ms=data['ht_m'],
+                                        et_ms=data['et_m'],
+                                        monitors=data['monitor_slices'],
+                                        pml_mask=self.model_adj.pml_mask,
+                                        return_adj_src=False,
+                                        sim=self.model_adj.sim,
+                                        opt_cfg_file_path=data['opt_cfg_file_path'],
+                                        wl=wl,
+                                        mode=mode,
+                                        temp=temp,
+                                        src_in_slice_name=in_slice_name,
+                                    )
         return {
-            "forward_field": forward_field,
-            "adjoint_field": adjoint_field,
-            "adjoint_source": adjoint_source,
+            "forward_field": fwd_field,
+            "adjoint_field": adj_field,
+            "adjoint_source": adj_source,
         }
 
 def main():
@@ -136,30 +144,30 @@ def main():
     print("this is the config: \n", configs, flush=True)
     if int(configs.run.deterministic) == True:
         set_torch_deterministic(int(configs.run.random_state))
-    model_fwd = {}
-    assert len(configs.model_fwd.temp) == len(configs.model_fwd.mode) == len(configs.model_fwd.wl) == len(configs.model_fwd.in_out_port_name), "temp, mode, wl, in_out_port_name should have the same length"
-    for i in range(len(configs.model_fwd.temp)):
-        model_cfg = copy.deepcopy(configs.model_fwd)
-        model_cfg.temp = temp = model_cfg.temp[i]
-        model_cfg.mode = mode = model_cfg.mode[i]
-        model_cfg.wl = wl = model_cfg.wl[i]
-        model_cfg.in_port_name = in_port_name = model_cfg.in_out_port_name[i][0]
-        model_cfg.out_port_name = out_port_name = model_cfg.in_out_port_name[i][1]
-        model_fwd[(wl, mode, temp, in_port_name, out_port_name)] = builder.make_model(device=device, **model_cfg)
-    # model_fwd = builder.make_model(device=device, **configs.model_fwd)
+    # model_fwd = {}
+    # assert len(configs.model_fwd.temp) == len(configs.model_fwd.mode) == len(configs.model_fwd.wl) == len(configs.model_fwd.in_out_port_name), "temp, mode, wl, in_out_port_name should have the same length"
+    # for i in range(len(configs.model_fwd.temp)):
+    #     model_cfg = copy.deepcopy(configs.model_fwd)
+    #     model_cfg.temp = temp = model_cfg.temp[i]
+    #     model_cfg.mode = mode = model_cfg.mode[i]
+    #     model_cfg.wl = wl = model_cfg.wl[i]
+    #     model_cfg.in_port_name = in_port_name = model_cfg.in_out_port_name[i][0]
+    #     model_cfg.out_port_name = out_port_name = model_cfg.in_out_port_name[i][1]
+    #     model_fwd[(wl, mode, temp, in_port_name, out_port_name)] = builder.make_model(device=device, **model_cfg)
+    model_fwd = builder.make_model(device=device, **configs.model_fwd)
     print("this is the model: \n", model_fwd, flush=True)
     
-    model_adj = {}
-    assert len(configs.model_adj.temp) == len(configs.model_adj.mode) == len(configs.model_adj.wl) == len(configs.model_adj.in_out_port_name), "temp, mode, wl, in_out_port_name should have the same length"
-    for i in range(len(configs.model_adj.temp)):
-        model_cfg = copy.deepcopy(configs.model_adj)
-        model_cfg.temp = temp = model_cfg.temp[i]
-        model_cfg.mode = mode = model_cfg.mode[i]
-        model_cfg.wl = wl = model_cfg.wl[i]
-        model_cfg.in_port_name = in_port_name = model_cfg.in_out_port_name[i][0]
-        model_cfg.out_port_name = out_port_name = model_cfg.in_out_port_name[i][1]
-        model_adj[(wl, mode, temp, in_port_name, out_port_name)] = builder.make_model(device=device, **model_cfg)
-    # model_adj = builder.make_model(device=device, **configs.model_adj)
+    # model_adj = {}
+    # assert len(configs.model_adj.temp) == len(configs.model_adj.mode) == len(configs.model_adj.wl) == len(configs.model_adj.in_out_port_name), "temp, mode, wl, in_out_port_name should have the same length"
+    # for i in range(len(configs.model_adj.temp)):
+    #     model_cfg = copy.deepcopy(configs.model_adj)
+    #     model_cfg.temp = temp = model_cfg.temp[i]
+    #     model_cfg.mode = mode = model_cfg.mode[i]
+    #     model_cfg.wl = wl = model_cfg.wl[i]
+    #     model_cfg.in_port_name = in_port_name = model_cfg.in_out_port_name[i][0]
+    #     model_cfg.out_port_name = out_port_name = model_cfg.in_out_port_name[i][1]
+    #     model_adj[(wl, mode, temp, in_port_name, out_port_name)] = builder.make_model(device=device, **model_cfg)
+    model_adj = builder.make_model(device=device, **configs.model_adj)
     print("this is the model: \n", model_adj, flush=True)
     # model_adj = builder.make_model(
     #     device=device,

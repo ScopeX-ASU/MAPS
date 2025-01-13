@@ -86,17 +86,17 @@ class InvDesign:
         plot_filename=None,
         objs=[],
         field_keys=[],
-        in_port_names=[],
-        exclude_port_names=[],
+        in_slice_names=[],
+        exclude_slice_names=[],
         dump_gds=False,
     ):
         if plot:
             assert plot_filename is not None, "plot_filename must be provided"
             assert len(objs) > 0, "objs must be provided"
             assert len(field_keys) > 0, "field_keys must be provided"
-            assert len(in_port_names) > 0, "in_port_names must be provided"
-            if len(exclude_port_names) == 0:
-                exclude_port_names = [[]] * len(objs)
+            assert len(in_slice_names) > 0, "in_port_names must be provided"
+            if len(exclude_slice_names) == 0:
+                exclude_slice_names = [[]] * len(objs)
         for i in range(self._cfg.run.n_epochs):
             # train the model
             self.optimizer.zero_grad()
@@ -128,9 +128,9 @@ class InvDesign:
                         field_key=field_keys[j],
                         field_component="Ez",
                         # in_port_name="in_port_1",
-                        in_port_name=in_port_names[j],
+                        in_slice_name=in_slice_names[j],
                         # exclude_port_names=["refl_port_2"],
-                        exclude_port_names=exclude_port_names[j],
+                        exclude_slice_names=exclude_slice_names[j],
                     )
         if dump_gds:
             if plot_filename.endswith(".png"):

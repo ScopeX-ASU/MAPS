@@ -418,6 +418,15 @@ class fdfd_ez(fdfd_ez_ceviche):
         Hy_vec = self._Ez_to_Hy(Ez_vec)
         return Hx_vec, Hy_vec
 
+    def read_gradients(self):
+        with torch.no_grad():
+            grad_epsilon = {}
+            for (slice_name, mode, temp), grad_eps_diag in self.solver.gradient.items():
+                grad_eps = grad_eps_diag * (-EPSILON_0 * self.omega**2)
+                grad_epsilon[(slice_name, mode, temp)] = grad_eps.reshape(self.shape)
+
+        return grad_epsilon
+
     def norm_adj_power(self):
         Nx = self.eps_r.shape[0]
         Ny = self.eps_r.shape[1]
@@ -465,7 +474,7 @@ class fdfd_ez(fdfd_ez_ceviche):
                 # ----modified-----
                 # ez_adj_stored = self.solver.adj_field[key]
                 # ez_adj_stored = ez_adj_stored.reshape(self.shape)
-                hx_adj, hy_adj, ez_adj = self.solve(source_z=J_adj, port_name="adj", mode="adj")
+                hx_adj, hy_adj, ez_adj = self.solve(source_z=J_adj, slice_name="adj", mode="adj", temp="adj")
                 ez_adj = ez_adj.reshape(self.shape)
                 hx_adj = hx_adj.reshape(self.shape)
                 hy_adj = hy_adj.reshape(self.shape)
@@ -531,10 +540,11 @@ class fdfd_ez(fdfd_ez_ceviche):
         return ez_adj_dict, hx_adj_dict, hy_adj_dict, normalization_factor
 
     def _solve_fn(
-        self, eps_vec, entries_a, indices_a, Jz_vec, port_name=None, mode=None
+        self, eps_vec, entries_a, indices_a, Jz_vec, slice_name=None, mode=None, temp=None
     ):
-        assert port_name is not None, "port_name must be provided"
+        assert slice_name is not None, "slice_name must be provided"
         assert mode is not None, "mode must be provided"
+        assert temp is not None, "temp must be provided"
         b_vec = 1j * self.omega * Jz_vec
         eps_diag = -EPSILON_0 * self.omega**2 * eps_vec
         # Ez_vec = sparse_solve_torch(entries_a, indices_a, eps_diag, b_vec)
@@ -544,15 +554,16 @@ class fdfd_ez(fdfd_ez_ceviche):
             eps_diag,
             self.omega,
             b_vec,
-            port_name,
+            slice_name,
             mode,
+            temp,
             self.Pl,
             self.Pr,
         )
         Hx_vec, Hy_vec = self._Ez_to_Hx_Hy(Ez_vec)
         return Hx_vec, Hy_vec, Ez_vec
 
-    def solve(self, source_z, port_name=None, mode=None):
+    def solve(self, source_z, slice_name=None, mode=None, temp=None):
         """Outward facing function (what gets called by user) that takes a source grid and returns the field components"""
 
         # flatten the permittivity and source grid
@@ -562,13 +573,13 @@ class fdfd_ez(fdfd_ez_ceviche):
         # create the A matrix for this polarization
         entries_a, indices_a = self._make_A(eps_vec)
         self.A = (entries_a, indices_a)  # record the A matrix for later storage
-        if port_name == "adj" and mode == "adj":
+        if slice_name == "adj" and mode == "adj" and temp == "adj":
             indices_a = np.flip(
                 indices_a, axis=0
             )  # need to flip the indices for adjoint source
         # solve field componets usng A and the source
         Fx_vec, Fy_vec, Fz_vec = self._solve_fn(
-            eps_vec, entries_a, indices_a, source_vec, port_name, mode
+            eps_vec, entries_a, indices_a, source_vec, slice_name, mode, temp
         )
 
         # put all field components into a tuple, convert to grid shape and return them all

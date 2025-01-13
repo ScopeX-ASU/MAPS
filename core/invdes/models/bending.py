@@ -29,8 +29,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     fwd_trans=dict(
                         weight=1,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="out_port_1",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="out_slice_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         wl=[1.55],
@@ -44,8 +44,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     refl_trans=dict(
                         weight=-0.1,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="refl_port_1",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="refl_slice_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
                         wl=[1.55],
@@ -59,12 +59,12 @@ class DefaultConfig(DefaultOptimizationConfig):
                     rad_trans_xp=dict(
                         weight=0,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="rad_monitor_xp",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_slice_xp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
-                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode=1,  # only one source mode is supsliceed, cannot input multiple modes at the same time
                         out_modes=(
                             1,
                         ),  # can evaluate on multiple output modes and get average transmission
@@ -74,8 +74,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     rad_trans_xm=dict(
                         weight=0,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="rad_monitor_xm",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_slice_xm",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
@@ -89,8 +89,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     rad_trans_yp=dict(
                         weight=0,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="rad_monitor_yp",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_slice_yp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
@@ -104,8 +104,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     rad_trans_ym=dict(
                         weight=0,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="rad_monitor_ym",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_slice_ym",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],

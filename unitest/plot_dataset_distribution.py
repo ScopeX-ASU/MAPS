@@ -107,6 +107,6 @@ def plot_distribution(dataset_path):
 
 if __name__ == "__main__":
 
-    dataset_dir = "./data/fdfd/bending/raw_opt_traj_10_ptb"
+    dataset_dir = "./data/fdfd/bending/raw_random"
 
     plot_distribution(dataset_dir)

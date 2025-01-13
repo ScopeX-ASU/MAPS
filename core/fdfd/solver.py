@@ -266,8 +266,9 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         omega: float,
         b: np.ndarray | Tensor,
         solver_instance,
-        port_name,
+        slice_name,
         mode,
+        temp,
         Pl,
         Pr,
         neural_solver,
@@ -352,8 +353,9 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         ctx.indices_a = np.flip(indices_a, axis=0)
         ctx.save_for_backward(x, eps_diag)
         ctx.solver_instance = solver_instance
-        ctx.port_name = port_name
+        ctx.slice_name = slice_name
         ctx.mode = mode
+        ctx.temp = temp
         ctx.Pl = Pl
         ctx.Pr = Pr
         ctx.adj_solver = (
@@ -366,7 +368,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad):
         if ctx.use_autodiff:
-            return None, None, None, None, None, None, None, None, None, None, None, None, None, None
+            return None, None, None, None, None, None, None, None, None, None, None, None, None, None, None
         else:
             adj_solver = ctx.adj_solver
             numerical_solver = ctx.numerical_solver
@@ -375,18 +377,19 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             entries_a = ctx.entries_a
             indices_a = ctx.indices_a
             solver_instance = ctx.solver_instance
-            port_name = ctx.port_name
+            slice_name = ctx.slice_name
             mode = ctx.mode
+            temp = ctx.temp
             Pl, Pr = ctx.Pl, ctx.Pr
             A_t = make_sparse(
                 entries_a, indices_a, (eps_diag.shape[0], eps_diag.shape[0])
             )
             grad = grad.cpu().numpy().astype(np.complex128)
             adj_src = grad.conj()
-            if (port_name != "Norm" and mode != "Norm") or (
-                port_name != "adj" and mode != "adj"
+            if (slice_name != "Norm" and mode != "Norm" and temp != "Norm") or (
+                slice_name != "adj" and mode != "adj" and temp != "adj"
             ):
-                solver_instance.adj_src[(port_name, mode)] = (
+                solver_instance.adj_src[(slice_name, mode, temp)] = (
                     torch.from_numpy(adj_src).to(torch.complex128).to(eps_diag.device)
                 )
             ## this adj_src = "-v" in ceviche
@@ -435,7 +438,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                 adj = Pl.T @ adj
             if not isinstance(adj, torch.Tensor):
                 adj = torch.from_numpy(adj).to(torch.complex128).to(eps_diag.device)
-            solver_instance.adj_field[(port_name, mode)] = adj
+            solver_instance.adj_field[(slice_name, mode, temp)] = adj
             grad_epsilon = -adj.mul_(x).to(eps_diag.device).real
             ## this grad_epsilon = adj * x in ceviche
 
@@ -445,9 +448,14 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             #     grad_b = solve_linear(A_t, grad)
             #     grad_b = torch.from_numpy(grad_b).to(torch.complex128).to(b.device)
             # else:
-
+            if (slice_name != "Norm" and mode != "Norm" and temp != "Norm") or (
+                slice_name != "adj" and mode != "adj" and temp != "adj"
+            ):
+                solver_instance.gradient[(slice_name, mode, temp)] = (
+                    grad_epsilon.to(torch.float32).detach()
+                )
             grad_b = None
-            return None, None, grad_epsilon, None, grad_b, None, None, None, None, None, None, None, None, None
+            return None, None, grad_epsilon, None, grad_b, None, None, None, None, None, None, None, None, None, None
 
 
 class SparseSolveTorch(torch.nn.Module):
@@ -456,6 +464,7 @@ class SparseSolveTorch(torch.nn.Module):
         self.shape = shape
         self.adj_src = {}  # now the adj_src is a dictionary in which the key is (port_name, mode) with same wl, different wl have different simulation objects
         self.adj_field = {}
+        self.gradient = {}
         self.neural_solver = neural_solver
         self.numerical_solver = numerical_solver
         self.use_autodiff = use_autodiff
@@ -470,13 +479,14 @@ class SparseSolveTorch(torch.nn.Module):
         eps_diag: Tensor,
         omega: float,
         b: np.ndarray | Tensor,
-        port_name,
+        slice_name,
         mode,
+        temp,
         Pl=None,
         Pr=None,
     ):
         x = SparseSolveTorchFunction.apply(
-            entries_a, indices_a, eps_diag, omega, b, self, port_name, mode, Pl, Pr, self.neural_solver, self.numerical_solver, self.shape, self.use_autodiff
+            entries_a, indices_a, eps_diag, omega, b, self, slice_name, mode, temp, Pl, Pr, self.neural_solver, self.numerical_solver, self.shape, self.use_autodiff
         )
         return x
 

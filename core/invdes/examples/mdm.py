@@ -74,7 +74,7 @@ if __name__ == "__main__":
         plot=True,
         plot_filename=f"mdm_{'init_try_test'}",
         objs=["mode1_trans", "mode2_trans"],
-        field_keys=[("in_port_1", 1.55, 1, 300), ("in_port_1", 1.55, 2, 300)],
-        in_port_names=["in_port_1", "in_port_1"],
-        exclude_port_names=[],
+        field_keys=[("in_slice_1", 1.55, 1, 300), ("in_slice_1", 1.55, 2, 300)],
+        in_slice_names=["in_slice_1", "in_slice_1"],
+        exclude_slice_names=[],
     )

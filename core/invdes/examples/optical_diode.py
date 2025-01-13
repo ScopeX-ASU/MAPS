@@ -94,7 +94,7 @@ if __name__ == "__main__":
         plot=True,
         plot_filename=f"optical_diode_{'init_try'}",
         objs=["fwd_trans", "bwd_trans"],
-        field_keys=[("in_port_1", 1.55, 1, 300), ("out_port_1", 1.55, 1, 300)],
-        in_port_names=["in_port_1", "out_port_1"],
-        exclude_port_names=[],
+        field_keys=[("in_slice_1", 1.55, 1, 300), ("out_slice_1", 1.55, 1, 300)],
+        in_slice_names=["in_slice_1", "out_slice_1"],
+        exclude_slice_names=[],
     )

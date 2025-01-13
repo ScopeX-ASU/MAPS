@@ -76,7 +76,7 @@ def _convert_resolution(
             x.shape[-2] % target_size[0] == 0 and x.shape[-1] % target_size[1] == 0
         ), f"source size should be multiples of target size, got {x.shape[-2:]} and {target_size}"
         x = eps_bg + (eps_r - eps_bg) * x
-        x = 1 / x
+        # x = 1 / x
         # avg_pool_stride = [int(round(s / r)) for s, r in zip(x.shape[-2:], target_size)]
         # avg_pool_kernel_size = [s + 1 for s in avg_pool_stride]
         # pad_size = []
@@ -88,7 +88,7 @@ def _convert_resolution(
             x[None, None],
             output_size=target_size,
         )[0, 0]
-        x = 1 / x
+        # x = 1 / x
         x = (x - eps_bg) / (eps_r - eps_bg)
         return x
 
