@@ -14,10 +14,10 @@ class DefaultConfig(DefaultOptimizationConfig):
                         rho_resolution=[25, 25],
                         # transform=[dict(type="mirror_symmetry", dims=[1])],
                         transform=[
-                            dict(type="blur", mfs=0.3, resolutions=[50, 50], dim="xy"),
+                            dict(type="blur", mfs=0.1, resolutions=[50, 50], dim="xy"),
                             dict(type="binarize"),
                         ], # there is no symmetry in this design region
-                        init_method="rectangle",
+                        init_method="ones",
                         binary_projection=dict(
                             fw_threshold=100,
                             bw_threshold=100,
@@ -45,8 +45,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     temp1_trans=dict(
                         weight=1,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="out_port_1",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="out_slice_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
@@ -57,11 +57,26 @@ class DefaultConfig(DefaultOptimizationConfig):
                         type="eigenmode",
                         direction="x+",
                     ),
+                    temp1_trans_p2=dict(
+                        weight=-1,
+                        #### objective is evaluated at this port
+                        in_slice_name="in_slice_1",
+                        out_slice_name="out_slice_2",
+                        #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
+                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        out_modes=(
+                            1,
+                        ),  # can evaluate on multiple output modes and get average transmission
+                        type="flux",
+                        direction="x+",
+                    ),
                     temp2_trans=dict(
                         weight=1,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="out_port_2",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="out_slice_2",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[360],
@@ -72,11 +87,26 @@ class DefaultConfig(DefaultOptimizationConfig):
                         type="eigenmode",
                         direction="x+",
                     ),
+                    temp2_trans_p1=dict(
+                        weight=-1,
+                        #### objective is evaluated at this port
+                        in_slice_name="in_slice_1",
+                        out_slice_name="out_slice_1",
+                        #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[360],
+                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        out_modes=(
+                            1,
+                        ),  # can evaluate on multiple output modes and get average transmission
+                        type="flux",
+                        direction="x+",
+                    ),
                     temp1_refl_trans=dict(
                         weight=-1,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="refl_port_1",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="refl_slice_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
@@ -90,8 +120,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     temp2_refl_trans=dict(
                         weight=-1,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="refl_port_1",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="refl_slice_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[360],
@@ -106,8 +136,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     temp1_rad_trans_xp=dict(
                         weight=-2,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="rad_monitor_xp",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_slice_xp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
@@ -121,8 +151,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     temp1_rad_trans_xm=dict(
                         weight=-2,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="rad_monitor_xm",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_slice_xm",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
@@ -136,8 +166,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     temp1_rad_trans_yp=dict(
                         weight=-2,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="rad_monitor_yp",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_slice_yp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
@@ -151,8 +181,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     temp1_rad_trans_ym=dict(
                         weight=-2,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="rad_monitor_ym",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_slice_ym",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
@@ -166,8 +196,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     temp2_rad_trans_xp=dict(
                         weight=-2,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="rad_monitor_xp",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_slice_xp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[360],
@@ -181,8 +211,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     temp2_rad_trans_xm=dict(
                         weight=-2,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="rad_monitor_xm",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_slice_xm",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[360],
@@ -196,8 +226,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     temp2_rad_trans_yp=dict(
                         weight=-2,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="rad_monitor_yp",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_slice_yp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[360],
@@ -211,8 +241,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     temp2_rad_trans_ym=dict(
                         weight=-2,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="rad_monitor_ym",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_slice_ym",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[360],

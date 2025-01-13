@@ -85,7 +85,7 @@ class EigenmodeObjective(object):
                 continue
             for out_mode in out_modes:
                 for temp in target_temps:
-                    src, ht_m, et_m, norm_p = self.port_profiles[out_slice_name][
+                    src, ht_m, et_m, norm_p, require_sim = self.port_profiles[out_slice_name][
                         (wl, out_mode)
                     ]
                     norm_power = self.port_profiles[in_slice_name][(wl, in_mode)][
@@ -106,6 +106,7 @@ class EigenmodeObjective(object):
                             ht_m,
                             et_m,
                             norm_p,
+                            require_sim,
                         ]
                     s_p, s_m = get_eigenmode_coefficients(
                         hx,
@@ -908,11 +909,9 @@ class ObjectiveFunc(object):
             temperatures = temperatures + cfg["temp"]
         temperatures = set(temperatures)
         for slice_name, port_profile in self.port_profiles.items():
-            require_sim = port_profile.pop("require_sim")
-            if not require_sim:
-                port_profile["require_sim"] = require_sim # put it back
-                continue
-            for (wl, mode), (source, _, _, norm_power) in port_profile.items():
+            for (wl, mode), (source, _, _, norm_power, require_sim) in port_profile.items():
+                if not require_sim:
+                    continue
                 ## here the source is already normalized during norm_run to make sure it has target power
                 ## here is the key part that build the common "eps to field" autograd graph
                 ## later on, multiple "field to fom" autograd graph(s) will be built inside of multiple obj_fn's
@@ -946,7 +945,6 @@ class ObjectiveFunc(object):
                         "Ez": Ez,
                     }
                     self.As[(wl, temp)] = self.sims[wl].A
-            port_profile["require_sim"] = require_sim # put it back
 
         self.breakdown = {}
         for name, obj in self.Js.items():

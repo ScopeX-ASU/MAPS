@@ -2,7 +2,7 @@ import os
 from multiprocessing import Pool, Queue, Manager
 import subprocess
 
-script = 'data/fdfd/generate_mdm.py'
+script = 'data/fdfd/generate_od.py'
 
 def metacoupler_launcher(queue):
     # While there are tasks in the queue, each process will fetch and execute one
@@ -29,10 +29,10 @@ if __name__ == "__main__":
     # taskid_begin, taskid_end = (615, 1230)
     # taskid_begin, taskid_end = (10000, 10050)
     # taskid_begin, taskid_end = (10025, 10050)
-    taskid_begin, taskid_end = (5, 10)
+    taskid_begin, taskid_end = (0, 1)
     # taskid_begin, taskid_end = (50, 100)
 
-    # task_list = [52, 53, 58, 59]
+    # task_list = [46, 48]
 
     # Manager's queue allows inter-process communication for tasks
     manager = Manager()

@@ -120,6 +120,7 @@ class OpticalDiode(N_Ports):
             n_wl=self.sim_cfg["n_wl"],
             solver=self.sim_cfg["solver"],
             plot=True,
+            require_sim=True,
         )
 
         norm_refl_profiles_1 = self.build_norm_sources(
@@ -131,6 +132,7 @@ class OpticalDiode(N_Ports):
             n_wl=self.sim_cfg["n_wl"],
             solver=self.sim_cfg["solver"],
             plot=True,
+            require_sim=False,
         )
         norm_refl_profiles_2 = self.build_norm_sources(
             source_modes=(1,),
@@ -141,10 +143,11 @@ class OpticalDiode(N_Ports):
             n_wl=self.sim_cfg["n_wl"],
             solver=self.sim_cfg["solver"],
             plot=True,
+            require_sim=False,
         )
 
-        norm_monitor_profiles = self.build_norm_sources(
-            source_modes=(1,2),
+        norm_monitor_profiles_mode2 = self.build_norm_sources(
+            source_modes=(2,),
             input_port_name="out_port_1",
             input_slice_name="out_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],
@@ -152,10 +155,24 @@ class OpticalDiode(N_Ports):
             n_wl=self.sim_cfg["n_wl"],
             solver=self.sim_cfg["solver"],
             plot=True,
+            require_sim=False,
+        )
+
+        norm_monitor_profiles_mode1 = self.build_norm_sources(
+            source_modes=(1,),
+            input_port_name="out_port_1",
+            input_slice_name="out_slice_1",
+            wl_cen=self.sim_cfg["wl_cen"],
+            wl_width=self.sim_cfg["wl_width"],
+            n_wl=self.sim_cfg["n_wl"],
+            solver=self.sim_cfg["solver"],
+            plot=True,
+            require_sim=True,
         )
         return (
             norm_source_profiles,
             norm_refl_profiles_1,
             norm_refl_profiles_2,
-            norm_monitor_profiles,
+            norm_monitor_profiles_mode1,
+            norm_monitor_profiles_mode2,
         )

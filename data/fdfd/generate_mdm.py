@@ -34,7 +34,7 @@ def compare_designs(design_regions_1, design_regions_2):
 
 def mdm_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.15]):
     set_torch_deterministic(int(device_id))
-    dump_data_path = f"./data/fdfd/mdm/raw_test"
+    dump_data_path = f"./data/fdfd/mdm/raw_opt_traj_ptb"
     sim_cfg = DefaultSimulationConfig()
     target_img_size = 256
     resolution = 50
@@ -55,7 +55,7 @@ def mdm_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.15]):
             solver="ceviche_torch",
             border_width=[0, 0, port_len, port_len],
             resolution=resolution,
-            plot_root=f"./data/fdfd/mdm/plot_test/mdm_{device_id}",
+            plot_root=f"./data/fdfd/mdm/plot_opt_traj_ptb/mdm_{device_id}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",

@@ -658,7 +658,7 @@ class N_Ports(BaseDevice):
         return monitor_slice
 
     def build_radiation_monitor(
-        self, monitor_name: str = "rad_monitor", distance_to_PML=[0.2, 0.2]
+        self, monitor_name: str = "rad_slice", distance_to_PML=[0.2, 0.2]
     ):  
         '''
         Currently, the way to build the radiation monitor is through
@@ -1072,7 +1072,7 @@ class N_Ports(BaseDevice):
         power: float = 1e-8,
         source_type: str = "mode",
         plot=False,
-        require_sim: bool = True,
+        require_sim: bool = False,
     ):
         assert source_type in {
             "mode",
@@ -1179,10 +1179,10 @@ class N_Ports(BaseDevice):
                 for k, v in source_profiles.items()
             }
         source_profiles = {
-            k: [e * input_scale[k] for e in v[:-1]] + [power]
+            k: [e * input_scale[k] for e in v[:-1]] + [power] + [require_sim]
             for k, v in source_profiles.items()
         }
-        source_profiles["require_sim"] = require_sim
+        # source_profiles["require_sim"] = require_sim
         # input_SCALE, fields, source_profiles = _norm_run(power_scales=input_scale)
 
         if plot:
@@ -1205,7 +1205,7 @@ class N_Ports(BaseDevice):
             self.port_sources_dict[input_slice_name] = source_profiles
         # print(source_profiles)
         # exit(0)
-        return source_profiles  # {(wl, mode): [profile, ht_m, et_m, SCALE], ...}
+        return source_profiles  # {(wl, mode): [profile, ht_m, et_m, SCALE, require_sim], ...}
 
     def obtain_eps(self, permittivity: torch.Tensor):
         ## we need denormalized permittivity for the design region

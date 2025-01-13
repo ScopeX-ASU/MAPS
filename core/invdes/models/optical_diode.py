@@ -21,7 +21,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         rho_resolution=[20, 20],
                         # transform=[dict(type="mirror_symmetry", dims=[1])],
                         transform=[],
-                        init_method="rectangle",
+                        init_method="random",
                         binary_projection=dict(
                             fw_threshold=100,
                             bw_threshold=100,
