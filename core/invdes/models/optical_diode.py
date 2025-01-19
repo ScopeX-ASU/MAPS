@@ -19,9 +19,11 @@ class DefaultConfig(DefaultOptimizationConfig):
                     design_region_1=dict(
                         method="levelset",
                         rho_resolution=[20, 20],
-                        # transform=[dict(type="mirror_symmetry", dims=[1])],
-                        transform=[],
-                        init_method="random",
+                        transform=[
+                            dict(type="blur", mfs=0.1, resolutions=[310, 310], dim="xy"),
+                            dict(type="binarize"),
+                        ], # there is no symmetry in this design region
+                        init_method="rectangle",
                         binary_projection=dict(
                             fw_threshold=100,
                             bw_threshold=100,

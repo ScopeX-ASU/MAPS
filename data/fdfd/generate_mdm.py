@@ -32,9 +32,9 @@ def compare_designs(design_regions_1, design_regions_2):
     return torch.mean(torch.stack(similarity)).item()
 
 
-def mdm_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.15]):
+def mdm_opt(device_id, operation_device, each_step=False, include_perturb=False, perturb_probs=[0.05, 0.1, 0.15]):
     set_torch_deterministic(int(device_id))
-    dump_data_path = f"./data/fdfd/mdm/raw_opt_traj_ptb"
+    dump_data_path = f"./data/fdfd/mdm/raw_test"
     sim_cfg = DefaultSimulationConfig()
     target_img_size = 256
     resolution = 50
@@ -55,7 +55,7 @@ def mdm_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.15]):
             solver="ceviche_torch",
             border_width=[0, 0, port_len, port_len],
             resolution=resolution,
-            plot_root=f"./data/fdfd/mdm/plot_opt_traj_ptb/mdm_{device_id}",
+            plot_root=f"./data/fdfd/mdm/plot_test/mdm_{device_id}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -220,7 +220,7 @@ def mdm_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.15]):
             cosine_similarity = compare_designs(
                 last_design_region_dict, current_design_region_dict
             )
-            if cosine_similarity < 0.996 or step == n_epoch - 1:
+            if cosine_similarity < 0.996 or step == n_epoch - 1 or each_step:
                 opt.dump_data(
                     filename_h5=filename_h5, filename_yml=filename_yml, step=step
                 )
@@ -250,24 +250,28 @@ def mdm_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.15]):
         optimizer.step()
         scheduler.step()
         sharp_scheduler.step()
-        if dumped_data:
+        if dumped_data and include_perturb:
             for i, prob in enumerate(perturb_probs):
                 perturb_and_dump(step, flip_prob=prob, i=i)
             dumped_data = False
-            # quit()
+        #     # quit()
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--random_seed", type=int, default=0)
     parser.add_argument("--gpu_id", type=int, default=0)
+    parser.add_argument("--each_step", type=bool, default=False)
+    parser.add_argument("--include_perturb", type=int, default=0)
     random_seed = parser.parse_args().random_seed
     gpu_id = parser.parse_args().gpu_id
+    each_step = parser.parse_args().each_step
+    include_perturb = parser.parse_args().include_perturb
     torch.cuda.set_device(gpu_id)
     device = torch.device("cuda:" + str(gpu_id))
     torch.backends.cudnn.benchmark = True
     set_torch_deterministic(int(41 + random_seed))
-    mdm_opt(random_seed, device)
+    mdm_opt(random_seed, device, each_step, include_perturb)
 
 
 if __name__ == "__main__":

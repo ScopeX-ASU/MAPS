@@ -1106,15 +1106,30 @@ class DirectCompareSParam(torch.nn.modules.loss._Loss):
         # print("this is the shape and dtye of the predicted S parameters", s_params_pred.shape, s_params_pred.dtype, flush=True)
         # print("this is the keys in the s_params_GT", list(s_params_GT.keys()), flush=True)
         # quit()
-        # ['s_params-port-out_port_1-wl-1.55-type-1-temp-300', 's_params-port-rad_monitor_xm-wl-1.55-type-flux-temp-300', 's_params-port-rad_monitor_xp-wl-1.55-type-flux-temp-300', 's_params-port-rad_monitor_ym-wl-1.55-type-flux-temp-300', 's_params-port-rad_monitor_yp-wl-1.55-type-flux-temp-300', 's_params-port-refl_port_1-wl-1.55-type-flux_minus_src-temp-300']
-        fwd_trans_GT = s_params_GT['s_params-port-out_port_1-wl-1.55-type-1-temp-300']
-        ref_GT = s_params_GT['s_params-port-refl_port_1-wl-1.55-type-flux_minus_src-temp-300']
+        # ['s_params-obj_slice_name-out_slice_1-type-1-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300', 's_params-obj_slice_name-rad_slice_xm-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300', 's_params-obj_slice_name-rad_slice_xp-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300', 's_params-obj_slice_name-rad_slice_ym-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300', 's_params-obj_slice_name-rad_slice_yp-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300', 's_params-obj_slice_name-refl_slice_1-type-flux_minus_src-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
+        fwd_trans_GT = s_params_GT['s_params-obj_slice_name-out_slice_1-type-1-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
+        ref_GT = s_params_GT['s_params-obj_slice_name-refl_slice_1-type-flux_minus_src-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
+        rad_xp_GT = s_params_GT['s_params-obj_slice_name-rad_slice_xp-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
+        rad_xm_GT = s_params_GT['s_params-obj_slice_name-rad_slice_xm-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
+        rad_yp_GT = s_params_GT['s_params-obj_slice_name-rad_slice_yp-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
+        rad_ym_GT = s_params_GT['s_params-obj_slice_name-rad_slice_ym-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
 
-        target_s = torch.cat((fwd_trans_GT[:, 0].unsqueeze(1), ref_GT[:, 1].unsqueeze(1)), 1)
-
+        target_s = torch.cat(
+            (
+                fwd_trans_GT[:, 0].unsqueeze(1), 
+                ref_GT[:, 1].unsqueeze(1),
+                rad_xp_GT[:].unsqueeze(1),
+                rad_xm_GT[:].unsqueeze(1),
+                rad_yp_GT[:].unsqueeze(1),
+                rad_ym_GT[:].unsqueeze(1),
+            ),
+            dim=1,
+        )
+        # print("this is the target s parameters", target_s, flush=True)
+        # quit()
         prediction_error = s_params_pred - target_s
         normalizeMSE = (prediction_error.norm(p=2, dim=-1) / (target_s.norm(p=2, dim=-1)).mean() + 1e-9)
-        return normalizeMSE
+        return normalizeMSE.mean()
 
 
 class GradientLoss(torch.nn.modules.loss._Loss):
@@ -1171,3 +1186,67 @@ class GradientLoss(torch.nn.modules.loss._Loss):
         field_energy = torch.norm(y * dr_masks, p=2, dim=(-1, -2)) + 1e-6
         return (error_energy / field_energy).mean()
     
+
+class GradSimilarityLoss(torch.nn.modules.loss._Loss):
+
+    def __init__(self, reduce="mean"):
+        super(GradSimilarityLoss, self).__init__()
+
+        self.reduce = reduce
+
+    def forward(
+        self, 
+        forward_fields,
+        adjoint_fields,  
+        target_gradient,
+        dr_mask = None,
+    ):
+        forward_fields_ez = forward_fields[:, -2:, :, :] # the forward fields has three components, we only need the Ez component
+        forward_fields_ez = torch.view_as_complex(forward_fields_ez.permute(0, 2, 3, 1).contiguous())
+        adjoint_fields = adjoint_fields[:, -2:, :, :] # the adjoint fields has three components, we only need the Ez component
+        adjoint_fields = torch.view_as_complex(adjoint_fields.permute(0, 2, 3, 1).contiguous()) # adjoint fields only Ez 
+        gradient = (adjoint_fields*forward_fields_ez).real
+        batch_size = gradient.shape[0]
+        # Step 0: build one_mask from dr_mask
+        ## This is not correct
+        # need to build a design region mask whose size shold be b, H, W
+        if dr_mask is not None:
+            dr_masks = []
+            for i in range(batch_size):
+                mask = torch.zeros_like(gradient[i]).to(gradient.device)
+                for key, value in dr_mask.items():
+                    if key.endswith("x_start"):
+                        x_start = value[i]
+                    elif key.endswith("x_stop"):
+                        x_stop = value[i]
+                    elif key.endswith("y_start"):
+                        y_start = value[i]
+                    elif key.endswith("y_stop"):
+                        y_stop = value[i]
+                    else:
+                        raise ValueError(f"Invalid key: {key}")
+                mask[x_start:x_stop, y_start:y_stop] = 1
+                dr_masks.append(mask)
+            dr_masks = torch.stack(dr_masks, 0)
+        else:
+            dr_masks = torch.ones_like(gradient)
+
+        # Apply the design region mask
+        masked_gradient = gradient * dr_masks
+        masked_target_gradient = target_gradient * dr_masks
+
+        # Flatten the gradients for F.cosine_similarity
+        masked_gradient_flat = masked_gradient.view(masked_gradient.size(0), -1)
+        masked_target_gradient_flat = masked_target_gradient.view(masked_target_gradient.size(0), -1)
+
+        cosine_similarity = F.cosine_similarity(masked_gradient_flat, masked_target_gradient_flat, dim=1)
+
+        # Apply reduction
+        if self.reduce == "mean":
+            loss = 1 - cosine_similarity.mean()
+        elif self.reduce == "sum":
+            loss = 1 - cosine_similarity.sum()
+        else:  # Default to no reduction
+            loss = 1 - cosine_similarity
+        
+        return loss

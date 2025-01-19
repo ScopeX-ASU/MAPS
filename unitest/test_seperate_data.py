@@ -21,6 +21,54 @@ def test_gradient(filepath1, filepath2):
     with h5py.File(filepath1, "r") as f:
         keys = list(f.keys())
         print(keys)
+        # fwd_field = f["field_solutions-wl-1.55-port-in_port_1-mode-1-temp-300"][:]
+        # adj_field = f["fields_adj-wl-1.55-port-in_port_1-mode-1"][:]
+        # gradient = f["gradient"][:]
+        source = f["adj_src"][:]
+        max_val = np.max(source.real)
+        eps_map = np.rot90(f["eps_map"][:])
+        # plt.figure()
+        # plt.imshow(np.rot90(fwd_field[-1, ...].real), cmap="RdBu")
+        # plt.colorbar()
+        # plt.title("Forward Field")
+        # plt.savefig("./figs/forward_field.png")
+        # plt.close()
+
+        # plt.figure()
+        # plt.imshow(np.rot90(adj_field[-1, ...].real), cmap="RdBu")
+        # plt.colorbar()
+        # plt.title("Adjoint Field")
+        # plt.savefig("./figs/adjoint_field.png")
+        # plt.close()
+        
+        # plt.figure()
+        # plt.imshow(np.rot90(gradient.real), cmap="RdBu")
+        # plt.colorbar()
+        # plt.title("Gradient")
+        # plt.savefig("./figs/gradient.png")
+        # plt.close()
+
+        # plt.figure()
+        # plt.imshow(np.rot90(source.real), cmap="RdBu", vmax=max_val, vmin=-max_val)
+        # plt.colorbar()
+        # plt.title("Source")
+        # plt.savefig("./figs/source.png")
+        # plt.close()
+
+
+        plt.figure()
+
+        # Plot eps_map in grayscale
+        # plt.imshow(1 - eps_map, cmap="gray", interpolation="none", extent=[0, eps_map.shape[1], 0, eps_map.shape[0]])
+
+        # Overlay source with transparency
+        plt.imshow(np.rot90(source.real), cmap="RdBu", alpha=0.6, vmin=-max_val, vmax=max_val) #, extent=[0, eps_map.shape[1], 0, eps_map.shape[0]])
+
+        plt.colorbar(label="Source Intensity")
+        plt.title("Overlaid Source and Eps Map")
+        plt.savefig("./figs/source_eps_overlay.png")
+        plt.close()
+
         # read the forward field and adjoint field
         # forward_field = torch.from_numpy(f["field_solutions"][:]).to("cuda")
         # adjoint_field = torch.from_numpy(f["fields_adj"][:]).to("cuda")
@@ -97,6 +145,6 @@ def test_gradient(filepath1, filepath2):
     #     plt.close()
 
 if __name__ == "__main__":
-    filepath1 = "/home/pingchua/projects/MAPS/data/fdfd/mdm/raw_opt_traj_ptb/mdm_id-59_opt_step_9_perturbed_0-in_slice_1-1.55-2-300.h5"
+    filepath1 = "/home/pingchua/projects/MAPS/data/fdfd/bending/raw_test/bending_id-10000_opt_step_24-in_slice_1-1.55-1-300.h5"
     filepath2 = "/home/pingchua/projects/MAPS/data/fdfd/mdm/raw_small/mdm_id-0_opt_step_3-in_slice_1-1.55-2-300.h5"
     test_gradient(filepath1, filepath2)

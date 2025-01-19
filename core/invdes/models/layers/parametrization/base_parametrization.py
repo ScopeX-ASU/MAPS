@@ -15,7 +15,8 @@ from torch.types import Device
 
 from core.NVILT_Share.photonic_model import *
 from core.utils import padding_to_tiles, rip_padding
-
+import numpy as np
+import matplotlib.pyplot as plt
 
 def _mirror_symmetry(x, dims):
     for dim in dims:
@@ -343,7 +344,11 @@ class BaseParametrization(nn.Module):
 
     def permittivity_transform(self, hr_permittivity, permittivity, cfgs, sharpness):
         transform_cfg_list = cfgs["transform"]
-
+        # print("this is the transform cfg list", transform_cfg_list, flush=True)
+        # plt.figure()
+        # plt.imshow(1 - np.rot90(hr_permittivity.cpu().numpy()), cmap="gray")
+        # plt.savefig(f"./figs/origion_hr.png")
+        # plt.close()
         for transform_cfg in transform_cfg_list:
             transform_type = transform_cfg["type"]
             if transform_type == "binarize":
@@ -351,6 +356,10 @@ class BaseParametrization(nn.Module):
                     hr_permittivity, sharpness, self.eta
                 )
                 permittivity = self.binary_projection(permittivity, sharpness, self.eta)
+                # plt.figure()
+                # plt.imshow(1 - np.rot90(hr_permittivity.cpu().numpy()), cmap="gray")
+                # plt.savefig(f"./figs/binarize_hr.png")
+                # plt.close()
                 continue
             cfg = deepcopy(transform_cfg)
             del cfg["type"]
@@ -362,6 +371,10 @@ class BaseParametrization(nn.Module):
             hr_permittivity, permittivity = permittivity_transform_collections[
                 transform_type
             ]((hr_permittivity, permittivity), **cfg)
+            # plt.figure()
+            # plt.imshow(1 - np.rot90(hr_permittivity.cpu().numpy()), cmap="gray")
+            # plt.savefig(f"./figs/{transform_type}_hr.png")
+            # plt.close()
 
         ### we have to match the design region size to be able to be placed in the design region with subpixel smoothing
         target_size = [(m.stop - m.start) for m in self.design_region_mask]
@@ -398,7 +411,10 @@ class BaseParametrization(nn.Module):
                 intplt_mode="nearest",
                 target_size=target_size,
             )
-
+        # plt.figure()
+        # plt.imshow(1 - np.rot90(hr_permittivity.cpu().numpy()), cmap="gray")
+        # plt.savefig(f"./figs/smoothing_lr.png")
+        # plt.close()
         return hr_permittivity, permittivity
 
     def denormalize_permittivity(self, permittivity):

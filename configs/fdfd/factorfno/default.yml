@@ -6,6 +6,14 @@ dataset:
   num_workers: 4
   shuffle: True
 
+test_dataset:
+  name: fdfd
+  root: ./data
+  test_ratio: 0.9
+  train_valid_split_ratio: [0.9, 0.1]
+  num_workers: 4
+  shuffle: True
+
 criterion:
   name: distanceLoss
   max_distance: 0.15
@@ -21,11 +29,6 @@ aux_criterion:
     using_ALM: False
 
 log_criterion:
-  curl_loss:
-    weight: 0.0
-  tv_loss:
-    weight: 0.0
-    norm: False
   maxwell_residual_loss:
     using_ALM: False
   direct_s_param_loss:

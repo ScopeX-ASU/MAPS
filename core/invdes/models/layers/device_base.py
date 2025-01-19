@@ -35,7 +35,7 @@ from .utils import (
     insert_mode,
     plot_eps_field,
 )
-
+import matplotlib.pyplot as plt
 __all__ = ["BaseDevice", "N_Ports"]
 
 

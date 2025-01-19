@@ -83,25 +83,25 @@ class OpticalDiode(N_Ports):
         src_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="in_slice_1",
-            rel_loc=0.2,
+            rel_loc=0.25,
             rel_width=rel_width,
         )
         refl_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="refl_slice_1",
-            rel_loc=0.21,
+            rel_loc=0.26,
             rel_width=rel_width,
         )
         out_slice = self.build_port_monitor_slice(
             port_name="out_port_1",
             slice_name="out_slice_1",
-            rel_loc=0.8,
+            rel_loc=0.75,
             rel_width=rel_width,
         )
         out_refl_slice = self.build_port_monitor_slice(
             port_name="out_port_1",
             slice_name="refl_slice_2",
-            rel_loc=0.79,
+            rel_loc=0.74,
             rel_width=rel_width,
         )
         self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=rel_width)

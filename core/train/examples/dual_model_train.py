@@ -28,7 +28,7 @@ import numpy as np
 from thirdparty.ceviche.ceviche.constants import C_0
 
 class dual_predictor(nn.Module):
-    def __init__(self, model_fwd, model_adj):
+    def __init__(self, model_fwd, model_adj, switch_epoch):
         super(dual_predictor, self).__init__()
         # self.model_fwd = nn.ModuleDict({
         #     f"{str(wl).replace('.', 'p')}-{mode}-{temp}-{in_port_name}-{out_port_name}": model
@@ -40,10 +40,13 @@ class dual_predictor(nn.Module):
         # }) # this is now a dictionary of models [wl, mode, temp, in_port_name, out_port_name] -> model # most of the time it should contain at most 2 model
         self.model_fwd = model_fwd
         self.model_adj = model_adj
+        self.switch_epoch = switch_epoch
+        print("will swith to predicted field from epoch: ", self.switch_epoch, flush=True)
 
     def forward(
         self, 
-        data
+        data, 
+        epoch=1,
     ):
     # return_dict = {
     #     "eps_map": eps_map,
@@ -72,11 +75,20 @@ class dual_predictor(nn.Module):
         temp = data["temp"]
         in_slice_name = data["input_slice"]
         src = data["src_profile"]
-        fwd_Ez_field = self.model_fwd(eps, src)
+        fwd_Ez_field = self.model_fwd(
+            eps, 
+            src,
+            monitor_slices=data["monitor_slices"],
+            monitor_slice_list=None,
+            in_slice_name=in_slice_name,
+            wl=wl,
+            temp=temp,
+        )
         with torch.enable_grad():
-            fwd_field, adj_source = cal_total_field_adj_src_from_fwd_field(
-                # Ez=fwd_Ez_field,
-                Ez=data["fwd_field"][:, -2:, ...],
+            fwd_field, adj_source, monitor_slice_list = cal_total_field_adj_src_from_fwd_field(
+                Ez4adj=fwd_Ez_field if epoch >= self.switch_epoch else data["fwd_field"][:, -2:, ...],
+                Ez4fullfield=fwd_Ez_field,
+                # Ez=data["fwd_field"][:, -2:, ...],
                 eps=eps,
                 ht_ms=data["ht_m"], # this two only used for adjoint field calculation, we don't need it here in forward pass
                 et_ms=data["et_m"],
@@ -104,9 +116,18 @@ class dual_predictor(nn.Module):
         # normalized_L2norm = normalized_componentwise.sum()
         # print(f"normalized L2 norm of adjoint source: {normalized_L2norm.item()}")
         # quit()
-        adj_Ez_field = self.model_adj(eps, adj_source)
-        adj_field, _ = cal_total_field_adj_src_from_fwd_field(
-                                        Ez=adj_Ez_field,
+        adj_Ez_field = self.model_adj(
+            eps, 
+            adj_source,
+            monitor_slices=data["monitor_slices"],
+            monitor_slice_list=monitor_slice_list,
+            in_slice_name=in_slice_name,
+            wl=wl,
+            temp=temp,
+        )
+        adj_field, _, _ = cal_total_field_adj_src_from_fwd_field(
+                                        Ez4adj=adj_Ez_field,
+                                        Ez4fullfield=adj_Ez_field,
                                         eps=eps,
                                         ht_ms=data['ht_m'],
                                         et_ms=data['et_m'],
@@ -144,37 +165,14 @@ def main():
     print("this is the config: \n", configs, flush=True)
     if int(configs.run.deterministic) == True:
         set_torch_deterministic(int(configs.run.random_state))
-    # model_fwd = {}
-    # assert len(configs.model_fwd.temp) == len(configs.model_fwd.mode) == len(configs.model_fwd.wl) == len(configs.model_fwd.in_out_port_name), "temp, mode, wl, in_out_port_name should have the same length"
-    # for i in range(len(configs.model_fwd.temp)):
-    #     model_cfg = copy.deepcopy(configs.model_fwd)
-    #     model_cfg.temp = temp = model_cfg.temp[i]
-    #     model_cfg.mode = mode = model_cfg.mode[i]
-    #     model_cfg.wl = wl = model_cfg.wl[i]
-    #     model_cfg.in_port_name = in_port_name = model_cfg.in_out_port_name[i][0]
-    #     model_cfg.out_port_name = out_port_name = model_cfg.in_out_port_name[i][1]
-    #     model_fwd[(wl, mode, temp, in_port_name, out_port_name)] = builder.make_model(device=device, **model_cfg)
-    model_fwd = builder.make_model(device=device, **configs.model_fwd)
+    configs.model_fwd.device = device
+    model_fwd = builder.make_model(**configs.model_fwd)
     print("this is the model: \n", model_fwd, flush=True)
-    
-    # model_adj = {}
-    # assert len(configs.model_adj.temp) == len(configs.model_adj.mode) == len(configs.model_adj.wl) == len(configs.model_adj.in_out_port_name), "temp, mode, wl, in_out_port_name should have the same length"
-    # for i in range(len(configs.model_adj.temp)):
-    #     model_cfg = copy.deepcopy(configs.model_adj)
-    #     model_cfg.temp = temp = model_cfg.temp[i]
-    #     model_cfg.mode = mode = model_cfg.mode[i]
-    #     model_cfg.wl = wl = model_cfg.wl[i]
-    #     model_cfg.in_port_name = in_port_name = model_cfg.in_out_port_name[i][0]
-    #     model_cfg.out_port_name = out_port_name = model_cfg.in_out_port_name[i][1]
-    #     model_adj[(wl, mode, temp, in_port_name, out_port_name)] = builder.make_model(device=device, **model_cfg)
-    model_adj = builder.make_model(device=device, **configs.model_adj)
+    configs.model_adj.device = device
+    model_adj = builder.make_model(**configs.model_adj)
     print("this is the model: \n", model_adj, flush=True)
-    # model_adj = builder.make_model(
-    #     device=device,
-    #     **configs.model_adj
-    # )
-
-    model = dual_predictor(model_fwd, model_adj)
+    switch_epoch = int(getattr(configs.run, "switch_epoch", 1))
+    model = dual_predictor(model_fwd, model_adj, switch_epoch)
 
     train_loader, validation_loader, test_loader = builder.make_dataloader()
     criterion = builder.make_criterion(configs.criterion.name, configs.criterion).to(
@@ -237,6 +235,7 @@ def main():
             data_loader=train_loader,
             task='train',
             epoch=epoch,
+            n_sample=int(configs.run.n_train),
         )
         trainer.train(
             data_loader=validation_loader,
@@ -248,6 +247,7 @@ def main():
                 data_loader=test_loader,
                 task='test',
                 epoch=epoch,
+                n_sample=int(configs.run.n_test),
             )
             trainer.save_model(
                 epoch=epoch,

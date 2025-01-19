@@ -4,19 +4,8 @@ criterion:
   min_distance: 0.12
 
 aux_criterion:
-  aspect_ratio_loss:
-    aspect_ratio: 0.1
-    weight: 0
-  curl_loss:
-    weight: 0.0
-  tv_loss:
-    weight: 0.0
-    norm: False
   maxwell_residual_loss:
     weight: 0.0
-    wl_cen: 1.55
-    wl_width: 0
-    n_wl: 1
   grad_loss:
     weight: 0.0
   s_param_loss:
@@ -34,12 +23,11 @@ aux_criterion:
 
 log_criterion:
   maxwell_residual_loss:
-    weight: 0
-    wl_cen: 1.55
-    wl_width: 0
-    n_wl: 1
+    weight: 1
+  grad_similarity_loss:
+    weight: 1
   grad_loss:
-    weight: 0
+    weight: 1
   s_param_loss:
     weight: 1
   Hx_loss:

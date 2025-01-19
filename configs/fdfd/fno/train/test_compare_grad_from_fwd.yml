@@ -1,12 +1,24 @@
 dataset:
   name: fdfd
   root: ./data
+  test_ratio: 0.1
+  train_valid_split_ratio: [0.9, 0.1]
+  num_workers: 4
+  shuffle: True
+  device_type: bending
+  data_dir: raw_opt_traj_ptb
+  processed_dir: bending
+  augment:
+    prob: 0.0
+
+test_dataset:
+  name: fdfd
+  root: ./data
   test_ratio: 0.9
   train_valid_split_ratio: [0.9, 0.1]
   num_workers: 4
-  shuffle: False
+  shuffle: True
   device_type: bending
-  # data_dir: raw_opt_traj_10
   data_dir: raw_test
   processed_dir: bending
   augment:
@@ -53,7 +65,7 @@ log_criterion:
     # wl_width: 0
     # n_wl: 1
   grad_loss:
-    weight: 0
+    weight: 1
   s_param_loss:
     weight: 1
   err_corr_Ez:
@@ -107,6 +119,9 @@ run:
     entity: scopex
     name: local_search
   batch_size: 4
+  n_test: 400
+  n_train: 2000
+  switch_epoch: 60
 
 quantize:
   weight_bit: 32
@@ -117,35 +132,38 @@ checkpoint:
   checkpoint_dir: "metacoupler/local_search/train_local_search"
   model_comment: ""
   resume: 1
-  restore_checkpoint: "./checkpoint/fdfd/fno/train/dual_predictor_model-FNO2d_dev-bending_field-dual_id-38_dcrp-Exp1_FNO_dual_rerun_err-0.6925_epoch-47.pt"
+  # restore_checkpoint: "./checkpoint/fdfd/fno/train/dual_predictor_model-FNO2d_dev-bending_field-dual_id-53_dcrp-FNO_bending_No_ptb_err-1.6958_epoch-30.pt"
+  restore_checkpoint: "./checkpoint/fdfd/fno/train/dual_predictor_model-FNO2d_dev-bending_field-dual_id-44_dcrp-Main_result_FNO_bending_err-1.4023_epoch-35.pt"
   no_linear: 0
 
 model_fwd:
   type: FNO2d
   train_field: fwd
-  dim: 32
+  dim: 24
   img_size: 256
-  hidden_list: [128]
-  mode_list: [(60, 60), (60, 60), (60, 60), (60, 60)]
+  hidden_list: [256]
+  mode_list: [(50, 50), (50, 50), (50, 50), (50, 50)]
   mapping_size: 64
   fourier_feature: none
   temp: [300]
   wl: [1.55]
   mode: [1]
-  in_out_port_name: [['in_port_1', 'out_port_1']]
+  incident_field: False
+  pos_encoding: none
 model_adj:
   type: FNO2d
   train_field: adj
-  dim: 32
+  dim: 24
   img_size: 256
-  hidden_list: [128]
-  mode_list: [(60, 60), (60, 60), (60, 60), (60, 60)]
+  hidden_list: [256]
+  mode_list: [(50, 50), (50, 50), (50, 50), (50, 50)]
   mapping_size: 64
   fourier_feature: none
   temp: [300]
   wl: [1.55]
   mode: [1]
-  in_out_port_name: [['in_port_1', 'out_port_1']]
+  incident_field: False
+  pos_encoding: none
 
 debug:
   verbose: 1

@@ -13,6 +13,10 @@ from traitlets import default
 import copy
 from thirdparty.ceviche.ceviche.constants import *
 from core.fdfd.fdfd import fdfd_ez
+import math
+from core.utils import Slice
+import matplotlib.pyplot as plt
+from functools import lru_cache
 __all__ = [
     "LinearBlock",
     "ConvBlock",
@@ -297,6 +301,15 @@ class ModelBase(nn.Module):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
+    @lru_cache(maxsize=8)
+    def _get_linear_pos_enc(self, shape, device) -> Tensor:
+        batchsize, size_x, size_y = shape[0], shape[2], shape[3]
+        gridx = torch.arange(0, size_x, device=device)
+        gridy = torch.arange(0, size_y, device=device)
+        gridx, gridy = torch.meshgrid(gridx, gridy)
+        mesh = torch.stack([gridy, gridx], dim=0).unsqueeze(0)  # [1, 2, h, w] real
+        return mesh
+
     def build_sim(self):
         self.sim = {}
         for wl in self.wl:
@@ -346,12 +359,201 @@ class ModelBase(nn.Module):
             self.img_size,
             # in_channels,
             2,
-            2,
+            6,
             dropout_rate=0.0,
             act_cfg=self.act_cfg,
             norm_cfg=self.norm_cfg,
             device=self.device,
         )
+
+    # def incident_field_from_src(self, src: Tensor) -> Tensor:
+    #     if self.train_field == "fwd":
+    #         mode = src[:, int(0.4 * src.shape[-2] / 2), :]
+    #         mode = mode.unsqueeze(1).repeat(1, src.shape[-2], 1)
+    #         source_index = int(0.4 * src.shape[-2] / 2)
+    #         resolution = (
+    #             2e-8  # hardcode here since the we are now using resolution of 50px/um
+    #         )
+    #         epsilon = Si_eps(1.55)
+    #         lambda_0 = (
+    #             1.55e-6  # wavelength is hardcode here since we are now using 1.55um
+    #         )
+    #         k = (2 * torch.pi / lambda_0) * torch.sqrt(torch.tensor(epsilon)).to(
+    #             src.device
+    #         )
+    #         x_coords = torch.arange(src.shape[-2]).float().to(src.device)
+    #         distances = torch.abs(x_coords - source_index) * resolution
+    #         phase_shifts = (k * distances).unsqueeze(1)
+    #         mode = mode * torch.exp(1j * phase_shifts)
+
+    #     elif self.train_field == "adj":
+    #         # in the adjoint mode, there are two sources and we need to calculate the incident field for each of them
+    #         # then added together as the incident field
+    #         mode_x = src[:, int(0.41 * src.shape[-2] / 2), :]
+    #         mode_x = mode_x.unsqueeze(1).repeat(1, src.shape[-2], 1)
+    #         source_index = int(0.41 * src.shape[-2] / 2)
+    #         resolution = (
+    #             2e-8  # hardcode here since the we are now using resolution of 50px/um
+    #         )
+    #         epsilon = Si_eps(1.55)
+    #         lambda_0 = (
+    #             1.55e-6  # wavelength is hardcode here since we are now using 1.55um
+    #         )
+    #         k = (2 * torch.pi / lambda_0) * torch.sqrt(torch.tensor(epsilon)).to(
+    #             src.device
+    #         )
+    #         x_coords = torch.arange(src.shape[-2]).float().to(src.device)
+    #         distances = torch.abs(x_coords - source_index) * resolution
+    #         phase_shifts = (k * distances).unsqueeze(1)
+    #         mode_x = mode_x * torch.exp(1j * phase_shifts)
+
+    #         mode_y = src[
+    #             :, :, -int(0.4 * src.shape[-1] / 2)
+    #         ]  # not quite sure with this index, need to plot it out to check
+    #         mode_y = mode_y.unsqueeze(-1).repeat(1, 1, src.shape[-1])
+    #         source_index = src.shape[-1] - int(0.4 * src.shape[-1] / 2)
+    #         resolution = 2e-8
+    #         epsilon = Si_eps(1.55)
+    #         lambda_0 = 1.55e-6
+    #         k = (2 * torch.pi / lambda_0) * torch.sqrt(torch.tensor(epsilon)).to(
+    #             src.device
+    #         )
+    #         y_coords = torch.arange(src.shape[-1]).float().to(src.device)
+    #         distances = torch.abs(y_coords - source_index) * resolution
+    #         phase_shifts = (k * distances).unsqueeze(0)
+    #         mode_y = mode_y * torch.exp(1j * phase_shifts)
+
+    #         mode = mode_x + mode_y  # superposition of two sources
+    #     return mode
+        
+    def _get_temp_multiplier(
+        self,
+        temp: Tensor,
+    ):
+        eps_0 = 12.1104
+        eps_1 = (math.sqrt(eps_0) + (temp - 300) * 1.8e-4) ** 2
+        multiplier = eps_1 / eps_0
+        return multiplier
+
+    def _cal_light_field(
+        self,
+        src: Tensor,
+        monitor_slice: Tensor,
+        wl: float,
+        temp: float,
+        direction: str,
+    ):
+        # src is of shape [h, w]
+        # calculate the wl in temp drifted material
+        # 12.1104 is the permittivity of Si at 300K
+        n_refra = math.sqrt(12.1104) + (temp - 300) * 1.8e-4
+        grid_step = 1 / self.img_res
+        resolution = grid_step * 1e-6
+        lambda_0 = wl * 1e-6
+        k = (2 * torch.pi / lambda_0) * n_refra
+        if "x" in direction:
+            source_index = monitor_slice.x
+            mode = src[source_index, :].repeat(self.img_size, 1)
+            x_coords = torch.arange(self.img_size).float().to(src.device)
+            distances = torch.abs(x_coords - source_index) * resolution
+            phase_shifts = (k * distances).unsqueeze(1)
+            mode = mode * torch.exp(1j * phase_shifts)
+        elif "y" in direction:
+            source_index = monitor_slice.y
+            mode = src[:, source_index].repeat(1, self.img_size)
+            y_coords = torch.arange(self.img_size).float().to(src.device)
+            distances = torch.abs(y_coords - source_index) * resolution
+            phase_shifts = (k * distances).unsqueeze(0)
+            mode = mode * torch.exp(1j * phase_shifts)
+        else:
+            raise ValueError(f"direction {direction} not supported")
+        return mode
+
+    def calculate_incident_light_field(
+        self,
+        source: Tensor,
+        monitor_slices: dict,
+        monitor_slice_list,
+        in_slice_name,
+        wl,
+        temp,
+    ):
+        '''
+        need to read the obj file and determine which objective is calculated to the source
+        '''
+        bs, _, _ = source.shape
+        incident_light_field_list = []
+        if self.train_field == "fwd":
+            for i in range(bs):
+                input_slice_name = in_slice_name[i]
+                src = source[i]
+                monitor_slice_x = monitor_slices[f"port_slice-{input_slice_name}_x"][i]
+                monitor_slice_y = monitor_slices[f"port_slice-{input_slice_name}_y"][i]
+                monitor_slice = Slice(
+                    x=monitor_slice_x,
+                    y=monitor_slice_y,
+                )
+                incident_field = self._cal_light_field(
+                    src, 
+                    monitor_slice, 
+                    wl[i], 
+                    temp[i],
+                    "x",
+                )
+                incident_light_field_list.append(incident_field)
+                # plt.figure()
+                # plt.imshow(incident_field.real.cpu().detach().numpy(), cmap="RdBu")
+                # plt.colorbar()
+                # plt.title("Incident Field")
+                # plt.savefig(f"./figs/incident_field_{i}_fwd.png")
+                # plt.close()
+
+                # plt.figure()
+                # plt.imshow(src.real.cpu().detach().numpy(), cmap="RdBu")
+                # plt.colorbar()
+                # plt.title("Source Field")
+                # plt.savefig(f"./figs/source_field_{i}_fwd.png")
+                # plt.close()
+            incident_light_field = torch.stack(incident_light_field_list, dim=0)
+            return torch.view_as_real(incident_light_field).permute(0, 3, 1, 2) # [bs, 2, h, w]
+        elif self.train_field == "adj":
+            for i in range(bs):
+                src = source[i]
+                incident_light_field_each_comp = []
+                for slice in monitor_slice_list:
+                    if len(slice.x) == 1 and len(slice.y) > 1:
+                        direction = "x"
+                    elif len(slice.y) == 1 and len(slice.x) > 1:
+                        direction = "y"
+                    else:
+                        raise ValueError(f"monitor slice {slice} not supported")
+                    incident_field = self._cal_light_field(
+                        src, # the adjoint source
+                        slice, # the slice that we used to calculate the adjoint source
+                        wl[i], 
+                        temp[i],
+                        direction,
+                    )
+                    incident_light_field_each_comp.append(incident_field)
+                total_incident_field = torch.stack(incident_light_field_each_comp, dim=0).sum(dim=0).squeeze() # H, W
+                # plt.figure()
+                # plt.imshow(total_incident_field.real.cpu().detach().numpy(), cmap="RdBu")
+                # plt.colorbar()
+                # plt.title("Incident Field")
+                # plt.savefig(f"./figs/incident_field_{i}_adj.png")
+                # plt.close()
+
+                # plt.figure()
+                # plt.imshow(src.real.cpu().detach().numpy(), cmap="RdBu")
+                # plt.colorbar()
+                # plt.title("Source Field")
+                # plt.savefig(f"./figs/source_field_{i}_adj.png")
+                # plt.close()
+                incident_light_field_list.append(total_incident_field)
+            incident_light_field = torch.stack(incident_light_field_list, dim=0)
+            return torch.view_as_real(incident_light_field).permute(0, 3, 1, 2) # [bs, 2, h, w]
+        else:
+            raise ValueError(f"train_field {self.train_field} not supported")
 
     def get_grid(self, shape, device: Device, mode: str = "linear", epsilon=None, wavelength=None, grid_step=None):
         # epsilon must be real permittivity without normalization
@@ -368,12 +570,27 @@ class ModelBase(nn.Module):
             # grid_step [bs, 2, 1, 1] real
             # wavelength [bs, 1, 1, 1] real
             # epsilon [bs, 1, h, w] complex
+            # mesh = torch.view_as_real(
+            #     torch.exp(
+            #         mesh.mul(grid_step.div(wavelength).mul(1j * 2 * np.pi)[..., None, None]).mul(epsilon.data.sqrt())
+            #     )
+            # )  # [bs, 2, h, w, 2] real
             mesh = torch.view_as_real(
                 torch.exp(
-                    mesh.mul(grid_step.div(wavelength).mul(1j * 2 * np.pi)[..., None, None]).mul(epsilon.data.sqrt())
+                    mesh.mul((grid_step/wavelength).mul(1j * 2 * np.pi)).mul(epsilon.data.sqrt())
                 )
             )  # [bs, 2, h, w, 2] real
-            return mesh.permute(0, 1, 4, 2, 3).flatten(1, 2)
+            # mesh = mesh.permute(0, 1, 4, 2, 3).flatten(1, 2)
+            # for i in range(4):
+            #     plt.figure()
+            #     plt.imshow(mesh[0, i].cpu().detach().numpy(), cmap="RdBu")
+            #     plt.colorbar()
+            #     plt.title(f"wave_prior_{i}")
+            #     plt.savefig(f"./figs/wave_prior_{i}.png")
+            #     plt.close()
+            # print("this is the shape of the mesh: ", mesh.shape, flush=True)
+            # quit()
+            return mesh.permute(0, 1, 4, 2, 3).flatten(1, 2).to(epsilon.dtype)
         elif mode == "exp3":  # exp in the complex domain
             gridx = torch.arange(0, size_x, device=device)
             gridy = torch.arange(0, size_y, device=device)

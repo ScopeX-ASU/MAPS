@@ -125,14 +125,20 @@ class PredTrainer(object):
             task,
             epoch,
             fp16 = False,
+            n_sample=None,
         ):
         assert task.lower() in ["train", "val", "test"], f"Invalid task {task}"
         self.set_model_status(task)
+        if task.lower() == "test":
+            set_torch_deterministic(42)
         main_criterion_meter, aux_criterion_meter = self.build_meters(task)
 
         data_counter = 0
         total_data = len(data_loader.dataset)  # Total samples
         num_batches = len(data_loader)  # Number of batches
+        if n_sample is not None:
+            num_batches = min(int(n_sample / data_loader.batch_size), num_batches)
+            total_data = num_batches * data_loader.batch_size
 
         iterator = iter(data_loader)
         local_step = 0
@@ -147,9 +153,9 @@ class PredTrainer(object):
             with amp.autocast('cuda', enabled=self.grad_scaler._enabled):
                 if task.lower() != "train":
                     with torch.no_grad():
-                        output = self.forward(data)
+                        output = self.forward(data, epoch)
                 else:
-                    output = self.forward(data)
+                    output = self.forward(data, epoch)
                 loss = self.loss_calculation(
                     output, 
                     data, 
@@ -283,8 +289,8 @@ class PredTrainer(object):
         return main_criterion_meter, aux_criterion_meter
 
 
-    def forward(self, data):
-        output = self.model(data)
+    def forward(self, data, epoch):
+        output = self.model(data, epoch)
         return output # the output has to be a dictionary in which the available keys must be 'forward_field' and 'adjoint_field' or others
 
     def loss_calculation(
@@ -366,19 +372,33 @@ class PredTrainer(object):
                             field_normalizer=data['field_normalizer'],
                         )
                     aux_loss = (aux_loss + adjoint_loss)/2
+                    # print("maxwell aux_loss: ", aux_loss, flush=True)
             elif name == "grad_loss":
                 if adjoint_field is not None:
                     aux_loss = weight * aux_criterion(
                         forward_fields=forward_field,
-                        # forward_fields=data["fwd_field"][:, -2:, ...],
                         adjoint_fields=adjoint_field,  
+                        # forward_fields=data["fwd_field"][:, -2:, ...],
                         # adjoint_fields=data["adj_field"][:, -2:, ...],
                         target_gradient=data['gradient'],
                         gradient_multiplier=data['field_normalizer'],
                         dr_mask=data['design_region_mask'],
                         wl = data['wavelength'],
                     )
-                    print("grad aux_loss: ", aux_loss, flush=True)
+                    # print("grad aux_loss: ", aux_loss, flush=True)
+                else:
+                    raise ValueError("The adjoint field is None, the gradient loss cannot be calculated")
+            elif name == "grad_similarity_loss":
+                if adjoint_field is not None:
+                    aux_loss = weight * aux_criterion(
+                        # forward_fields=data["fwd_field"][:, -2:, ...],
+                        # adjoint_fields=data["adj_field"][:, -2:, ...],
+                        forward_fields=forward_field,
+                        adjoint_fields=adjoint_field,  
+                        target_gradient=data['gradient'],
+                        dr_mask=data['design_region_mask'],
+                    )
+                    # print("grad similarity aux_loss: ", aux_loss, flush=True)
                 else:
                     raise ValueError("The adjoint field is None, the gradient loss cannot be calculated")
             elif name == "s_param_loss": 
@@ -399,13 +419,10 @@ class PredTrainer(object):
                 # in this loss function, we don't calculate the S-params from the forward field, 
                 # we directly compare the S-params from the prediction and the GT S-params from the data
                 assert s_params is not None, "The s_params should not be None"
-                aux_loss = [
-                    weight * aux_criterion(
-                        s_param, 
+                aux_loss = weight * aux_criterion(
+                        s_params, 
                         data['s_params'],
-                    ) for (wl, mode, temp, in_port_name, out_port_name), s_param in s_params.items()
-                ]
-                aux_loss = torch.stack(aux_loss).mean()
+                    )
             elif name == "Hx_loss":
                 aux_loss = weight * aux_criterion(
                         forward_field[:, :2, ...],

@@ -1,13 +1,25 @@
 dataset:
   name: fdfd
   root: ./data
+  test_ratio: 0.1
+  train_valid_split_ratio: [0.9, 0.1]
+  num_workers: 4
+  shuffle: True
+  device_type: bending
+  data_dir: raw_opt_traj_ptb
+  processed_dir: bending
+  augment:
+    prob: 0.0
+
+test_dataset:
+  name: fdfd
+  root: ./data
   test_ratio: 0.9
   train_valid_split_ratio: [0.9, 0.1]
   num_workers: 4
-  shuffle: False
+  shuffle: True
   device_type: bending
-  data_dir: raw_opt_traj_10
-  # data_dir: raw_test
+  data_dir: raw_test
   processed_dir: bending
   augment:
     prob: 0.0
@@ -119,7 +131,7 @@ checkpoint:
   checkpoint_dir: "metacoupler/local_search/train_local_search"
   model_comment: ""
   resume: 1
-  restore_checkpoint: "./checkpoint/fdfd/unet/train/dual_predictor_model-UNet_dev-bending_field-fwd_id-2_dcrp-Exp1_UNet_S_param_only_err-11.0020_epoch-36.pt"
+  restore_checkpoint: "./checkpoint/fdfd/unet/train/dual_predictor_model-UNet_dev-bending_field-fwd_id-2_dcrp-Exp1_UNet_single_value_pred_err-0.1193_epoch-31.pt"
   no_linear: 0
 
 model_fwd:
@@ -129,10 +141,12 @@ model_fwd:
   wl: [1.55]
   mode: [1]
   in_out_port_name: [['in_port_1', 'out_port_1']]
-  dim: 64
+  dim: 32
   img_size: 256
   mapping_size: 64
   fourier_feature: none
+  incident_field: False
+  pos_encoding: none
   output_sparam: True
 
 debug:

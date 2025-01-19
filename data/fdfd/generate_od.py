@@ -32,9 +32,9 @@ def compare_designs(design_regions_1, design_regions_2):
     return torch.mean(torch.stack(similarity)).item()
 
 
-def optical_diode_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.15]):
+def optical_diode_opt(device_id, operation_device, each_step=False, include_perturb=False, perturb_probs=[0.05, 0.1, 0.15]):
     set_torch_deterministic(int(device_id))
-    dump_data_path = f"./data/fdfd/optical_diode/raw_opt_traj_ptb"
+    dump_data_path = f"./data/fdfd/optical_diode/raw_test"
     sim_cfg = DefaultSimulationConfig()
     target_img_size = 256
     resolution = 50
@@ -48,14 +48,14 @@ def optical_diode_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.1
     assert round(optical_diode_region_size[0] + 2 * port_len, 2) == target_cell_size, f"right hand side: {optical_diode_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
 
     input_port_width = 0.48
-    output_port_width = 0.8
+    output_port_width = 0.48
 
     sim_cfg.update(
         dict(
             solver="ceviche_torch",
             border_width=[0, 0, port_len, port_len],
             resolution=resolution,
-            plot_root=f"./data/fdfd/optical_diode/plot_opt_traj_ptb/optical_diode_{device_id}",
+            plot_root=f"./data/fdfd/optical_diode/plot_test/optical_diode_{device_id}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -141,7 +141,7 @@ def optical_diode_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.1
                     plot_filename=f"optical_diode_opt_step_{step}_bwd_perturbed_{i}.png",
                     field_key=("out_slice_1", 1.55, 1, 300),
                     field_component="Ez",
-                    in_slice_name="in_slice_1",
+                    in_slice_name="out_slice_1",
                     exclude_slice_names=[],
                 )
 
@@ -213,14 +213,14 @@ def optical_diode_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.1
                 plot_filename="optical_diode_opt_step_{}_bwd.png".format(step),
                 field_key=("out_slice_1", 1.55, 1, 300),
                 field_component="Ez",
-                in_slice_name="in_slice_1",
+                in_slice_name="out_slice_1",
                 exclude_slice_names=[],
             )
         else:
             cosine_similarity = compare_designs(
                 last_design_region_dict, current_design_region_dict
             )
-            if cosine_similarity < 0.996 or step == n_epoch - 1:
+            if cosine_similarity < 0.996 or step == n_epoch - 1 or each_step:
                 opt.dump_data(
                     filename_h5=filename_h5, filename_yml=filename_yml, step=step
                 )
@@ -241,7 +241,7 @@ def optical_diode_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.1
                     plot_filename="optical_diode_opt_step_{}_bwd.png".format(step),
                     field_key=("out_slice_1", 1.55, 1, 300),
                     field_component="Ez",
-                    in_slice_name="in_slice_1",
+                    in_slice_name="out_slice_1",
                     exclude_slice_names=[],
                 )
         # for p in opt.parameters():
@@ -250,24 +250,28 @@ def optical_diode_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.1
         optimizer.step()
         scheduler.step()
         sharp_scheduler.step()
-        if dumped_data:
+        if dumped_data and include_perturb:
             for i, prob in enumerate(perturb_probs):
                 perturb_and_dump(step, flip_prob=prob, i=i)
             dumped_data = False
-            # quit()
+        #     # quit()
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--random_seed", type=int, default=0)
     parser.add_argument("--gpu_id", type=int, default=0)
+    parser.add_argument("--each_step", type=int, default=0)
+    parser.add_argument("--include_perturb", type=int, default=0)
     random_seed = parser.parse_args().random_seed
     gpu_id = parser.parse_args().gpu_id
+    each_step = parser.parse_args().each_step
+    include_perturb = parser.parse_args().include_perturb
     torch.cuda.set_device(gpu_id)
     device = torch.device("cuda:" + str(gpu_id))
     torch.backends.cudnn.benchmark = True
     set_torch_deterministic(int(41 + random_seed))
-    optical_diode_opt(random_seed, device)
+    optical_diode_opt(random_seed, device, each_step, include_perturb)
 
 
 if __name__ == "__main__":

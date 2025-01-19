@@ -321,7 +321,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                 Jz.unsqueeze(0),
             )
             if isinstance(x, tuple):
-                x = x[-1]  # that the model have error correction
+                x = x[0]
             x = x.permute(0, 2, 3, 1).contiguous()
             x = torch.view_as_complex(x)
             x = x.flatten()
@@ -363,6 +363,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         )
         ctx.numerical_solver = numerical_solver
         ctx.eps = eps
+        ctx.omega = omega
         return x
 
     @staticmethod
@@ -381,6 +382,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             mode = ctx.mode
             temp = ctx.temp
             Pl, Pr = ctx.Pl, ctx.Pr
+            omega = ctx.omega
             A_t = make_sparse(
                 entries_a, indices_a, (eps_diag.shape[0], eps_diag.shape[0])
             )
@@ -420,6 +422,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                 adj = adj.permute(0, 2, 3, 1).contiguous()
                 adj = torch.view_as_complex(adj)
                 adj = adj.flatten()
+                adj = adj / 1e23
             elif numerical_solver == "solve_iterative":
                 adj = solve_linear(
                     A_t,
@@ -455,6 +458,10 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                     grad_epsilon.to(torch.float32).detach()
                 )
             grad_b = None
+            # print("this is the statses of the adjoint field", flush=True)
+            # print_stat(adj)
+            # print("this is the statses of the gradient of epsilon", flush=True)
+            # print_stat(grad_epsilon)
             return None, None, grad_epsilon, None, grad_b, None, None, None, None, None, None, None, None, None, None
 
 

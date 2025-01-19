@@ -32,7 +32,7 @@ def compare_designs(design_regions_1, design_regions_2):
     return torch.mean(torch.stack(similarity)).item()
 
 
-def wdm_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.15]):
+def wdm_opt(device_id, operation_device, each_step=False, include_perturb=False, perturb_probs=[0.05, 0.1, 0.15]):
     set_torch_deterministic(int(device_id))
     dump_data_path = f"./data/fdfd/wdm/raw_opt_traj_ptb"
     sim_cfg = DefaultSimulationConfig()
@@ -73,7 +73,7 @@ def wdm_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.15]):
         port_width=(input_port_width, output_port_width),
         device=operation_device,
     )
-    hr_device = device.copy(resolution=100)
+    hr_device = device.copy(resolution=50)
     print(device)
     opt = WDMOptimization(
         device=device,
@@ -132,7 +132,7 @@ def wdm_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.15]):
                 opt.plot(
                     eps_map=opt._eps_map,
                     obj=results["breakdown"]["wl1_trans"]["value"],
-                    plot_filename=f"wdm_opt_step_{step}_mode1_fwd_perturbed_{i}.png",
+                    plot_filename=f"wdm_opt_step_{step}_wl1_fwd_perturbed_{i}.png",
                     field_key=("in_slice_1", 1.54, 1, 300),
                     field_component="Ez",
                     in_slice_name="in_slice_1",
@@ -141,7 +141,7 @@ def wdm_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.15]):
                 opt.plot(
                     eps_map=opt._eps_map,
                     obj=results["breakdown"]["wl2_trans"]["value"],
-                    plot_filename=f"wdm_opt_step_{step}_mode2_fwd_perturbed_{i}.png",
+                    plot_filename=f"wdm_opt_step_{step}_wl2_fwd_perturbed_{i}.png",
                     field_key=("in_slice_1", 1.56, 1, 300),
                     field_component="Ez",
                     in_slice_name="in_slice_1",
@@ -204,7 +204,7 @@ def wdm_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.15]):
             opt.plot(
                 eps_map=opt._eps_map,
                 obj=results["breakdown"]["wl1_trans"]["value"],
-                plot_filename="wdm_opt_step_{}_mode1_fwd.png".format(step),
+                plot_filename="wdm_opt_step_{}_wl1_fwd.png".format(step),
                 field_key=("in_slice_1", 1.54, 1, 300),
                 field_component="Ez",
                 in_slice_name="in_slice_1",
@@ -213,7 +213,7 @@ def wdm_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.15]):
             opt.plot(
                 eps_map=opt._eps_map,
                 obj=results["breakdown"]["wl2_trans"]["value"],
-                plot_filename="wdm_opt_step_{}_mode2_fwd.png".format(step),
+                plot_filename="wdm_opt_step_{}_wl2_fwd.png".format(step),
                 field_key=("in_slice_1", 1.56, 1, 300),
                 field_component="Ez",
                 in_slice_name="in_slice_1",
@@ -223,7 +223,7 @@ def wdm_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.15]):
             cosine_similarity = compare_designs(
                 last_design_region_dict, current_design_region_dict
             )
-            if cosine_similarity < 0.996 or step == n_epoch - 1:
+            if cosine_similarity < 0.996 or step == n_epoch - 1 or each_step:
                 opt.dump_data(
                     filename_h5=filename_h5, filename_yml=filename_yml, step=step
                 )
@@ -232,7 +232,7 @@ def wdm_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.15]):
                 opt.plot(
                     eps_map=opt._eps_map,
                     obj=results["breakdown"]["wl1_trans"]["value"],
-                    plot_filename="wdm_opt_step_{}_mode1_fwd.png".format(step),
+                    plot_filename="wdm_opt_step_{}_wl1_fwd.png".format(step),
                     field_key=("in_slice_1", 1.54, 1, 300),
                     field_component="Ez",
                     in_slice_name="in_slice_1",
@@ -241,7 +241,7 @@ def wdm_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.15]):
                 opt.plot(
                     eps_map=opt._eps_map,
                     obj=results["breakdown"]["wl2_trans"]["value"],
-                    plot_filename="wdm_opt_step_{}_mode2_fwd.png".format(step),
+                    plot_filename="wdm_opt_step_{}_wl2_fwd.png".format(step),
                     field_key=("in_slice_1", 1.56, 1, 300),
                     field_component="Ez",
                     in_slice_name="in_slice_1",
@@ -253,10 +253,10 @@ def wdm_opt(device_id, operation_device, perturb_probs=[0.05, 0.1, 0.15]):
         optimizer.step()
         scheduler.step()
         sharp_scheduler.step()
-        # if dumped_data:
-        #     for i, prob in enumerate(perturb_probs):
-        #         perturb_and_dump(step, flip_prob=prob, i=i)
-        #     dumped_data = False
+        if dumped_data and include_perturb:
+            for i, prob in enumerate(perturb_probs):
+                perturb_and_dump(step, flip_prob=prob, i=i)
+            dumped_data = False
         #     # quit()
 
 
@@ -264,13 +264,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--random_seed", type=int, default=0)
     parser.add_argument("--gpu_id", type=int, default=0)
+    parser.add_argument("--each_step", type=int, default=0)
+    parser.add_argument("--include_perturb", type=int, default=0)
     random_seed = parser.parse_args().random_seed
     gpu_id = parser.parse_args().gpu_id
+    each_step = parser.parse_args().each_step
+    include_perturb = parser.parse_args().include_perturb
     torch.cuda.set_device(gpu_id)
     device = torch.device("cuda:" + str(gpu_id))
     torch.backends.cudnn.benchmark = True
     set_torch_deterministic(int(41 + random_seed))
-    wdm_opt(random_seed, device)
+    wdm_opt(random_seed, device, each_step, include_perturb)
 
 
 if __name__ == "__main__":

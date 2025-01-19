@@ -33,77 +33,78 @@ import copy
 class fwd_predictor(nn.Module):
     def __init__(self, model_fwd):
         super(fwd_predictor, self).__init__()
-        self.model_fwd = nn.ModuleDict({
-            f"{str(wl).replace('.', 'p')}-{mode}-{temp}-{in_port_name}-{out_port_name}": model
-            for (wl, mode, temp, in_port_name, out_port_name), model in model_fwd.items()
-        }) # this is now a dictionary of models [wl, mode, temp, in_port_name, out_port_name] -> model # most of the time it should contain at most 2 models
+        self.model_fwd = model_fwd # this is now a dictionary of models [wl, mode, temp, in_port_name, out_port_name] -> model # most of the time it should contain at most 2 models
 
     def forward(
         self, 
-        data
+        data, 
+        epoch=1,
     ):
+    # return_dict = {
+    #     "eps_map": eps_map,
+    #     "adj_src": adj_src,
+    #     "gradient": gradient,
+    #     "fwd_field": fwd_field,
+    #     "s_params": s_params,
+    #     "src_profile": src_profile,
+    #     "adj_field": adj_field,
+    #     "field_normalizer": field_adj_normalizer,
+    #     "design_region_mask": design_region_mask,
+    #     "ht_m": ht_m,
+    #     "et_m": et_m,
+    #     "monitor_slices": monitor_slices,
+    #     "A": A,
+    #     "opt_cfg_file_path": opt_cfg_file_path,
+    #     "input_slice": input_slice,
+    #     "wavelength": wavelength,
+    #     "mode": mode,
+    #     "temp": temp,
+    # }
         eps = data["eps_map"]
         src = {}
-        x_fwd = {}
-        forward_field = {}
-        s_params = {} # we may have an aux head to predict s_params
-        # ['eps_map', 'adj_srcs', 'gradient', 'field_solutions', 's_params', 'src_profiles', 'fields_adj', 'field_normalizer', 'design_region_mask', 'ht_m', 'et_m', 'monitor_slices', 'As', 'opt_cfg_file_path']
-        # this is the key of data htms:  
-        # [
-        #     'ht_m-wl-1.55-port-in_port_1-mode-1', 
-        #     'ht_m-wl-1.55-port-in_port_1-mode-1-origin_size', 
-        #     'ht_m-wl-1.55-port-in_port_1-mode-2', 
-        #     'ht_m-wl-1.55-port-in_port_1-mode-2-origin_size', 
-        #     'ht_m-wl-1.55-port-out_port_1-mode-1', 
-        #     'ht_m-wl-1.55-port-out_port_1-mode-1-origin_size', 
-        #     'ht_m-wl-1.55-port-out_port_2-mode-2', 
-        #     'ht_m-wl-1.55-port-out_port_2-mode-2-origin_size', 
-        #     'ht_m-wl-1.55-port-refl_port_1-mode-1', 
-        #     'ht_m-wl-1.55-port-refl_port_1-mode-1-origin_size', 
-        #     'ht_m-wl-1.55-port-refl_port_1-mode-2', 
-        #     'ht_m-wl-1.55-port-refl_port_1-mode-2-origin_size'
-        # ]
-        # this is the keys in adjoint field:  
-        # ['fields_adj-wl-1.55-port-in_port_1-mode-1', 'fields_adj-wl-1.55-port-in_port_1-mode-2']
-        # keys in field solutions:
-        # ['field_solutions-wl-1.55-port-in_port_1-mode-1-temp-300', 'field_solutions-wl-1.55-port-out_port_1-mode-1-temp-300', 'field_solutions-wl-1.55-port-refl_port_1-mode-1-temp-300']
-        for key, model in self.model_fwd.items():
-            wl, mode, temp, in_port_name, out_port_name = key.split("-")
-            wl, mode, temp = float(wl.replace('p', '.')), int(mode), eval(temp)
-            src[(wl, mode, in_port_name)] = data["src_profiles"][f"source_profile-wl-{wl}-port-{in_port_name}-mode-{mode}"]
-            fwd_model_output = model(eps, src[(wl, mode, in_port_name)])
-            if isinstance(fwd_model_output, tuple):
-                assert len(fwd_model_output) == 2, "fwd_model_output should be a tuple of length 2"
-                x_fwd[(wl, mode, temp, in_port_name, out_port_name)] = fwd_model_output[0]
-                s_params[(wl, mode, temp, in_port_name, out_port_name)] = fwd_model_output[1]
-            else:
-                x_fwd[(wl, mode, temp, in_port_name, out_port_name)] = fwd_model_output
-            with torch.enable_grad():
-                forward_field[(wl, mode, temp, in_port_name, out_port_name)], _ = cal_total_field_adj_src_from_fwd_field(
-                    Ez=x_fwd[(wl, mode, temp, in_port_name, out_port_name)],
-                    # Ez=data["field_solutions"]["field_solutions-wl-1.55-port-in_port_1-mode-1-temp-300"][:, -2:, ...],
-                    eps=eps,
-                    ht_ms=data["ht_m"], # this two only used for adjoint field calculation, we don't need it here in forward pass
-                    et_ms=data["et_m"],
-                    monitors=data["monitor_slices"],
-                    pml_mask=model.pml_mask,
-                    from_Ez_to_Hx_Hy_func=from_Ez_to_Hx_Hy,
-                    return_adj_src=False,
-                    sim=model.sim,
-                    opt_cfg_file_path=data['opt_cfg_file_path'],
-                    wl=wl,
-                    mode=mode,
-                    temp=temp,
-                    in_port_name=in_port_name,
-                    out_port_name=out_port_name,
-                )
+        wl = data["wavelength"]
+        mode = data["mode"]
+        temp = data["temp"]
+        in_slice_name = data["input_slice"]
+        src = data["src_profile"]
+        fwd_model_output = self.model_fwd(
+            eps, 
+            src,
+            monitor_slices=data["monitor_slices"],
+            monitor_slice_list=None,
+            in_slice_name=in_slice_name,
+            wl=wl,
+            temp=temp,
+        )
+        if isinstance(fwd_model_output, tuple):
+            assert len(fwd_model_output) == 2, "fwd_model_output should be a tuple of length 2"
+            fwd_Ez_field = fwd_model_output[0]
+            s_params = fwd_model_output[1]
+        with torch.enable_grad():
+            fwd_field, _, _ = cal_total_field_adj_src_from_fwd_field(
+                Ez4adj=data["fwd_field"][:, -2:, ...],
+                Ez4fullfield=fwd_Ez_field,
+                # Ez=data["fwd_field"][:, -2:, ...],
+                eps=eps,
+                ht_ms=data["ht_m"], # this two only used for adjoint field calculation, we don't need it here in forward pass
+                et_ms=data["et_m"],
+                monitors=data["monitor_slices"],
+                pml_mask=self.model_fwd.pml_mask,
+                return_adj_src=False,
+                sim=self.model_fwd.sim,
+                opt_cfg_file_path=data['opt_cfg_file_path'],
+                wl=wl,
+                mode=mode,
+                temp=temp,
+                src_in_slice_name=in_slice_name,
+            )
         return {
-            "forward_field": forward_field,
+            "forward_field": fwd_field,
             "s_params": s_params if len(s_params) > 0 else None, # only pass s_params if we have s-param head to predict s_params
             "adjoint_field": None,
             "adjoint_source": None,
         }
-
+    
 def test_grad(
     model,
     test_loader,
@@ -134,27 +135,14 @@ def test_grad(
         data["eps_map"] = eps
         with amp.autocast('cuda', enabled=False):
             output = model(data)
-            fwd_field = output["forward_field"][(1.55, 1, 300, 'in_port_1', 'out_port_1')]
+            fwd_field = output["forward_field"]
             if output["s_params"] is not None:
-                s_params = output["s_params"][(1.55, 1, 300, 'in_port_1', 'out_port_1')]
+                s_params = output["s_params"]
                 fom = - s_params[:, 0] + 0.1 * s_params[:, 1]
             else:
                 # calculate the figure of merit from forward field
                 print("this is the key of the model_fwd: ", list(model.model_fwd.keys()), flush=True)
                 quit()
-                # fom = cal_fom_from_fields(
-                #         Ez = fwd_field,
-                #         eps = eps,
-                #         ht_ms = data["ht_m"],
-                #         et_ms = data["et_m"],
-                #         monitors = data["monitor_slices"],
-                #         sim = model.sim,
-                #         opt_cfg_file_path,
-                #         wl,
-                #         mode,
-                #         temp,
-                #         in_port_name,
-                # )
 
 
 
@@ -188,24 +176,40 @@ def test_grad(
             masked_grad_i = grad_i * dr_mask  # Apply the mask to grad_i
             masked_grad_gt_i = grad_gt_i * dr_mask  # Apply the mask to grad_gt_i
 
+            if local_step == 1 and i == 0:
+                cal_vmax = masked_grad_i[
+                    x_start: x_stop,
+                    y_start: y_stop,
+                ].abs().max().item()
+
+                plt.figure()
+                plt.imshow(np.rot90(masked_grad_i[
+                    x_start: x_stop,
+                    y_start: y_stop,
+                ].detach().cpu().numpy()), cmap='RdBu', vmin=-cal_vmax, vmax=cal_vmax)
+                plt.colorbar()
+                plt.title("gradients")
+                plt.savefig(f"./figs/gradients_ad_S_{configs.model_fwd.type}.png", dpi=300)
+                plt.close()
+
+                gt_vmax = masked_grad_gt_i[
+                    x_start: x_stop,
+                    y_start: y_stop,
+                ].abs().max().item()
+
+                plt.figure()
+                plt.imshow(np.rot90(masked_grad_gt_i[
+                    x_start: x_stop,
+                    y_start: y_stop,
+                ].detach().cpu().numpy()), cmap='RdBu', vmin=-gt_vmax, vmax=gt_vmax)
+                plt.colorbar()
+                plt.title("grad_gt")
+                plt.savefig(f"./figs/grad_gt_ad_S_{configs.model_fwd.type}.png", dpi=300)
+                plt.close()
+
             # Flatten the masked gradients to 1D tensors
             masked_grad_i_flat = masked_grad_i[y_start:y_stop, x_start:x_stop].flatten()
             masked_grad_gt_i_flat = masked_grad_gt_i[y_start:y_stop, x_start:x_stop].flatten()
-
-            # plt.figure()
-            # plt.imshow(masked_grad_i_flat.reshape(x_stop - x_start, y_stop - y_start).cpu().numpy(), cmap='RdYlBu')
-            # plt.colorbar()
-            # plt.title("norm_grad_i")
-            # plt.savefig(f"./figs/grad_{i}.png")
-            # plt.close()
-
-            # plt.figure()
-            # plt.imshow(masked_grad_gt_i_flat.reshape(x_stop - x_start, y_stop - y_start).cpu().numpy(), cmap='RdYlBu')
-            # plt.colorbar()
-            # plt.title("norm_grad_gt_i")
-            # plt.savefig(f"./figs/grad_gt_{i}.png")
-            # plt.close()
-            # quit()
 
             # Compute cosine similarity
             cosine_similarity = F.cosine_similarity(
@@ -233,9 +237,9 @@ def main():
     if hasattr(configs.model_fwd, "mode_list"):
         if configs.model_fwd.type != "FNO2d":
             assert hasattr(configs.model_fwd, "kernel_list"), "kernel_list should be defined if mode_list is defined"
-            configs['model_fwd']['mode_list'] = [(60, 60)] * len(configs['model_fwd']['kernel_list'])
+            configs['model_fwd']['mode_list'] = [(50, 50)] * len(configs['model_fwd']['kernel_list'])
         else:
-            configs['model_fwd']['mode_list'] = [(60, 60)] * 4
+            configs['model_fwd']['mode_list'] = [(50, 50)] * 4
     if torch.cuda.is_available() and int(configs.run.use_cuda):
         torch.cuda.set_device(configs.run.gpu_id)
         device = torch.device("cuda:" + str(configs.run.gpu_id))
@@ -247,17 +251,9 @@ def main():
     print("this is the config: \n", configs, flush=True)
     if int(configs.run.deterministic) == True:
         set_torch_deterministic(int(configs.run.random_state))
-    model_fwd = {}
-    assert len(configs.model_fwd.temp) == len(configs.model_fwd.mode) == len(configs.model_fwd.wl) == len(configs.model_fwd.in_out_port_name), "temp, mode, wl, in_out_port_name should have the same length"
-    for i in range(len(configs.model_fwd.temp)):
-        model_cfg = copy.deepcopy(configs.model_fwd)
-        model_cfg.temp = temp = model_cfg.temp[i]
-        model_cfg.mode = mode = model_cfg.mode[i]
-        model_cfg.wl = wl = model_cfg.wl[i]
-        model_cfg.in_port_name = in_port_name = model_cfg.in_out_port_name[i][0]
-        model_cfg.out_port_name = out_port_name = model_cfg.in_out_port_name[i][1]
-        model_fwd[(wl, mode, temp, in_port_name, out_port_name)] = builder.make_model(device=device, **model_cfg)
-    # model_fwd = builder.make_model(device=device, **configs.model_fwd)
+
+    configs.model_fwd.device = device
+    model_fwd = builder.make_model(**configs.model_fwd)
     print("this is the model: \n", model_fwd, flush=True)
 
     model = fwd_predictor(model_fwd)
@@ -325,13 +321,12 @@ def main():
         grad_scaler=grad_scaler,
         device=device, 
     )
-    trainer.train(
-        data_loader=test_loader,
-        task='test',
-        epoch=0,
-    )
-    quit()
-    assert configs.dataset.data_dir == "raw_test"
+    # trainer.train(
+    #     data_loader=test_loader,
+    #     task='test',
+    #     epoch=0,
+    # )
+    # quit()
     test_grad(
         model=model,
         test_loader=test_loader,

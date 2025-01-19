@@ -120,7 +120,7 @@ class FDFD(VisionDataset):
             ]
         total_device_id = []
         for filename in all_samples:
-            device_id = filename.split("_")[1].split("-")[1]
+            device_id = filename.split("_id-")[1].split("_")[0]
             if device_id not in total_device_id:
                 total_device_id.append(device_id)
         return total_device_id
@@ -129,6 +129,12 @@ class FDFD(VisionDataset):
         from sklearn.model_selection import train_test_split
         print("this is the train ratio: ", self.train_ratio, flush=True)
         print("this is the length of the filenames: ", len(filenames), flush=True)
+        if len(filenames) * self.train_ratio < 1:
+            assert "test" in self.data_dir.lower(), "only in test dataset, training set can be empty"
+            return (
+                [],
+                filenames,
+            )
         (
             filenames_train,
             filenames_test,
@@ -154,7 +160,7 @@ class FDFD(VisionDataset):
         filename_train = []
         filename_test = []
         for filename in all_samples:
-            device_id = filename.split("_")[1].split("-")[1]
+            device_id = filename.split("_id-")[1].split("_")[0]
             opt_step = eval(filename.split("_")[-1].split(".")[0])
             if device_id in data_train: # only take the last step
                 filename_train.append(filename)
