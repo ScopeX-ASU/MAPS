@@ -2,40 +2,32 @@
 Description:
 Author: Jiaqi Gu (jqgu@utexas.edu)
 Date: 2022-03-03 01:17:52
-LastEditors: Jiaqi Gu (jqgu@utexas.edu)
-LastEditTime: 2022-03-05 03:25:43
+LastEditors: Jiaqi Gu && jiaqigu@asu.edu
+LastEditTime: 2025-01-06 15:29:10
 """
 
-from typing import List, Optional, Tuple
+from typing import Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from pyutils.activation import Swish
+from einops import rearrange
+from mmcv.cnn.bricks import build_activation_layer, build_norm_layer
+from mmengine.registry import MODELS
 from timm.models.layers import DropPath, to_2tuple
-from torch import nn
 from torch.functional import Tensor
 from torch.types import Device, _size
 from torch.utils.checkpoint import checkpoint
-from pyutils.torch_train import set_torch_deterministic
-from mmengine.registry import MODELS
-from thirdparty.ceviche.ceviche.constants import *
-from .layers.neurolight_conv2d import NeurOLightConv2d
-from .pde_base import PDE_NN_BASE
-from .layers.layer_norm import MyLayerNorm
-from core.utils import print_stat, resize_to_targt_size
-from core.fdfd.fdfd import fdfd_ez
-from ceviche.constants import *
-import matplotlib.pyplot as plt
-from .model_base import ModelBase, ConvBlock, LinearBlock
-from .fno_cnn import LearnableFourierFeatures
-from einops import rearrange
+
 from core.utils import (
     Si_eps,
-    SiO2_eps,
 )
-from mmcv.cnn.bricks import build_activation_layer, build_conv_layer, build_norm_layer
+from thirdparty.ceviche.constants import *
+
+from .fno_cnn import LearnableFourierFeatures
+from .layers.neurolight_conv2d import NeurOLightConv2d
+from .model_base import ConvBlock, ModelBase
+
 __all__ = ["NeurOLight2d"]
 
 
@@ -54,7 +46,10 @@ class BSConv2d(nn.Module):
         stride = to_2tuple(stride)
         dilation = to_2tuple(dilation)
         # same padding
-        padding = [(dilation[i] * (kernel_size[i] - 1) + 1) // 2 for i in range(len(kernel_size))]
+        padding = [
+            (dilation[i] * (kernel_size[i] - 1) + 1) // 2
+            for i in range(len(kernel_size))
+        ]
         self.conv = nn.Sequential(
             nn.Conv2d(
                 in_channels,
@@ -100,7 +95,10 @@ class ResStem(nn.Module):
         stride = to_2tuple(stride)
         dilation = to_2tuple(dilation)
         # same padding
-        padding = [(dilation[i] * (kernel_size[i] - 1) + 1) // 2 for i in range(len(kernel_size))]
+        padding = [
+            (dilation[i] * (kernel_size[i] - 1) + 1) // 2
+            for i in range(len(kernel_size))
+        ]
 
         self.conv1 = BSConv2d(
             in_channels,
@@ -117,7 +115,11 @@ class ResStem(nn.Module):
         if act_cfg is not None:
             act_cfg_copy = act_cfg.copy()
             act_cfg_copy["inplace"] = True
-            self.act1 = build_activation_layer(act_cfg_copy) if act_cfg['type'].lower == "relu" else build_activation_layer(act_cfg)
+            self.act1 = (
+                build_activation_layer(act_cfg_copy)
+                if act_cfg["type"].lower == "relu"
+                else build_activation_layer(act_cfg)
+            )
         else:
             self.act1 = None
 
@@ -136,7 +138,11 @@ class ResStem(nn.Module):
         if act_cfg is not None:
             act_cfg_copy = act_cfg.copy()
             act_cfg_copy["inplace"] = True
-            self.act2 = build_activation_layer(act_cfg_copy) if act_cfg['type'].lower == "relu" else build_activation_layer(act_cfg)
+            self.act2 = (
+                build_activation_layer(act_cfg_copy)
+                if act_cfg["type"].lower == "relu"
+                else build_activation_layer(act_cfg)
+            )
         else:
             self.act2 = None
 
@@ -152,6 +158,7 @@ class ResStem(nn.Module):
         if self.act2 is not None:
             x = self.act2(x)
         return x
+
 
 class NeurOLight2dBlock(nn.Module):
     expansion = 2
@@ -174,13 +181,21 @@ class NeurOLight2dBlock(nn.Module):
     ) -> None:
         super().__init__()
         self.drop_path_rate = drop_path_rate
-        self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0 else nn.Identity()
-        self.f_conv = NeurOLightConv2d(in_channels, out_channels, n_modes, device=device)
+        self.drop_path = (
+            DropPath(drop_path_rate) if drop_path_rate > 0 else nn.Identity()
+        )
+        self.f_conv = NeurOLightConv2d(
+            in_channels, out_channels, n_modes, device=device
+        )
 
         if norm_cfg is not None:
             _, self.pre_norm = build_norm_layer(norm_cfg, in_channels)
             _, self.norm = build_norm_layer(norm_cfg, out_channels)
-            _, self.ffn_norm = build_norm_layer(norm_cfg, out_channels * self.expansion) if ffn else (None, None)
+            _, self.ffn_norm = (
+                build_norm_layer(norm_cfg, out_channels * self.expansion)
+                if ffn
+                else (None, None)
+            )
         else:
             self.pre_norm = None
             self.norm = None
@@ -221,7 +236,9 @@ class NeurOLight2dBlock(nn.Module):
         else:
             self.ff = None
         if aug_path:
-            self.aug_path = nn.Sequential(BSConv2d(in_channels, out_channels, 3), self.act_func)
+            self.aug_path = nn.Sequential(
+                BSConv2d(in_channels, out_channels, 3), self.act_func
+            )
         else:
             self.aug_path = None
 
@@ -241,6 +258,7 @@ class NeurOLight2dBlock(nn.Module):
             return checkpoint(_inner_forward, x)
         else:
             return _inner_forward(x)
+
 
 @MODELS.register_module()
 class NeurOLight2d(ModelBase):
@@ -318,7 +336,6 @@ class NeurOLight2d(ModelBase):
         self.build_pml_mask()
         self.build_sim()
         self.set_trainable_permittivity(False)
-
 
     def load_cfgs(
         self,
@@ -414,7 +431,14 @@ class NeurOLight2d(ModelBase):
         hidden_list = [self.kernel_list[-1]] + self.hidden_list
         head = [
             nn.Sequential(
-                ConvBlock(inc, outc, kernel_size=1, padding=0, act_cfg=self.act_cfg, device=self.device),
+                ConvBlock(
+                    inc,
+                    outc,
+                    kernel_size=1,
+                    padding=0,
+                    act_cfg=self.act_cfg,
+                    device=self.device,
+                ),
                 nn.Dropout2d(self.dropout_rate),
             )
             for inc, outc in zip(hidden_list[:-1], hidden_list[1:])
@@ -437,7 +461,14 @@ class NeurOLight2d(ModelBase):
             hidden_list = [self.kernel_list[self.aux_head_idx]] + self.hidden_list
             head = [
                 nn.Sequential(
-                    ConvBlock(inc, outc, kernel_size=1, padding=0, act_func=self.act_func, device=self.device),
+                    ConvBlock(
+                        inc,
+                        outc,
+                        kernel_size=1,
+                        padding=0,
+                        act_func=self.act_func,
+                        device=self.device,
+                    ),
                     nn.Dropout2d(self.dropout_rate),
                 )
                 for inc, outc in zip(hidden_list[:-1], hidden_list[1:])
@@ -457,7 +488,6 @@ class NeurOLight2d(ModelBase):
             self.aux_head = nn.Sequential(*head)
         else:
             self.aux_head = None
-
 
     def fourier_feature_mapping(self, x: Tensor) -> Tensor:
         if self.fourier_feature == "none":
@@ -581,7 +611,11 @@ class NeurOLight2d(ModelBase):
             eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1)
         else:
             enc_fwd = self.fourier_feature_mapping(eps)
-            eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1) if self.fourier_feature != "none" else eps
+            eps_enc_fwd = (
+                torch.cat((eps, enc_fwd), dim=1)
+                if self.fourier_feature != "none"
+                else eps
+            )
 
         if self.incident_field_fwd:
             x = torch.cat((eps_enc_fwd, incident_field_fwd), dim=1)

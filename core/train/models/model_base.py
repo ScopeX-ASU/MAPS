@@ -1,18 +1,19 @@
+import copy
 import inspect
 from typing import Dict, Optional, Union
 
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
 from mmcv.cnn.bricks import build_activation_layer, build_conv_layer, build_norm_layer
 from mmengine.registry import MODELS
+from pyutils.torch_train import set_torch_deterministic
 from torch import Tensor
 from torch.types import Device, _size
-from pyutils.torch_train import set_torch_deterministic
-from traitlets import default
-import copy
-from thirdparty.ceviche.ceviche.constants import *
+
 from core.fdfd.fdfd import fdfd_ez
+from thirdparty.ceviche.constants import *
+
 __all__ = [
     "LinearBlock",
     "ConvBlock",
@@ -108,8 +109,9 @@ class ConvBlock(nn.Module):
         groups: int = 1,
         bias: bool = True,
         conv_cfg: dict = dict(type="Conv2d", padding_mode="replicate"),
-        norm_cfg: dict | None = None, # dict(type="LayerNorm", eps=1e-6, data_format="channels_first"),
-        act_cfg: dict | None = None, # dict(type="GELU"),
+        norm_cfg: dict
+        | None = None,  # dict(type="LayerNorm", eps=1e-6, data_format="channels_first"),
+        act_cfg: dict | None = None,  # dict(type="GELU"),
         skip: bool = False,
         device: Device = (
             torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -235,11 +237,13 @@ class ModelBase(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def build_sim(self):
-        omega = 2 * np.pi * C_0 / (self.wl * 1e-6)
+        omega = 2 * np.pi * C_0 / (self.wl * MICRON_UNIT)
         self.sim = fdfd_ez(
             omega=omega,
-            dL=1 / self.img_res * 1e-6,
-            eps_r=torch.randn((self.img_size, self.img_size), device=self.device),  # random permittivity
+            dL=1 / self.img_res * MICRON_UNIT,
+            eps_r=torch.randn(
+                (self.img_size, self.img_size), device=self.device
+            ),  # random permittivity
             npml=(
                 round(self.pml_width * self.img_res),
                 round(self.pml_width * self.img_res),
@@ -249,10 +253,12 @@ class ModelBase(nn.Module):
     def build_pml_mask(self):
         pml_thickness = self.pml_width * self.img_res
 
-        self.pml_mask = torch.ones((
-            self.img_size,
-            self.img_size,
-        )).to(self.device)
+        self.pml_mask = torch.ones(
+            (
+                self.img_size,
+                self.img_size,
+            )
+        ).to(self.device)
 
         # Define the damping factor for exponential decay
         damping_factor = torch.tensor(
@@ -276,16 +282,27 @@ class ModelBase(nn.Module):
                 if dist > 0:
                     self.pml_mask[i, j] = torch.exp(-damping_factor * dist)
 
-    def get_grid(self, shape, device: Device, mode: str = "linear", epsilon=None, wavelength=None, grid_step=None):
+    def get_grid(
+        self,
+        shape,
+        device: Device,
+        mode: str = "linear",
+        epsilon=None,
+        wavelength=None,
+        grid_step=None,
+    ):
         # epsilon must be real permittivity without normalization
         batchsize, size_x, size_y = shape[0], shape[2], shape[3]
         if mode == "linear":
             gridx = torch.linspace(0, 1, size_x, device=device)
             gridy = torch.linspace(0, 1, size_y, device=device)
             gridx, gridy = torch.meshgrid(gridx, gridy)
-            return torch.stack([gridy, gridx], dim=0).unsqueeze(0).expand(batchsize, -1, -1, -1)
+            return (
+                torch.stack([gridy, gridx], dim=0)
+                .unsqueeze(0)
+                .expand(batchsize, -1, -1, -1)
+            )
         elif mode in {"exp", "exp_noeps"}:  # exp in the complex domain
-
             mesh = self._get_linear_pos_enc(shape, device)
             # mesh [1 ,2 ,h, w] real
             # grid_step [bs, 2, 1, 1] real
@@ -293,7 +310,9 @@ class ModelBase(nn.Module):
             # epsilon [bs, 1, h, w] complex
             mesh = torch.view_as_real(
                 torch.exp(
-                    mesh.mul(grid_step.div(wavelength).mul(1j * 2 * np.pi)[..., None, None]).mul(epsilon.data.sqrt())
+                    mesh.mul(
+                        grid_step.div(wavelength).mul(1j * 2 * np.pi)[..., None, None]
+                    ).mul(epsilon.data.sqrt())
                 )
             )  # [bs, 2, h, w, 2] real
             return mesh.permute(0, 1, 4, 2, 3).flatten(1, 2)
@@ -307,7 +326,9 @@ class ModelBase(nn.Module):
                     1j * 2 * np.pi / wavelength[..., None, None] * epsilon.data.sqrt()
                 )
             )  # [bs, 2, h, w] complex
-            mesh = torch.view_as_real(torch.cat([mesh, mesh[:, 0:1].add(mesh[:, 1:])], dim=1))  # [bs, 3, h, w, 2] real
+            mesh = torch.view_as_real(
+                torch.cat([mesh, mesh[:, 0:1].add(mesh[:, 1:])], dim=1)
+            )  # [bs, 3, h, w, 2] real
             return mesh.permute(0, 1, 4, 2, 3).flatten(1, 2)
         elif mode == "exp4":  # exp in the complex domain
             gridx = torch.arange(0, size_x, device=device)
@@ -320,7 +341,14 @@ class ModelBase(nn.Module):
                 )
             )  # [bs, 2, h, w] complex
             mesh = torch.view_as_real(
-                torch.cat([mesh, mesh[:, 0:1].mul(mesh[:, 1:]), mesh[:, 0:1].div(mesh[:, 1:])], dim=1)
+                torch.cat(
+                    [
+                        mesh,
+                        mesh[:, 0:1].mul(mesh[:, 1:]),
+                        mesh[:, 0:1].div(mesh[:, 1:]),
+                    ],
+                    dim=1,
+                )
             )  # [bs, 4, h, w, 2] real
             return mesh.permute(0, 1, 4, 2, 3).flatten(1, 2)
         elif mode == "exp_full":
@@ -340,9 +368,14 @@ class ModelBase(nn.Module):
                 mesh.shape[0], 1, mesh.shape[2], mesh.shape[3]
             )  # [bs, 1, h, w] real
             grid_step_mesh = (
-                grid_step[..., None, None].expand(mesh.shape[0], 2, mesh.shape[2], mesh.shape[3]) * 10
+                grid_step[..., None, None].expand(
+                    mesh.shape[0], 2, mesh.shape[2], mesh.shape[3]
+                )
+                * 10
             )  # 0.05 um -> 0.5 for statistical stability # [bs, 2, h, w] real
-            return torch.cat([mesh, wavelength_map, grid_step_mesh], dim=1)  # [bs, 7, h, w] real
+            return torch.cat(
+                [mesh, wavelength_map, grid_step_mesh], dim=1
+            )  # [bs, 7, h, w] real
         elif mode == "exp_full_r":
             gridx = torch.arange(0, size_x, device=device)
             gridy = torch.arange(0, size_y, device=device)
@@ -360,16 +393,25 @@ class ModelBase(nn.Module):
                 mesh.shape[0], 1, mesh.shape[2], mesh.shape[3]
             )  # [bs, 1, h, w] real
             grid_step_mesh = (
-                grid_step[..., None, None].expand(mesh.shape[0], 2, mesh.shape[2], mesh.shape[3]) * 10
+                grid_step[..., None, None].expand(
+                    mesh.shape[0], 2, mesh.shape[2], mesh.shape[3]
+                )
+                * 10
             )  # 0.05 um -> 0.5 for statistical stability # [bs, 2, h, w] real
-            return torch.cat([mesh, wavelength_map, grid_step_mesh], dim=1)  # [bs, 7, h, w] real
+            return torch.cat(
+                [mesh, wavelength_map, grid_step_mesh], dim=1
+            )  # [bs, 7, h, w] real
         elif mode == "raw":
-            wavelength_map = wavelength[..., None, None].expand(batchsize, 1, size_x, size_y)  # [bs, 1, h, w] real
+            wavelength_map = wavelength[..., None, None].expand(
+                batchsize, 1, size_x, size_y
+            )  # [bs, 1, h, w] real
             grid_step_mesh = (
                 grid_step[..., None, None].expand(batchsize, 2, size_x, size_y) * 10
             )  # 0.05 um -> 0.5 for statistical stability # [bs, 2, h, w] real
-            return torch.cat([wavelength_map, grid_step_mesh], dim=1)  # [bs, 3, h, w] real
-        
+            return torch.cat(
+                [wavelength_map, grid_step_mesh], dim=1
+            )  # [bs, 3, h, w] real
+
         elif mode == "none":
             return None
 

@@ -1,7 +1,7 @@
 """
 Date: 1969-12-31 17:00:00
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-05 19:40:20
+LastEditTime: 2025-01-06 19:01:06
 FilePath: /MAPS/core/fdfd/near2far.py
 """
 
@@ -10,12 +10,12 @@ from typing import Tuple
 import numpy as np
 import torch
 from einops import einsum
+from pyutils.general import TimerCtx
 from torch import Tensor
 
 from core.fdfd.utils import hankel
 from core.utils import car_2_sph, sph_2_car_field, trapezoid_1d
-from thirdparty.ceviche.ceviche.constants import C_0, EPSILON_0, MU_0
-from pyutils.general import TimerCtx
+from thirdparty.ceviche.constants import C_0, EPSILON_0, MU_0
 
 
 # https://digitalcommons.calpoly.edu/cgi/viewcontent.cgi?article=1264&context=phy_fac
@@ -219,10 +219,16 @@ def get_farfields_GreenFunction(
         )
         #     torch.cuda.synchronize()
         # print(f"GreenFunctionProjection time: {t.interval} s")
-        if component == "Ez": 
-            far_fields["Ez"] += fz.reshape(-1, *farfield_shape, len(freqs))  # [bs, n, nf]
-            far_fields["Hx"] += fx.reshape(-1, *farfield_shape, len(freqs))  # [bs, n, nf]
-            far_fields["Hy"] += fy.reshape(-1, *farfield_shape, len(freqs))  # [bs, n, nf]
+        if component == "Ez":
+            far_fields["Ez"] += fz.reshape(
+                -1, *farfield_shape, len(freqs)
+            )  # [bs, n, nf]
+            far_fields["Hx"] += fx.reshape(
+                -1, *farfield_shape, len(freqs)
+            )  # [bs, n, nf]
+            far_fields["Hy"] += fy.reshape(
+                -1, *farfield_shape, len(freqs)
+            )  # [bs, n, nf]
         elif component == "Hz":
             far_fields["Hz"] += fz.reshape(-1, *farfield_shape, len(freqs))
             far_fields["Ex"] += fx.reshape(-1, *farfield_shape, len(freqs))
@@ -270,7 +276,11 @@ def GreenFunctionProjection(
     k = 2 * np.pi * eps_r**0.5 * freqs  # wave number # [nf]
     epsilon = EPSILON_0 * eps_r
     for i in range(num_iter):
-        x = x_ref[i * maximum_batch_size : (i + 1) * maximum_batch_size] if i < num_iter - 1 else x_ref[i * maximum_batch_size :]
+        x = (
+            x_ref[i * maximum_batch_size : (i + 1) * maximum_batch_size]
+            if i < num_iter - 1
+            else x_ref[i * maximum_batch_size :]
+        )
 
         # transform the coordinate system so that the origin is at the source point
         # then the observation points in the new system are:
@@ -283,7 +293,6 @@ def GreenFunctionProjection(
             # surface equivalence theory
             # J = n x H = nx.*Hy - ny.*Hx
             if near_monitor_direction[-1] == "+":
-                
                 if component == "Ez":
                     # [0, -Hz, Hy]
                     J = (0, 0, Fy[..., None, :, :])  # [bs, s, nf] -> [bs, 1, s, nf]
@@ -394,7 +403,9 @@ def GreenFunctionProjection(
                 )
 
         # @torch.compile
-        def r_dot_current_dtheta(current: Tuple[Tensor, ...], is_2d: bool = True) -> Tensor:
+        def r_dot_current_dtheta(
+            current: Tuple[Tensor, ...], is_2d: bool = True
+        ) -> Tensor:
             """Theta derivative of the dot product between the r unit vector and the current."""
             if is_2d:
                 return -current[2]
@@ -425,7 +436,13 @@ def GreenFunctionProjection(
             # convert to Cartesian coordinates
             # return surface.monitor.sph_2_car_field(temp[0], temp[1], temp[2], theta_obs, phi_obs)
             return sph_2_car_field(
-                temp[0], temp[2], temp[1], phi_obs, theta_obs, sin_phi=sin_phi, cos_phi=cos_phi
+                temp[0],
+                temp[2],
+                temp[1],
+                phi_obs,
+                theta_obs,
+                sin_phi=sin_phi,
+                cos_phi=cos_phi,
             )  # fx, fy, fz
 
         def potential_terms(current: Tuple[Tensor, ...], const: complex):
@@ -449,7 +466,9 @@ def GreenFunctionProjection(
             #     i_omega * (a + grad_div_a / (k**2)) - curl_f / epsilon
             #     for a, grad_div_a, curl_f in zip(A, grad_div_A, curl_F)
             # )
-            f_z_integrand = i_omega * (A[2] + grad_div_A[2] / (k**2)) - curl_F[2] / epsilon
+            f_z_integrand = (
+                i_omega * (A[2] + grad_div_A[2] / (k**2)) - curl_F[2] / epsilon
+            )
 
             # assemble the magnetic field components (Taflove 8.25, 8.28)
             # h_x_integrand, h_y_integrand, h_z_integrand = (

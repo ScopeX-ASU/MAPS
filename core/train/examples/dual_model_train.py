@@ -5,7 +5,7 @@ import os
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "/home/pingchua/projects/MAPS"))
 sys.path.insert(0, project_root)
 
-from thirdparty.pyutility.pyutils.config import train_configs as configs
+from core.utils import train_configs as configs
 import torch
 import torch.nn as nn
 import torch.amp as amp

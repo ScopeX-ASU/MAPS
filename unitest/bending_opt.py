@@ -1,33 +1,17 @@
+import argparse
+import copy
 import os
+import random
+import time
 from multiprocessing import Pool
+
 import numpy as np
 import scipy.sparse as sp
 import torch
 import torch.nn.functional as F
-from ceviche import fdfd_ez as ceviche_fdfd_ez
-from ceviche.constants import *
-from pyutils.general import print_stat
 from pyutils.config import configs
-from core.models import (
-    IsolatorOptimization,
-    MetaCouplerOptimization,
-    MetaMirrorOptimization,
-    BendingOptimization,
-)
-from core.models.base_optimization import BaseOptimization, DefaultSimulationConfig
-from core.models.fdfd.fdfd import fdfd_ez
-from core.models.fdfd.utils import torch_sparse_to_scipy_sparse
-from core.models.layers import Isolator, MetaCoupler, MetaMirror, Bending
-from core.models.layers.device_base import N_Ports, Si_eps
-from core.models.layers.utils import plot_eps_field
-from core.utils import set_torch_deterministic
-from torch_sparse import spspmm
-from core import builder
-import copy
-import time
-import argparse
-import random
-from pyutils.general import AverageMeter, logger as lg
+from pyutils.general import AverageMeter, print_stat
+from pyutils.general import logger as lg
 from pyutils.torch_train import (
     BestKModelSaver,
     count_parameters,
@@ -35,6 +19,25 @@ from pyutils.torch_train import (
     load_model,
     set_torch_deterministic,
 )
+from torch_sparse import spspmm
+
+from core import builder
+from core.models import (
+    BendingOptimization,
+    IsolatorOptimization,
+    MetaCouplerOptimization,
+    MetaMirrorOptimization,
+)
+from core.models.base_optimization import BaseOptimization, DefaultSimulationConfig
+from core.models.fdfd.fdfd import fdfd_ez
+from core.models.fdfd.utils import torch_sparse_to_scipy_sparse
+from core.models.layers import Bending, Isolator, MetaCoupler, MetaMirror
+from core.models.layers.device_base import N_Ports, Si_eps
+from core.models.layers.utils import plot_eps_field
+from core.utils import set_torch_deterministic
+from thirdparty.ceviche import fdfd_ez as ceviche_fdfd_ez
+from thirdparty.ceviche.constants import *
+
 
 def compare_designs(design_regions_1, design_regions_2):
     similarity = []
@@ -44,12 +47,13 @@ def compare_designs(design_regions_1, design_regions_2):
         similarity.append(F.cosine_similarity(v1.flatten(), v2.flatten(), dim=0))
     return torch.mean(torch.stack(similarity)).item()
 
+
 def bending_opt(
-        device_id, 
-        operation_device,
-        neural_solver=None,
-        numerical_solver="solve_direct",
-        use_autodiff=False,
+    device_id,
+    operation_device,
+    neural_solver=None,
+    numerical_solver="solve_direct",
+    use_autodiff=False,
 ):
     sim_cfg = DefaultSimulationConfig()
 
@@ -73,34 +77,36 @@ def bending_opt(
     )
 
     device = Bending(
-        sim_cfg=sim_cfg, 
+        sim_cfg=sim_cfg,
         bending_region_size=bending_region_size,
         port_len=(port_len, port_len),
-        port_width=(
-            input_port_width,
-            output_port_width
-        ), 
-        device=operation_device
+        port_width=(input_port_width, output_port_width),
+        device=operation_device,
     )
     print("begin to copy the device", flush=True)
     hr_device = device.copy(resolution=310)
     print("finish copying the device", flush=True)
     print(device)
     print("init the optimization", flush=True)
-    opt = BendingOptimization(device=device, hr_device=hr_device, sim_cfg=sim_cfg, operation_device=operation_device).to(operation_device)
+    opt = BendingOptimization(
+        device=device,
+        hr_device=hr_device,
+        sim_cfg=sim_cfg,
+        operation_device=operation_device,
+    ).to(operation_device)
     print("finish init the optimization", flush=True)
     print(opt)
     # init_lr = 1e4
     init_lr = 2e-2
     optimizer = torch.optim.Adam(opt.parameters(), lr=init_lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=70, eta_min=init_lr*0.01
+        optimizer, T_max=70, eta_min=init_lr * 0.01
     )
     fwd_trans = []
     fwd_trans_gt = []
     time_list = []
     for step in range(10):
-    # for step in range(1):
+        # for step in range(1):
         optimizer.zero_grad()
         with torch.no_grad():
             opt.switch_solver(None, "solve_direct", False)
@@ -109,7 +115,9 @@ def bending_opt(
             for k, obj in results_gt["breakdown"].items():
                 print(f"{k}: {obj['value']:.3f}", end=", ")
             print()
-            fwd_trans_gt.append(results_gt["breakdown"]["fwd_trans"]["value"].detach().cpu().numpy())
+            fwd_trans_gt.append(
+                results_gt["breakdown"]["fwd_trans"]["value"].detach().cpu().numpy()
+            )
             opt.switch_solver(neural_solver, numerical_solver, use_autodiff)
             opt.plot(
                 eps_map=opt._eps_map,
@@ -127,7 +135,9 @@ def bending_opt(
         for k, obj in results["breakdown"].items():
             print(f"{k}: {obj['value']:.3f}", end=", ")
         print()
-        fwd_trans.append(results["breakdown"]["fwd_trans"]["value"].detach().cpu().numpy())
+        fwd_trans.append(
+            results["breakdown"]["fwd_trans"]["value"].detach().cpu().numpy()
+        )
         (-results["obj"]).backward()
         end_time = time.time()
         time_list.append(end_time - start_time)
@@ -145,11 +155,14 @@ def bending_opt(
         if neural_solver is not None and numerical_solver == "none":
             for p in opt.parameters():
                 if p.grad is not None:
-                    max_grad = p.grad.data.abs().max()  # Get the maximum absolute gradient value
-                    if max_grad > 1e3:  # Only scale if the maximum exceeds the threshold
+                    max_grad = (
+                        p.grad.data.abs().max()
+                    )  # Get the maximum absolute gradient value
+                    if (
+                        max_grad > 1e3
+                    ):  # Only scale if the maximum exceeds the threshold
                         scale_factor = 1e3 / max_grad  # Compute the scale factor
                         p.grad.data.mul_(scale_factor)  # Scale the gradient
-
 
         optimizer.step()
         scheduler.step()
@@ -158,8 +171,17 @@ def bending_opt(
     time_list = np.array(time_list)
     fwd_trans_tot = np.stack([fwd_trans, fwd_trans_gt], axis=1)
     # save it to a csv file
-    np.savetxt(f"./unitest/fwd_trans.csv", fwd_trans_tot, delimiter=",", header="Pred_fwd_trans,GT_fwd_trans", comments="")
-    np.savetxt(f"./unitest/time.csv", time_list, delimiter=",", header="time", comments="")
+    np.savetxt(
+        f"./unitest/fwd_trans.csv",
+        fwd_trans_tot,
+        delimiter=",",
+        header="Pred_fwd_trans,GT_fwd_trans",
+        comments="",
+    )
+    np.savetxt(
+        f"./unitest/time.csv", time_list, delimiter=",", header="time", comments=""
+    )
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -186,7 +208,9 @@ def main():
     )
     lg.info(model_fwd)
     if model_fwd.train_field == "adj":
-        assert not configs.run.include_adjoint_NN, "when only adj field is trained, we should not include another adjoint NN"
+        assert (
+            not configs.run.include_adjoint_NN
+        ), "when only adj field is trained, we should not include another adjoint NN"
 
     if configs.run.include_adjoint_NN:
         model_adj = builder.make_model(
@@ -216,13 +240,14 @@ def main():
             )
 
     bending_opt(
-        int(configs.run.random_state), 
+        int(configs.run.random_state),
         device,
         neural_solver={"fwd_solver": model_fwd, "adj_solver": model_adj},
         # neural_solver={"fwd_solver": None, "adj_solver": None},
         numerical_solver="solve_iterative",
         use_autodiff=False,
     )
+
 
 if __name__ == "__main__":
     main()

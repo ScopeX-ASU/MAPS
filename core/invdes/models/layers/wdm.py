@@ -119,7 +119,7 @@ class WDM(N_Ports):
         if verbose:
             logger.info("Start normalization run ...")
         norm_source_profiles = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Ez1",),
             input_port_name="in_port_1",
             input_slice_name="in_port_1",
             wl_cen=self.sim_cfg["wl_cen"],
@@ -130,7 +130,7 @@ class WDM(N_Ports):
         )
 
         norm_refl_profiles_1 = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Ez1",),
             input_port_name="in_port_1",
             input_slice_name="refl_port_1",
             wl_cen=self.sim_cfg["wl_cen"],
@@ -141,7 +141,7 @@ class WDM(N_Ports):
         )
 
         wl1_norm_monitor_profiles = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Ez1",),
             input_port_name="out_port_1",
             input_slice_name="out_port_1",
             wl_cen=self.sim_cfg["wl_cen"],
@@ -152,7 +152,7 @@ class WDM(N_Ports):
         )
 
         wl2_norm_monitor_profiles = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Ez1",),
             input_port_name="out_port_2",
             input_slice_name="out_port_2",
             wl_cen=self.sim_cfg["wl_cen"],

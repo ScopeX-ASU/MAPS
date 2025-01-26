@@ -1,54 +1,71 @@
-from ceviche.solvers import _solve_direct
-from ceviche.constants import *
-from ceviche.utils import make_sparse
+import time
+
+import cupy as cp
+import cupyx.scipy.sparse as cpx_sparse
+import cupyx.scipy.sparse.linalg as cpx_linalg
 import h5py
+import matplotlib.pyplot as plt
+import numpy as np
+import scipy.sparse as sp
+import scipy.sparse.linalg as spl
 import torch
 import torch.nn.functional as F
-import numpy as np
+from torch_sparse import spmm
+
 from core.models.layers.utils import (
     Si_eps,
     SiO2_eps,
 )
-import scipy.sparse.linalg as spl
-import time
-from torch_sparse import spmm
 from core.utils import print_stat
-import matplotlib.pyplot as plt
-import cupy as cp
-import cupyx.scipy.sparse as cpx_sparse
-import cupyx.scipy.sparse.linalg as cpx_linalg
-import scipy.sparse as sp
+from thirdparty.ceviche.constants import *
+from thirdparty.ceviche.solvers import _solve_direct
+from thirdparty.ceviche.utils import make_sparse
 
-DEFAULT_ITERATIVE_METHOD = 'bicg'
+DEFAULT_ITERATIVE_METHOD = "bicg"
 
 ITERATIVE_METHODS = {
-    'bicg': spl.bicg,
-    'bicgstab': spl.bicgstab,
-    'cg': spl.cg,
-    'cgs': spl.cgs,
-    'gmres': spl.gmres,
-    'lgmres': spl.lgmres,
-    'qmr': spl.qmr,
-    'gcrotmk': spl.gcrotmk
+    "bicg": spl.bicg,
+    "bicgstab": spl.bicgstab,
+    "cg": spl.cg,
+    "cgs": spl.cgs,
+    "gmres": spl.gmres,
+    "lgmres": spl.lgmres,
+    "qmr": spl.qmr,
+    "gcrotmk": spl.gcrotmk,
 }
 
 ATOL = 1e-8
 
 
-def _solve_iterative(A, b, x0=None, iterative_method=DEFAULT_ITERATIVE_METHOD, rtol=1e-5, atol=1e-6):
+def _solve_iterative(
+    A, b, x0=None, iterative_method=DEFAULT_ITERATIVE_METHOD, rtol=1e-5, atol=1e-6
+):
     # """ Iterative solver """
 
     # # error checking on the method name (https://docs.scipy.org/doc/scipy/reference/sparse.linalg.html)
     try:
         solver_fn = ITERATIVE_METHODS[iterative_method]
     except:
-        raise ValueError("iterative method {} not found.\n supported methods are:\n {}".format(iterative_method, ITERATIVE_METHODS))
+        raise ValueError(
+            "iterative method {} not found.\n supported methods are:\n {}".format(
+                iterative_method, ITERATIVE_METHODS
+            )
+        )
 
     # call the solver using scipy's API
     x, info = solver_fn(A, b, x0=x0, rtol=rtol, atol=atol)
     return x
 
-def _solve_iterative_torch(entries_a, indices_a, b, x0=None, iterative_method=DEFAULT_ITERATIVE_METHOD, rtol=1e-5, atol=1e-6):
+
+def _solve_iterative_torch(
+    entries_a,
+    indices_a,
+    b,
+    x0=None,
+    iterative_method=DEFAULT_ITERATIVE_METHOD,
+    rtol=1e-5,
+    atol=1e-6,
+):
     # """ Iterative solver """
 
     # # error checking on the method name (https://docs.scipy.org/doc/scipy/reference/sparse.linalg.html)
@@ -60,16 +77,20 @@ def _solve_iterative_torch(entries_a, indices_a, b, x0=None, iterative_method=DE
     # # call the solver using scipy's API
     # x, info = solver_fn(A, b, x0=x0, rtol=rtol, atol=atol)
     def obj_fn(indices, entries, x, b):
-        residual = b - spmm(
-            indices,
-            entries,
-            m=b.shape[0],
-            n=b.shape[0],
-            matrix=x[:, None],
-        )[:, 0]
+        residual = (
+            b
+            - spmm(
+                indices,
+                entries,
+                m=b.shape[0],
+                n=b.shape[0],
+                matrix=x[:, None],
+            )[:, 0]
+        )
         # print(f"this is the l2 norm of the residual: {torch.norm(residual, p=2)}", flush=True)
         # print(f"this is the l2 norm of the b: {torch.norm(b, p=2)}", flush=True)
         return torch.norm(residual, p=2) / torch.norm(b, p=2)
+
     device = torch.device("cuda:0")
     b = b.to(torch.complex128).to(device)
     if x0 is not None:
@@ -79,7 +100,9 @@ def _solve_iterative_torch(entries_a, indices_a, b, x0=None, iterative_method=DE
     if iterative_method == "adam":
         x0 = torch.nn.Parameter(x0)
         optimizer = torch.optim.Adam([x0], lr=1e-3)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100, eta_min=1e-5)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=100, eta_min=1e-5
+        )
         residual = obj_fn(indices_a, entries_a, x0, b)
         counter = 0
         print("the init residual is: ", residual, flush=True)
@@ -88,25 +111,30 @@ def _solve_iterative_torch(entries_a, indices_a, b, x0=None, iterative_method=DE
             residual = obj_fn(indices_a, entries_a, x0, b)
             residual.backward()
             optimizer.step()
-            scheduler.step() 
+            scheduler.step()
             if counter % 10 == 0:
                 print(f"@ counter {counter}, rtol is {residual}")
             counter += 1
     return x0
 
+
 def test_Axb_solver(As, b):
     # b = b/torch.max(torch.abs(b))
     wl = 1.55
-    entries_a_torch = As[f'A-wl-{wl}-entries_a']
-    indices_a_torch = As[f'A-wl-{wl}-indices_a']
+    entries_a_torch = As[f"A-wl-{wl}-entries_a"]
+    indices_a_torch = As[f"A-wl-{wl}-indices_a"]
     entries_a_np = entries_a_torch.cpu().numpy()
     indices_a_np = indices_a_torch.cpu().numpy()
     b_torch = b
     b_np = b.cpu().numpy()
 
-    regular_A_np = make_sparse(entries_a_np, indices_a_np, (b_np.shape[0], b_np.shape[0]))
+    regular_A_np = make_sparse(
+        entries_a_np, indices_a_np, (b_np.shape[0], b_np.shape[0])
+    )
     start_time = time.time()
-    e_direct_np = _solve_direct(regular_A_np, b_np) # e_direct is the solution from the direct solver
+    e_direct_np = _solve_direct(
+        regular_A_np, b_np
+    )  # e_direct is the solution from the direct solver
     end_time = time.time()
     plt.figure()
     plt.imshow(np.abs(e_direct_np.reshape((600, 600))))
@@ -143,15 +171,19 @@ def test_Axb_solver(As, b):
     residual = b - A_by_e
     residual_norm_torch = torch.norm(residual, p=2).double()
     b_norm_torch = torch.norm(b, p=2).double()
-    ratio_torch = (residual_norm_torch / b_norm_torch)
+    ratio_torch = residual_norm_torch / b_norm_torch
     print("this is the residual norm from torch: ", residual_norm_torch, flush=True)
     print("this is the b norm from torch: ", b_norm_torch, flush=True)
-    print("this is the ratio of the residual to the b from torch: ", ratio_torch, flush=True)
-    
+    print(
+        "this is the ratio of the residual to the b from torch: ",
+        ratio_torch,
+        flush=True,
+    )
+
     residual_abs = torch.abs(residual)
     b_abs = torch.abs(b) + 100
 
-    ratio_abs = (residual_abs / b_abs)
+    ratio_abs = residual_abs / b_abs
     print_stat(ratio_abs)
 
     # print("this is the max ratio of the residual to the b from torch: ", ratio_abs, flush=True)
@@ -168,7 +200,9 @@ def test_Axb_solver(As, b):
     ratio_np = residual_norm_np / b_norm_np
     print("this is the residual norm from numpy: ", residual_norm_np, flush=True)
     print("this is the b norm from numpy: ", b_norm_np, flush=True)
-    print("this is the ratio of the residual to the b from numpy: ", ratio_np, flush=True)
+    print(
+        "this is the ratio of the residual to the b from numpy: ", ratio_np, flush=True
+    )
     noisy_x0 = e_direct_np * (np.random.normal(1, 0.03, e_direct_np.shape))
     plt.figure()
     plt.imshow(np.abs(noisy_x0.reshape((600, 600))))
@@ -177,43 +211,67 @@ def test_Axb_solver(As, b):
     plt.close()
 
     start_time = time.time()
-    e_iterate_np = _solve_iterative(regular_A_np, b_np, x0=noisy_x0, iterative_method="lgmres", rtol=1e-2, atol=1e-6)
+    e_iterate_np = _solve_iterative(
+        regular_A_np, b_np, x0=noisy_x0, iterative_method="lgmres", rtol=1e-2, atol=1e-6
+    )
     # e_iterate_np = _solve_iterative(regular_A_np, b_np, x0=None, iterative_method="bicgstab", rtol=1e-3, atol=1e-6)
     end_time = time.time()
-    print(f"this is the time for the iterative solver {'lgmres'}: ", end_time - start_time, flush=True)
+    print(
+        f"this is the time for the iterative solver {'lgmres'}: ",
+        end_time - start_time,
+        flush=True,
+    )
+
 
 # norm(b - A @ x) <= max(rtol*norm(b), atol)
 def test_Axb_solver_torch(As, b):
     # b = b/torch.max(torch.abs(b))
     wl = 1.55
-    entries_a_torch = As[f'A-wl-{wl}-entries_a']
-    indices_a_torch = As[f'A-wl-{wl}-indices_a']
+    entries_a_torch = As[f"A-wl-{wl}-entries_a"]
+    indices_a_torch = As[f"A-wl-{wl}-indices_a"]
     entries_a_np = entries_a_torch.cpu().numpy()
     indices_a_np = indices_a_torch.cpu().numpy()
     b_np = b.cpu().numpy()
 
-    regular_A_np = make_sparse(entries_a_np, indices_a_np, (b_np.shape[0], b_np.shape[0]))
+    regular_A_np = make_sparse(
+        entries_a_np, indices_a_np, (b_np.shape[0], b_np.shape[0])
+    )
     start_time = time.time()
-    e_direct_np = _solve_direct(regular_A_np, b_np) # e_direct is the solution from the direct solver
+    e_direct_np = _solve_direct(
+        regular_A_np, b_np
+    )  # e_direct is the solution from the direct solver
     noisy_x0 = e_direct_np * (np.random.normal(1, 0.1, e_direct_np.shape))
     device = torch.device("cuda:0")
     b = b.to(device)
     start_time = time.time()
-    x = _solve_iterative_torch(entries_a_torch, indices_a_torch, b, x0=noisy_x0, iterative_method="gmres", rtol=1e-2, atol=1e-6)
+    x = _solve_iterative_torch(
+        entries_a_torch,
+        indices_a_torch,
+        b,
+        x0=noisy_x0,
+        iterative_method="gmres",
+        rtol=1e-2,
+        atol=1e-6,
+    )
     end_time = time.time()
-    print(f"this is the time for the iterative torch solver {'gmres'}: ", end_time - start_time, flush=True)
-
-
-
+    print(
+        f"this is the time for the iterative torch solver {'gmres'}: ",
+        end_time - start_time,
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
-    with h5py.File("data/fdfd/metacoupler/mfs_raw/metacoupler_id-6_opt_step_9.h5", "r") as f:
+    with h5py.File(
+        "data/fdfd/metacoupler/mfs_raw/metacoupler_id-6_opt_step_9.h5", "r"
+    ) as f:
         keys = list(f.keys())
         orgion_size = torch.from_numpy(f["eps_map"][()]).float().size()
         # eps_map = resize_to_targt_size(torch.from_numpy(f["eps_map"][()]).float(), (200, 300))
         # gradient = resize_to_targt_size(torch.from_numpy(f["gradient"][()]).float(), (200, 300))
-        eps_map = torch.from_numpy(f["eps_map"][()]).float().sqrt() # sqrt the eps_map to get the refractive index
+        eps_map = (
+            torch.from_numpy(f["eps_map"][()]).float().sqrt()
+        )  # sqrt the eps_map to get the refractive index
         gradient = torch.from_numpy(f["gradient"][()]).float()
         field_solutions = {}
         s_params = {}
@@ -277,17 +335,21 @@ if __name__ == "__main__":
                 design_region_mask[key] = int(f[key][()])
             elif key.startswith("ht_m"):
                 ht_m[key] = torch.from_numpy(f[key][()])
-                ht_m[key+"-origin_size"] = torch.tensor(ht_m[key].shape)
+                ht_m[key + "-origin_size"] = torch.tensor(ht_m[key].shape)
                 ht_m[key] = torch.view_as_real(ht_m[key]).permute(1, 0).unsqueeze(0)
-                ht_m[key] = F.interpolate(ht_m[key], size=5000, mode='linear', align_corners=True)
+                ht_m[key] = F.interpolate(
+                    ht_m[key], size=5000, mode="linear", align_corners=True
+                )
                 ht_m[key] = ht_m[key].squeeze(0).permute(1, 0).contiguous()
                 ht_m[key] = torch.view_as_complex(ht_m[key])
                 # print("this is the dtype of the ht_m: ", ht_m[key].dtype, flush=True)
             elif key.startswith("et_m"):
                 et_m[key] = torch.from_numpy(f[key][()])
-                et_m[key+"-origin_size"] = torch.tensor(et_m[key].shape)
+                et_m[key + "-origin_size"] = torch.tensor(et_m[key].shape)
                 et_m[key] = torch.view_as_real(et_m[key]).permute(1, 0).unsqueeze(0)
-                et_m[key] = F.interpolate(et_m[key], size=5000, mode='linear', align_corners=True)
+                et_m[key] = F.interpolate(
+                    et_m[key], size=5000, mode="linear", align_corners=True
+                )
                 et_m[key] = et_m[key].squeeze(0).permute(1, 0).contiguous()
                 et_m[key] = torch.view_as_complex(et_m[key])
                 # print("this is the dtype of the et_m: ", et_m[key].dtype, flush=True)
@@ -308,6 +370,6 @@ if __name__ == "__main__":
     for key, src_profile in src_profiles.items():
         src_profiles[key] = src_profile.to(device, non_blocking=True)
     source = src_profiles["source_profile-wl-1.55-port-in_port_1-mode-1"]
-    omega = 2 * torch.pi * C_0 / (1.55 * 1e-6)
+    omega = 2 * torch.pi * C_0 / (1.55 * MICRON_UNIT)
     b = (source * 1j * omega).flatten()
     test_Axb_solver(As, b)

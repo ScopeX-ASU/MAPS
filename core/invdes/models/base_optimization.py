@@ -1,12 +1,13 @@
 """
 Date: 2024-10-04 18:49:06
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-05 15:06:13
+LastEditTime: 2025-01-06 15:43:37
 FilePath: /MAPS/core/invdes/models/base_optimization.py
 """
 
 import copy
 import os
+import sys
 from typing import List, Tuple
 
 import gdsfactory as gf
@@ -20,13 +21,18 @@ from pyutils.general import logger
 from torch import Tensor, nn
 from torch.types import Device
 
-from thirdparty.ceviche.ceviche.constants import C_0
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
+)
+from thirdparty.ceviche.constants import C_0, MICRON_UNIT
 
 from .layers.device_base import N_Ports
 from .layers.fom_layer import SimulatedFoM
 from .layers.objective import ObjectiveFunc
 from .layers.parametrization import parametrization_builder
 from .layers.utils import plot_eps_field
+
+sys.path.pop(0)
 
 __all__ = [
     "DefaultSimulationConfig",
@@ -257,8 +263,8 @@ class BaseOptimization(nn.Module):
         simulations = {}  # different polarization and wavelength requires different simulation instances
         for wl in np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl):
             for pol in in_pols:  # {Ez}, {Hz}, {Ez, Hz}
-                omega = 2 * np.pi * C_0 / (wl * 1e-6)
-                dl = self.device.grid_step * 1e-6
+                omega = 2 * np.pi * C_0 / (wl * MICRON_UNIT)
+                dl = self.device.grid_step * MICRON_UNIT
                 sim = self.device.create_simulation(
                     omega, dl, epsilon_map, self.device.NPML, solver, pol=pol
                 )

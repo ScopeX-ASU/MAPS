@@ -1,7 +1,7 @@
 """
 Date: 2024-10-02 20:59:04
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-05 19:25:20
+LastEditTime: 2025-01-09 02:57:17
 FilePath: /MAPS/core/invdes/models/layers/device_base.py
 """
 
@@ -23,15 +23,17 @@ from core.utils import (
     Si_eps,
     SiO2_eps,
     Slice,
+    get_eigenmode_coefficients,
     get_flux,
 )
-from thirdparty.ceviche.ceviche import fdfd_ez, fdfd_hz
-from thirdparty.ceviche.ceviche.constants import C_0
+from thirdparty.ceviche import fdfd_ez, fdfd_hz
+from thirdparty.ceviche.constants import C_0, MICRON_UNIT
 
 from .utils import (
     apply_regions_gpu,
     get_grid,
     insert_mode,
+    insert_mode_spins,
     plot_eps_field,
 )
 
@@ -862,17 +864,24 @@ class N_Ports(BaseDevice):
         source_modes: Tuple[int] = ("Ez1",),
     ):
         grid_step = grid_step or self.grid_step
-        dl = grid_step * 1e-6
+        dl = grid_step * MICRON_UNIT
         mode_profiles = {}
         for wl in np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl):
             for source_mode in source_modes:
                 # there is no need to calculate the modes for different temperatures
                 # since the eps is only modulated at active region
                 # current_eps = get_temp_related_eps(eps, wl, temp)
-                omega = 2 * np.pi * C_0 / (wl * 1e-6)
+                omega = 2 * np.pi * C_0 / (wl * MICRON_UNIT)
+             
                 ht_m, et_m, _, mode = insert_mode(
                     omega, dl, slice.x, slice.y, eps, m=source_mode
                 )
+                # print(ht_m)
+                # ht_m, et_m, _, mode = insert_mode_spins(
+                #     omega, dl, slice.x, slice.y, eps, m=source_mode
+                # )
+                # print(ht_m)
+                # exit(0)
                 if power_scales is not None:
                     power_scale = power_scales[(wl, source_mode)]
                     ht_m = ht_m * power_scale
@@ -967,9 +976,9 @@ class N_Ports(BaseDevice):
         this is only called in the norm run through solve() in _norm_run(), so we can pass port_name and the mode to be 'Norm' directly
         and there is no need to run the backward to store the adjoint source and adjoint fields, so we enable torch.no_grad() environment
         """
-        omega = 2 * np.pi * C_0 / (wl * 1e-6)
+        omega = 2 * np.pi * C_0 / (wl * MICRON_UNIT)
         grid_step = grid_step or self.grid_step
-        dl = grid_step * 1e-6
+        dl = grid_step * MICRON_UNIT
         # simulation = fdfd_ez(omega, dl, eps, [self.NPML[0], self.NPML[1]])
         simulation = self.create_simulation(
             omega, dl, eps, self.NPML, solver=solver, pol=pol

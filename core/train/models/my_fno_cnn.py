@@ -1,34 +1,22 @@
-from turtle import pos
-from typing import List, Optional, Tuple
-
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from pyutils.activation import Swish
-from timm.models.layers import DropPath
-from torch import nn
-from torch.functional import Tensor
-from torch.types import Device
-from neuralop.models import FNO
+from einops import rearrange
+from mmengine.registry import MODELS
 from neuralop.layers.fno_block import FNOBlocks
 from neuralop.layers.spectral_convolution import SpectralConv
-import matplotlib.pyplot as plt
+from neuralop.models import FNO
+from torch.functional import Tensor
+
+from core.fdfd.fdfd import fdfd_ez
+from core.train.utils import resize_to_targt_size
 from core.utils import (
     Si_eps,
-    SiO2_eps,
 )
-import copy
-from mmengine.registry import MODELS
+from thirdparty.ceviche.constants import *
 
-import torch.nn.functional as F
-from functools import lru_cache
-from pyutils.torch_train import set_torch_deterministic
-from core.train.utils import resize_to_targt_size
-from core.fdfd.fdfd import fdfd_ez
-from thirdparty.ceviche.ceviche.constants import *
-from einops import rearrange
-from .model_base import ModelBase, ConvBlock, LinearBlock
+from .model_base import ConvBlock, LinearBlock, ModelBase
 
 __all__ = ["MyFNO2d"]
 
@@ -61,6 +49,7 @@ class LearnableFourierFeatures(nn.Module):
 
         return pos_enc
 
+
 class SpatialInterpolater(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -68,6 +57,8 @@ class SpatialInterpolater(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         x = F.interpolate(x, scale_factor=(2, 2), mode="bilinear", align_corners=False)
         return x
+
+
 @MODELS.register_module()
 class LayerNorm(nn.Module):
     r"""LayerNorm implementation used in ConvNeXt
@@ -232,7 +223,7 @@ class MyFNO2d(ModelBase):
         else:
             raise ValueError("fourier_feature only supports basic and gauss")
 
-        omega = 2 * np.pi * C_0 / (1.55 * 1e-6)
+        omega = 2 * np.pi * C_0 / (1.55 * MICRON_UNIT)
         self.sim = fdfd_ez(
             omega=omega,
             dL=2e-8,
@@ -344,7 +335,7 @@ class MyFNO2d(ModelBase):
             ),
             ConvBlock(
                 384,
-                384*2,
+                384 * 2,
                 kernel_size=5,
                 padding=2,
                 stride=2,
@@ -353,8 +344,8 @@ class MyFNO2d(ModelBase):
                 device=self.device,
             ),
             ConvBlock(
-                384*2,
-                384*2,
+                384 * 2,
+                384 * 2,
                 kernel_size=5,
                 padding=2,
                 stride=2,
@@ -363,8 +354,8 @@ class MyFNO2d(ModelBase):
                 device=self.device,
             ),
             ConvBlock(
-                384*2,
-                384*2,
+                384 * 2,
+                384 * 2,
                 kernel_size=5,
                 padding=2,
                 stride=2,
@@ -758,7 +749,7 @@ class MyFNO2d(ModelBase):
         x2_fwd = resize_to_targt_size(x2_fwd, (src.shape[-2], src.shape[-1]))
         if len(x2_fwd.shape) == 3:
             x2_fwd = x2_fwd.unsqueeze(0)
-        x_fwd = torch.cat((x1_fwd, x2_fwd), dim=1) # 8, 192, 260, 260
+        x_fwd = torch.cat((x1_fwd, x2_fwd), dim=1)  # 8, 192, 260, 260
         if hasattr(self, "s_param_head"):
             s_param = self.s_param_head(x_fwd) * 1e-8
             return s_param

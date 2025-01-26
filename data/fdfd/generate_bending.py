@@ -18,7 +18,7 @@ from core.invdes.models.base_optimization import (
 )
 from core.invdes.models.layers import Bending
 from core.utils import set_torch_deterministic
-from thirdparty.ceviche.ceviche.constants import *
+from thirdparty.ceviche.constants import *
 
 from core.utils import DeterministicCtx, print_stat
 

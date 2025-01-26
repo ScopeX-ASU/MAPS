@@ -11,15 +11,18 @@ import torch
 from autograd import numpy as npa
 from pyutils.general import ensure_dir, logger
 from scipy.ndimage import zoom
+from spins.fdfd_solvers.waveguide_mode import (
+    solve_waveguide_mode,
+)
 from torch import Tensor
 
 from core.utils import (
     Slice,
     get_eigenmode_coefficients,
 )
-from thirdparty.ceviche.ceviche import constants
-from thirdparty.ceviche.ceviche.fdfd import compute_derivative_matrices
-from thirdparty.ceviche.ceviche.modes import filter_modes, normalize_modes
+from thirdparty.ceviche import constants
+from thirdparty.ceviche.fdfd import compute_derivative_matrices
+from thirdparty.ceviche.modes import filter_modes, normalize_modes
 
 from .viz import abs as plot_abs
 from .viz import real as plot_real
@@ -674,6 +677,13 @@ def plot_eps_field(
         ),
         gridspec_kw={"wspace": 0.3},
     )
+
+    ## clap Ez abs within 0 ~ 99.999%
+    Ez_abs = np.abs(Ez)
+    Ez_phase = np.angle(Ez)
+    Ez = np.clip(Ez_abs, a_min=0, a_max=np.percentile(Ez_abs, 99.999)) * np.exp(
+        1j * Ez_phase
+    )
     for i, stat in enumerate(field_stat):
         if stat == "abs":
             plot_abs(Ez, outline=None, ax=ax[i], cbar=True, font_size=label_fontsize)
@@ -860,6 +870,132 @@ def solver_eigs(A, Neigs, guess_value=1.0):
     return values, vectors
 
 
+def insert_mode_spins(
+    omega,
+    dx,
+    x,
+    y,
+    epsr,
+    target=None,
+    npml=0,
+    m="Ez1",
+    filtering=False,
+):
+    if isinstance(m, int):
+        pol = "Ez"  # by default Ez mode
+        logger.warning("The mode is not specified, by default, it is Ez mode")
+    pol = m[0:2]
+    m = int(m[2:])
+
+    if target is None:
+        target = np.zeros(epsr.shape, dtype=complex)
+    epsr_cross = epsr[x, y]
+
+    if len(x.shape) == 0:  # x direction slice
+        direction = "x"
+        xx = slice(x, x + 1)
+        yy = y
+        epsr_cross = epsr_cross[None, :]
+    elif len(y.shape) == 0:  # y direction slice
+        direction = "y"
+        xx = x
+        yy = slice(y, y + 1)
+        epsr_cross = epsr_cross[:, None]
+
+    # dxes = [dx * 1e6, dx * 1e6]  # dx_e and dx_h
+    dxes = [dx, dx]  # dx_e and dx_h
+    # args_2d = {
+    #     "dxes": [
+    #         [np.zeros(epsr_cross.shape[0]) + dx, np.zeros(epsr_cross.shape[1]) + dx]
+    #         for dx in dxes
+    #     ],  # [[dx_e, dy_e], [dx_h, dy_h]]
+    #     "epsilon": np.concatenate([epsr_cross.flatten()] * 3, axis=0),
+    #     "mu": np.concatenate([np.zeros_like(epsr_cross.flatten()) + 1] * 3, axis=0),
+    #     "wavenumber_correction": True,
+    # }
+    if pol == "Ez":
+        # from 1,2,3,4,5.... to 0, 2, 4, 6, 8
+        m = (m - 1) * 2
+    elif pol == "Hz":
+        # from 1,2,3,4,5.... to 1, 3, 5, 7, 9
+        m = m * 2 - 1
+    # fields_2d = solve_waveguide_mode_2d(m, omega=omega / constants.C_0 / 1e6, **args_2d)
+
+    # sim_params = {
+    #         'omega': omega / constants.C_0 / 1e6,
+    #         'axis': direction, # propagation direction
+    #         'slices': (x, y),
+    #         'mu': np.concatenate([np.zeros_like(epsr_cross.flatten()) + 1]*3, axis=0)
+    #     }
+    epsr = epsr[..., None]  # x,y,z
+    sim_params = {
+        # "omega": omega / constants.C_0 / 1e6,
+        "omega": omega,
+        "dxes": [
+            [np.zeros(epsr.shape[0]) + dx, np.zeros(epsr.shape[1]) + dx, np.array([dx])]
+            for dx in dxes
+        ],  # [[dx_e, dy_e], [dx_h, dy_h]]
+        "axis": 0 if direction == "x" else 1,  # propagation direction
+        "slices": (xx, yy, slice(0, 1)),
+        "polarity": 1,
+        "mu": [np.zeros_like(epsr) + constants.MU_0] * 3,
+    }
+    slices = tuple(sim_params["slices"])
+
+    epsr_x = (epsr + np.roll(epsr, shift=1, axis=0)) / 2
+    epsr_y = (epsr + np.roll(epsr, shift=1, axis=1)) / 2
+    fields_2d = solve_waveguide_mode(
+        mode_number=m,
+        epsilon=[
+            epsr_x * constants.EPSILON_0,
+            epsr_y * constants.EPSILON_0,
+            epsr * constants.EPSILON_0,
+        ],
+        **sim_params,
+    )
+    if pol == "Ez":
+        e = fields_2d["E"][2]  # Ez
+        if direction == "x":
+            h = fields_2d["H"][1]  # Hy
+        elif direction == "y":
+            h = fields_2d["H"][0]  # Hx
+        target = e
+        e = e[slices]
+        h = h[slices]
+    elif pol == "Hz":
+        if direction == "x":
+            e = fields_2d["E"][1]  # Ey
+        elif direction == "y":
+            e = fields_2d["E"][0]  # Ex
+        h = fields_2d["H"][2]  # Hz
+        target = h
+        h = h[slices]
+        e = e[slices]
+        # es = {i: e[slices] for i, e in enumerate(fields_2d["E"])}
+        # hs = {i: h[slices] for i, h in enumerate(fields_2d["H"])}
+        # print(es)
+        # print(hs)
+
+    # import matplotlib.pyplot as plt
+    # for m in range(0, 4):
+    #     fields_2d = solve_waveguide_mode_2d(m, omega=omega / constants.C_0 / 1e6, **args_2d)
+    #     print(fields_2d.keys())
+    #     fig, axes = plt.subplots(2, 3, figsize=(10, 10))
+    #     for i, (key, field) in enumerate(fields_2d.items()):
+    #         if key  == "E":
+    #             for j, f in enumerate(field):
+    #                 axes[0, j].plot(np.abs(f))
+    #                 axes[0, j].set_title(f"{key} {j}")
+    #         elif key == "H":
+    #             for j, f in enumerate(field):
+    #                 axes[1, j].plot(np.abs(f))
+    #                 axes[1, j].set_title(f"{key} {j}")
+    #     fig.savefig(f"fields_spins_mode-{m}.png", dpi=300)
+    #     plt.close(fig)
+    # exit(0)
+    return h, e, 0, target
+
+
 def get_modes(
     eps_cross,
     omega,
@@ -933,11 +1069,29 @@ def insert_mode(omega, dx, x, y, epsr, target=None, npml=0, m="Ez1", filtering=F
     supplied, then a target array is created with the same shape as epsr, and the mode is
     inserted into it.
     """
+    # from angler import Simulation
     if isinstance(m, int):
         pol = "Ez"  # by default Ez mode
         logger.warning("The mode is not specified, by default, it is Ez mode")
     pol = m[0:2]
     m = int(m[2:])
+    # print(omega, epsr, dx, npml)
+
+    # sim = Simulation(omega, epsr, dl=dx*1e6, NPML=[npml, npml], pol="Hz")
+    # if len(x.shape) == 0:
+    #     center = (x.item(), (y[0] + y[-1])//2)
+    #     width = y[-1] - y[0]
+    #     dir = "x"
+    # else:
+    #     center = ((x[0] + x[-1]) // 2, y.item())
+    #     width = x[-1] - x[0]
+    #     dir = "y"
+    # # print(dir, center, width)
+    # sim.add_mode(np.max(epsr)**0.5, dir, center=center, width=width, order=1)
+    # sim.setup_modes()
+    # fz_angler = sim.src[x, y]
+    # print(fz_angler)
+
     if target is None:
         target = np.zeros(epsr.shape, dtype=complex)
     epsr_cross = epsr[x, y]
@@ -1001,15 +1155,14 @@ def insert_mode(omega, dx, x, y, epsr, target=None, npml=0, m="Ez1", filtering=F
 
     ## for Ez pol, this e is Ez, h is tangential field, i.e., for x direction: hy, for y direction: hx
     k0 = omega / constants.C_0
-    beta = k0
+    beta = np.real(np.sqrt(vals, dtype=complex)) * k0
     if pol == "Ez":
-        beta = np.real(np.sqrt(vals, dtype=complex)) * k0
         e = fz
         h = beta / omega / constants.MU_0 * e
         target[x, y] = np.atleast_2d(e)[:, m - 1].squeeze()
     elif pol == "Hz":
         h = fz
-        e = h * omega * constants.MU_0 / k0
+        e = h * omega * constants.MU_0 / beta
         target[x, y] = np.atleast_2d(h)[:, m - 1].squeeze()
 
     return h[:, m - 1], e[:, m - 1], beta, target

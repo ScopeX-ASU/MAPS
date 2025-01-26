@@ -7,13 +7,18 @@ basically, this should be like the training logic like in train_NN.py
 import os
 import sys
 
+from pyutils.general import TimerCtx
+
 # Add the project root to sys.path
 project_root = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "/home/pingchua/projects/MAPS")
 )
 sys.path.insert(0, project_root)
+from concurrent.futures import ThreadPoolExecutor
+
 import torch
 from pyutils.config import Config
+from pyutils.general import logger
 
 from core.invdes import builder
 from core.invdes.models import (
@@ -35,6 +40,9 @@ class InvDesign:
         optimizer=Config(
             name="Adam",
             lr=2e-2,
+            # name="lbfgs",
+            # line_search_fn="strong_wolfe",
+            # lr=1e-2,
             weight_decay=0,
         ),
         lr_scheduler=Config(
@@ -74,6 +82,7 @@ class InvDesign:
             scheduler_type="sharp_scheduler",
             config_total=self._cfg,
         )
+        self.plot_thread = ThreadPoolExecutor(2)
 
     def load_cfgs(self, **cfgs):
         # Start with default configurations
@@ -101,20 +110,50 @@ class InvDesign:
             assert len(in_port_names) > 0, "in_port_names must be provided"
             if len(exclude_port_names) == 0:
                 exclude_port_names = [[]] * len(objs)
+
+        class Closure(object):
+            def __init__(
+                self,
+                optimizer,  # optimizer
+                devOptimization,  # device optimization model,
+            ):
+                self.results = None
+                self.optimizer = optimizer
+                self.devOptimization = devOptimization
+                self.sharpness = 1
+
+            def __call__(self):
+                # clear grad here
+                self.optimizer.zero_grad()
+                # forward pass
+                results = self.devOptimization.forward(sharpness=self.sharpness)
+
+                # need backward to compute grad
+                (-results["obj"]).backward()
+
+                # store any results for plot/log
+                self.results = results
+
+                ## return the loss for gradient descent
+                return -results["obj"]
+
+        closure = Closure(
+            optimizer=self.optimizer,
+            devOptimization=self.devOptimization,
+        )
+
         for i in range(self._cfg.run.n_epochs):
-            # train the model
-            self.optimizer.zero_grad()
             sharpness = self.sharp_scheduler.get_sharpness()
-            # forward pass
-            results = self.devOptimization.forward(sharpness=sharpness)
-            print(f"Step {i}:", end=" ")
-            for k, obj in results["breakdown"].items():
-                print(f"{k}: {obj['value']:.3f}", end=", ")
-            print()
-            # backward pass
-            (-results["obj"]).backward()
-            # update the weights
-            self.optimizer.step()
+            closure.sharpness = sharpness
+
+            self.optimizer.step(closure)
+            results = closure.results
+
+            log = f"Step {i:3d} (sharp: {sharpness:.1f}) "
+            log += ", ".join(
+                [f"{k}: {obj['value']:.3f}" for k, obj in results["breakdown"].items()]
+            )
+            logger.info(log)
             # update the learning rate
             self.lr_scheduler.step()
             # update the sharpness
@@ -126,7 +165,8 @@ class InvDesign:
                 for j in range(len(objs)):
                     # (port_name, wl, mode, temp), extract pol from mode, e.g., Ez1 -> Ez
                     pol = field_keys[j][2][:2]
-                    self.devOptimization.plot(
+                    self.plot_thread.submit(
+                        self.devOptimization.plot,
                         eps_map=self.devOptimization._eps_map,
                         obj=results["breakdown"][objs[j]]["value"],
                         plot_filename=plot_filename + f"_{i}" + f"_{objs[j]}.jpg",
@@ -138,6 +178,7 @@ class InvDesign:
                         # exclude_port_names=["refl_port_2"],
                         exclude_port_names=exclude_port_names[j],
                     )
+
         if dump_gds:
             if plot_filename.endswith(".png"):
                 plot_filename = plot_filename[:-4]
@@ -163,7 +204,7 @@ if __name__ == "__main__":
         dict(
             solver="ceviche_torch",
             border_width=[0, port_len, port_len, 0],
-            resolution=50,
+            resolution=100,
             plot_root=f"./figs/test_mfs_bending_{500}",
             PML=[0.5, 0.5],
             neural_solver=None,

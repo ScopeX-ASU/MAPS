@@ -16,11 +16,11 @@ from typing import Tuple
 
 import torch
 import torch.nn as nn
-from thirdparty.pyutility.pyutils.config import train_configs as configs
-from thirdparty.pyutility.pyutils.datasets import get_dataset
-from thirdparty.pyutility.pyutils.lr_scheduler.warmup_cosine_restart import CosineAnnealingWarmupRestarts
-from thirdparty.pyutility.pyutils.optimizer.sam import SAM
-from thirdparty.pyutility.pyutils.typing import DataLoader, Optimizer, Scheduler
+from core.utils import train_configs as configs
+from pyutils.datasets import get_dataset
+from pyutils.lr_scheduler.warmup_cosine_restart import CosineAnnealingWarmupRestarts
+from pyutils.optimizer.sam import SAM
+from pyutils.typing import DataLoader, Optimizer, Scheduler
 from torch.types import Device
 from mmengine.registry import MODELS
 from .models import *

@@ -9,12 +9,11 @@ from pyutils.typing import Optimizer, Scheduler
 from torch.types import Device
 
 from core.invdes.models import *
-
 from core.utils import (
-    TemperatureScheduler,
-    SharpnessScheduler,
-    ResolutionScheduler,
     DAdaptAdam,
+    ResolutionScheduler,
+    SharpnessScheduler,
+    TemperatureScheduler,
 )
 
 __all__ = [
@@ -26,12 +25,14 @@ __all__ = [
     "make_criterion",
 ]
 
+
 def make_device(device: Device, config=None):
     device_to_opt = eval(config.device_type)(
         sim_cfg=config.sim_cfg,
         device=device,
     )
     return device_to_opt
+
 
 def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
     raise NotImplementedError
@@ -105,7 +106,7 @@ def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
             if_constant_period=configs.model.if_constant_period,
             focal_constant=configs.model.focal_constant,
         ).to(device)
-    elif configs.model.name.lower() == 'metacoupleroptimization':
+    elif configs.model.name.lower() == "metacoupleroptimization":
         model = eval(configs.model.name)(
             device=kwargs["optDevice"],
             sim_cfg=configs.model.sim_cfg,
@@ -171,7 +172,9 @@ def make_optimizer(params, total_config=None) -> Optimizer:
         optimizer = torch.optim.LBFGS(
             params,
             lr=config.lr,  # for now, only the lr is tunable, others arguments just use the default value
-            line_search_fn=config.line_search_fn,
+            line_search_fn=getattr(config, "line_search_fn", None),
+            max_iter=getattr(config, "max_iter", 4),
+            history_size=getattr(config, "history_size", 100),
         )
     else:
         raise NotImplementedError(name)
