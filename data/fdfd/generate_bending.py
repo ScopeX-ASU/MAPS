@@ -129,11 +129,11 @@ def bending_opt(device_id, operation_device, perturb_probs=[0.1, 0.3, 0.5]):
                 optimizer.zero_grad(set_to_none=True)  # Clear gradients completely
 
 
-    for step in range(10):
-        # for step in range(1):
+    # for step in range(10):
+    for step in range(1):
         optimizer.zero_grad()
-        results = opt.forward(sharpness=1 + 2 * step)
-        # results = opt.forward(sharpness=256)
+        # results = opt.forward(sharpness=1 + 2 * step)
+        results = opt.forward(sharpness=256)
         print(f"Step {step}:", end=" ")
         for k, obj in results["breakdown"].items():
             print(f"{k}: {obj['value']:.3f}", end=", ")

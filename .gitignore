@@ -170,4 +170,14 @@ cython_debug/
 /plot/*
 *.csv
 *.png
-data/fdfd/mdm/raw/*.yml
+data/fdfd/mdm/raw_opt_traj_ptb/*.yml
+data/fdfd/wdm/raw_opt_traj_ptb/*.yml
+data/fdfd/tdm/raw_opt_traj_ptb/*.yml
+data/fdfd/optical_diode/raw_opt_traj_ptb/*.yml
+data/fdfd/crossing/raw_opt_traj_ptb/*.yml
+data/fdfd/mdm/raw_test/*.yml
+data/fdfd/wdm/raw_test/*.yml
+data/fdfd/tdm/raw_test/*.yml
+data/fdfd/optical_diode/raw_test/*.yml
+data/fdfd/crossing/raw_test/*.yml
+unitest/*.mp4

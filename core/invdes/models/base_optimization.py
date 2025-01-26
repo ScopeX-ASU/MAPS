@@ -668,7 +668,7 @@ class BaseOptimization(nn.Module):
         self.current_sharpness = sharpness
         eps_map, design_region_eps_dict, hr_eps_map, hr_design_region_eps_dict = (
             self.build_device(sharpness)
-        )
+        ) # eps_map = outpt = model.forward(input)
         self._design_region_eps_dict = design_region_eps_dict
         ## need to create objective layer during forward, because all Simulations need to know the latest permittivity_list
 
@@ -676,7 +676,7 @@ class BaseOptimization(nn.Module):
         if self._eps_map.requires_grad:
             self._eps_map.retain_grad()
         self._hr_eps_map = hr_eps_map
-        obj = self.objective_layer([eps_map])
+        obj = self.objective_layer([eps_map]) # loss = loss_function(output, target)
         self._obj = obj
         results = {"obj": obj, "breakdown": self.objective.breakdown}
         ## return design region epsilons and the final epsilon map for other penalty loss calculation
