@@ -1132,7 +1132,8 @@ def get_modes(
             + diag_eps_r.dot(Dxf).dot(diag_eps_r_xx_inv).dot(Dxb) * (1 / k0) ** 2
         )
 
-    n_max = np.sqrt(np.max(eps_cross)) * 0.92
+    # n_max = np.sqrt(np.max(eps_cross)) * 0.92
+    n_max = np.sqrt(np.max(eps_cross)) # why 0.92???
     vals, vecs = solver_eigs(A, m, guess_value=n_max**2)
 
     if pol == "Hz":

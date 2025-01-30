@@ -36,8 +36,8 @@ if __name__ == "__main__":
     mdm_region_size = (3, 3)
     port_len = 1.8
 
-    input_port_width = 0.48
-    output_port_width = 0.48
+    input_port_width = 0.8
+    output_port_width = 0.8
 
     sim_cfg.update(
         dict(
