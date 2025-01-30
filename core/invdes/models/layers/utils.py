@@ -646,6 +646,7 @@ def plot_eps_field(
     title: str = None,
     x_shift_coord: int = 0,
     x_shift_idx: int = 0,
+    if_gif: bool = False,
 ):
     if isinstance(Ez, torch.Tensor):
         Ez = Ez.data.cpu().numpy()
@@ -671,6 +672,16 @@ def plot_eps_field(
         ),
         gridspec_kw={"wspace": 0.3},
     )
+    if if_gif:
+        fig_gif, ax_gif = plt.subplots(
+            1,
+            1,
+            constrained_layout=True,
+            figsize=(
+                7 * Ez.shape[0] / 600 / 2,
+                1.7 * Ez.shape[1] / 300,
+            ),
+        )
     for i, stat in enumerate(field_stat):
         if stat == "abs":
             plot_abs(Ez, outline=None, ax=ax[i], cbar=True, font_size=label_fontsize)
@@ -809,9 +820,67 @@ def plot_eps_field(
         ax[i].set_xlim([0, Ez.shape[0]])
         ax[i].set_ylim([0, Ez.shape[1]])
         ax[i].set_aspect("equal")
+    if if_gif:
+        # begin to plot the gif
+        plot_real(Ez, outline=None, ax=ax_gif, cbar=False, font_size=label_fontsize)
+        plot_abs(
+                eps.astype(np.float64),
+                ax=ax_gif,
+                cmap="Greys",
+                alpha=0.2,
+                font_size=label_fontsize,
+            )
+        ## draw shaddow with NPML border
+        ## left
+        rect = patches.Rectangle(
+            (0, 0), width=NPML[0], height=Ez.shape[1], facecolor="gray", alpha=0.5
+        )
+        ax_gif.add_patch(rect)
+        ## right
+        rect = patches.Rectangle(
+            (Ez.shape[0] - NPML[0], 0),
+            width=NPML[0],
+            height=Ez.shape[1],
+            facecolor="gray",
+            alpha=0.5,
+        )
+        ax_gif.add_patch(rect)
 
-    # for sl in slices:
-    #     ax[0].plot(sl.x*np.ones(len(sl.y)), sl.y, 'b-')
+        ## lower
+        rect = patches.Rectangle(
+            (NPML[0], 0),
+            width=Ez.shape[0] - NPML[0] * 2,
+            height=NPML[1],
+            facecolor="gray",
+            alpha=0.5,
+        )
+        ax_gif.add_patch(rect)
+
+        ## upper
+        rect = patches.Rectangle(
+            (NPML[0], Ez.shape[1] - NPML[1]),
+            width=Ez.shape[0] - NPML[0] * 2,
+            height=NPML[1],
+            facecolor="gray",
+            alpha=0.5,
+        )
+        ax_gif.add_patch(rect)
+
+        xlabel = np.linspace(-x_width / 2, x_width / 2, 5)
+        ylabel = np.linspace(-y_height / 2, y_height / 2, 5)
+        xticks = np.linspace(0, Ez.shape[0] - 1, 5)
+        yticks = np.linspace(0, Ez.shape[1] - 1, 5)
+        xlabel = [f"{x:.2f}" for x in xlabel]
+        ylabel = [f"{y:.2f}" for y in ylabel]
+        ax_gif.set_xticks(xticks)
+        ax_gif.set_yticks(yticks)
+        ax_gif.set_xticklabels(xlabel, fontsize=tick_fontsize)
+        ax_gif.set_yticklabels(ylabel, fontsize=tick_fontsize)
+        ax_gif.set_xlim([0, Ez.shape[0]])
+        ax_gif.set_ylim([0, Ez.shape[1]])
+        ax_gif.set_xlabel("")  # Removes the x-axis label
+        ax_gif.set_ylabel("")  # Removes the y-axis label
+        ax_gif.set_aspect("equal")
 
     size = eps.shape
     ## center crop of eps of size of new_size
@@ -868,7 +937,11 @@ def plot_eps_field(
         dpi = 600
     if filepath is not None:
         fig.savefig(filepath, dpi=dpi, bbox_inches="tight")
-    plt.close()
+        plt.close(fig)
+        if if_gif:
+            gif_filepath = filepath[:-4] + "_gif" + filepath[-4:]
+            fig_gif.savefig(gif_filepath, dpi=dpi, bbox_inches="tight")
+            plt.close(fig_gif)
 
 
 def insert_mode(omega, dx, x, y, epsr, target=None, npml=0, m=1, filtering=False):

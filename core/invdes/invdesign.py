@@ -18,7 +18,7 @@ from core.invdes.models import (
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import Bending
 from core.utils import set_torch_deterministic
-
+from pyutils.torch_train import BestKModelSaver
 
 class InvDesign:
     """
@@ -70,6 +70,13 @@ class InvDesign:
             scheduler_type="sharp_scheduler",
             config_total=self._cfg,
         )
+        self.saver = BestKModelSaver(
+            k=1,
+            descend=False,
+            truncate=10,
+            metric_name="err",
+            format="{:.4f}",
+        )
 
     def load_cfgs(self, **cfgs):
         # Start with default configurations
@@ -89,6 +96,7 @@ class InvDesign:
         in_slice_names=[],
         exclude_slice_names=[],
         dump_gds=False,
+        save_model=False,
     ):
         if plot:
             assert plot_filename is not None, "plot_filename must be provided"
@@ -109,6 +117,10 @@ class InvDesign:
             print()
             # backward pass
             (-results["obj"]).backward()
+            if i == self._cfg.run.n_epochs - 1 and save_model:
+                if plot_filename.endswith(".png"):
+                    plot_filename = plot_filename[:-4]
+                self.save_model(results["obj"].item(), f"./checkpoint/{plot_filename}.pt")
             # update the weights
             self.optimizer.step()
             # update the learning rate
@@ -136,6 +148,16 @@ class InvDesign:
             if plot_filename.endswith(".png"):
                 plot_filename = plot_filename[:-4]
             self.devOptimization.dump_gds_files(plot_filename + ".gds")
+
+    def save_model(self, fom, path):
+        self.saver.save_model(
+            self.devOptimization,
+            fom,
+            epoch=self._cfg.run.n_epochs,
+            path=path,
+            save_model=False,
+            print_msg=True,
+        )
 
 
 if __name__ == "__main__":

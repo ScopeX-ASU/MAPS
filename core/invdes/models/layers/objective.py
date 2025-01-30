@@ -430,6 +430,75 @@ class FluxObjective(object):
         else:
             return npa.mean(npa.array(s_list))  # we only need absolute flux
 
+class PhaseRecorderObjective(object):
+    def __init__(
+        self,
+        sims: dict,  # {wl: Simulation}
+        phase_shift: dict,
+        port_slices: dict,
+        in_slice_name: str,
+        out_slice_name: str,
+        in_mode: int,
+        target_wls: Tuple[float],
+        target_temps: Tuple[float],
+        obj_type: str = "phase_recorder",
+    ):
+        self.sims = sims
+        self.phase_shift = phase_shift
+        self.port_slices = port_slices
+        self.in_slice_name = in_slice_name
+        self.out_slice_name = out_slice_name
+        self.in_mode = in_mode
+        self.target_wls = target_wls
+        self.target_temps = target_temps
+        self.obj_type = obj_type
+
+    def __call__(self, fields):
+        (
+            target_wls,
+            target_temps,
+            in_slice_name,
+            out_slice_name,
+            in_mode,
+        ) = (
+            self.target_wls,
+            self.target_temps,
+            self.in_slice_name,
+            self.out_slice_name,
+            self.in_mode,
+        )
+
+        mean_phase_list = []
+        ## for each wavelength, we evaluate the objective
+        for wl, sim in self.sims.items():
+            ## we calculate the average eigen energy for all output modes
+            if wl not in target_wls:
+                continue
+            for temp in target_temps:
+                monitor_slice = self.port_slices[out_slice_name]
+                ez = fields[(in_slice_name, wl, in_mode, temp)]["Ez"]
+                ez = ez[monitor_slice]
+                assert (
+                    len(monitor_slice.x.shape) <= 1
+                    or len(monitor_slice.y.shape) <= 1
+                ), "Only 1D slice is supported for phase recorder"
+                ez = ez.reshape(1, -1)
+                # calculate the phase of Ez
+                phase = torch.angle(ez)
+                phase_std = torch.std(phase)
+                phase_mean = torch.mean(phase)
+                phase_mean = torch.remainder(phase_mean, 2 * torch.pi)
+                self.phase_shift[(in_slice_name, out_slice_name, wl, in_mode, temp)] = {
+                    "phase": torch.remainder(phase, 2 * torch.pi),
+                    "phase_std": phase_std,
+                    "phase_mean": phase_mean,
+                }
+                mean_phase_list.append(phase_mean)
+
+        if isinstance(mean_phase_list[0], Tensor):
+            return torch.mean(torch.stack(mean_phase_list))
+        else:
+            return npa.mean(npa.array(mean_phase_list))
 
 class ShapeSimilarityObjective(object):
     def __init__(
@@ -719,6 +788,7 @@ class ObjectiveFunc(object):
         ),
     ):
         self.s_params = {}
+        self.phase_shift = {}
         self._obj_fusion_func = cfgs["_fusion_func"]
         cfgs = deepcopy(cfgs)
         del cfgs["_fusion_func"]
@@ -806,6 +876,18 @@ class ObjectiveFunc(object):
                     target_temps=target_temps,
                     grid_step=self.grid_step,
                     energy=False,
+                    obj_type=obj_type,
+                )
+            elif obj_type == "phase_recoder":
+                objfn = PhaseRecorderObjective(
+                    sims=self.sims,
+                    phase_shift=self.phase_shift,
+                    port_slices=self.port_slices,
+                    in_slice_name=in_slice_name,
+                    out_slice_name=out_slice_name,
+                    in_mode=in_mode,
+                    target_wls=target_wls,
+                    target_temps=target_temps,
                     obj_type=obj_type,
                 )
             elif obj_type == "intensity_shape":

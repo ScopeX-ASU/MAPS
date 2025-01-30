@@ -194,15 +194,16 @@ class BaseOptimization(nn.Module):
     ):
         design_region_eps_dict = {}
         hr_design_region_eps_dict = {}
+        ### we need to fill in the permittivity of each design region to the whole device eps_map
+        eps_map = self.epsilon_map.data.clone() # why clone here?
+        hr_eps_map = self.hr_eps_map
+
         for region_name, design_region in self.design_region_param_dict.items():
             ## obtain each design region's denormalized permittivity only in the design region
-            hr_region, region = design_region(sharpness)
+            hr_region_mask = self.hr_device.design_region_masks[region_name]
+            hr_region, region = design_region(sharpness, hr_eps_map, hr_region_mask)
             design_region_eps_dict[region_name] = region
             hr_design_region_eps_dict[region_name] = hr_region
-
-        ### then we need to fill in the permittivity of each design region to the whole device eps_map
-        eps_map = self.epsilon_map.data.clone()
-        hr_eps_map = self.hr_eps_map
 
         for region_name, design_region_eps in design_region_eps_dict.items():
             region_mask = self.design_region_masks[region_name]
