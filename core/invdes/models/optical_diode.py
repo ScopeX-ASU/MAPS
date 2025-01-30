@@ -19,8 +19,10 @@ class DefaultConfig(DefaultOptimizationConfig):
                     design_region_1=dict(
                         method="levelset",
                         rho_resolution=[20, 20],
-                        # transform=[dict(type="mirror_symmetry", dims=[1])],
-                        transform=[],
+                        transform=[
+                            dict(type="blur", mfs=0.1, resolutions=[310, 310], dim="xy"),
+                            dict(type="binarize"),
+                        ], # there is no symmetry in this design region
                         init_method="rectangle",
                         binary_projection=dict(
                             fw_threshold=100,
@@ -46,11 +48,13 @@ class DefaultConfig(DefaultOptimizationConfig):
                     plot_root="./figs/isolator",
                 ),
                 obj_cfgs=dict(
+                    # need to clarify the difference between the slice name and the port name
+                    # all the objective should be evaluated at the slice not the port
                     fwd_trans=dict(
                         weight=1,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="out_port_1",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="out_slice_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
@@ -64,8 +68,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     bwd_trans=dict(
                         weight=-5,
                         #### objective is evaluated at this port
-                        in_port_name="out_port_1",
-                        out_port_name="in_port_1",
+                        in_slice_name="out_slice_1",
+                        out_slice_name="in_slice_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
@@ -79,8 +83,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     fwd_refl_trans=dict(
                         weight=-1,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="refl_port_1",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="refl_slice_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
@@ -94,8 +98,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     bwd_refl_trans=dict(
                         weight=-1,
                         #### objective is evaluated at this port
-                        in_port_name="out_port_1",
-                        out_port_name="refl_port_2",
+                        in_slice_name="out_slice_1",
+                        out_slice_name="refl_slice_2",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
@@ -109,8 +113,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     fwd_rad_trans_xp=dict(
                         weight=-2,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="rad_monitor_xp",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_slice_xp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
@@ -124,8 +128,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     fwd_rad_trans_xm=dict(
                         weight=-2,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="rad_monitor_xm",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_slice_xm",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
@@ -139,8 +143,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     fwd_rad_trans_yp=dict(
                         weight=-2,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="rad_monitor_yp",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_slice_yp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
@@ -154,8 +158,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     fwd_rad_trans_ym=dict(
                         weight=-2,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="rad_monitor_ym",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_slice_ym",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
@@ -169,8 +173,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     bwd_rad_trans_xp=dict(
                         weight=2,
                         #### objective is evaluated at this port
-                        in_port_name="out_port_1",
-                        out_port_name="rad_monitor_xp",
+                        in_slice_name="out_slice_1",
+                        out_slice_name="rad_slice_xp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
@@ -184,8 +188,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     bwd_rad_trans_xm=dict(
                         weight=2,
                         #### objective is evaluated at this port
-                        in_port_name="out_port_1",
-                        out_port_name="rad_monitor_xm",
+                        in_slice_name="out_slice_1",
+                        out_slice_name="rad_slice_xm",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
@@ -199,8 +203,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     bwd_rad_trans_yp=dict(
                         weight=2,
                         #### objective is evaluated at this port
-                        in_port_name="out_port_1",
-                        out_port_name="rad_monitor_yp",
+                        in_slice_name="out_slice_1",
+                        out_slice_name="rad_slice_yp",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
@@ -214,8 +218,8 @@ class DefaultConfig(DefaultOptimizationConfig):
                     bwd_rad_trans_ym=dict(
                         weight=2,
                         #### objective is evaluated at this port
-                        in_port_name="out_port_1",
-                        out_port_name="rad_monitor_ym",
+                        in_slice_name="out_slice_1",
+                        out_slice_name="rad_slice_ym",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],

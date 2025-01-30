@@ -183,3 +183,11 @@ data/fdfd/tdm/raw_test/*.yml
 data/fdfd/optical_diode/raw_test/*.yml
 data/fdfd/crossing/raw_test/*.yml
 unitest/*.mp4
+unitest/*.mp4
+
+# Ignore all .yml files
+*.yml
+
+# Exclude the ./config directory and its subdirectories
+!config/
+!config/**/*.yml

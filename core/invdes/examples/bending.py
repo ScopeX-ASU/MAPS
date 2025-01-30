@@ -26,6 +26,9 @@ from core.invdes.models import (
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import Bending
 from core.utils import set_torch_deterministic
+from pyutils.torch_train import (
+    load_model,
+)
 
 sys.path.pop(0)
 
@@ -38,7 +41,7 @@ if __name__ == "__main__":
     # first we need to instantiate the a optimization object
     sim_cfg = DefaultSimulationConfig()
 
-    bending_region_size = (1.6, 1.6)
+    bending_region_size = (2, 2)
     port_len = 1.8
 
     input_port_width = 0.5
@@ -49,7 +52,7 @@ if __name__ == "__main__":
             solver="ceviche_torch",
             border_width=[0, port_len, port_len, 0],
             resolution=50,
-            plot_root=f"./figs/bending_{'init_try'}",
+            plot_root=f"./figs/bending_{'init_try_Ez1'}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -73,21 +76,30 @@ if __name__ == "__main__":
         sim_cfg=sim_cfg,
         operation_device=operation_device,
     ).to(operation_device)
+    # checkpoint = "./checkpoint/bending_init_try_err-0.9928_epoch-100.pt"
+    checkpoint = None
+    if checkpoint is not None:
+        load_model(
+            opt,
+            checkpoint,
+            ignore_size_mismatch=0,
+        )
     invdesign = InvDesign(
         devOptimization=opt,
-        optimizer=dict(
-            name="lbfgs",
-            lr=1e-2,
-            line_search_fn="strong_wolfe",
-            weight_decay=0,
-        ),
+        # optimizer=dict(
+        #     name="lbfgs",
+        #     lr=1e-2,
+        #     line_search_fn="strong_wolfe",
+        #     weight_decay=0,
+        # ),
     )
     invdesign.optimize(
         plot=True,
-        plot_filename=f"bending_{'init_try'}",
+        plot_filename=f"bending_{'init_try_Ez1'}",
         objs=["fwd_trans"],
-        field_keys=[("in_port_1", 1.55, "Hz1", 300)],
-        in_port_names=["in_port_1"],
-        exclude_port_names=[],
-        dump_gds=True,
+        field_keys=[("in_slice_1", 1.55, "Ez1", 300)],
+        in_slice_names=["in_slice_1"],
+        exclude_slice_names=[],
+        dump_gds=False,
+        save_model=False,
     )

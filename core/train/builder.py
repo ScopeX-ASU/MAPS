@@ -41,7 +41,9 @@ from .utils import (
     AspectRatioLoss,
     MaxwellResidualLoss,
     GradientLoss,
+    GradSimilarityLoss,
     SParamLoss,
+    DirectCompareSParam,
     ComplexL1Loss,
 )
 
@@ -68,6 +70,7 @@ def make_dataloader(
                 FDFDDataset(
                     device_type=configs.dataset.device_type,
                     root=configs.dataset.root,
+                    data_dir=configs.dataset.data_dir,
                     split=split,
                     test_ratio=configs.dataset.test_ratio,
                     train_valid_split_ratio=configs.dataset.train_valid_split_ratio,
@@ -78,6 +81,16 @@ def make_dataloader(
             )
             for split in ["train", "valid", "test"]
         )
+        if hasattr(configs, "test_dataset"):
+            test_dataset = FDFDDataset(
+                        device_type=configs.test_dataset.device_type,
+                        root=configs.test_dataset.root,
+                        data_dir=configs.test_dataset.data_dir,
+                        split="test",
+                        test_ratio=configs.test_dataset.test_ratio,
+                        train_valid_split_ratio=configs.test_dataset.train_valid_split_ratio,
+                        processed_dir=configs.test_dataset.processed_dir,
+                    )
     else:
         train_dataset, test_dataset = get_dataset(
             name,
@@ -115,12 +128,15 @@ def make_dataloader(
         num_workers=configs.dataset.num_workers,
         prefetch_factor=8,
         persistent_workers=True,
-        shuffle=int(configs.dataset.shuffle),
+        shuffle=int(configs.test_dataset.shuffle),
     )
 
     return train_loader, validation_loader, test_loader
 
-def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
+def make_model(random_state: int = None, **kwargs) -> nn.Module:
+    device = kwargs.get("device", "cpu")
+    if device == "cpu":
+        raise ValueError("CPU is not supported for training")
     model = MODELS.build(kwargs).to(device)
     model.reset_parameters(random_state)
     return model
@@ -283,8 +299,12 @@ def make_criterion(name: str = None, cfg=None) -> nn.Module:
         )
     elif name == "grad_loss":
         criterion = GradientLoss()
+    elif name == "grad_similarity_loss":
+        criterion = GradSimilarityLoss()
     elif name == "s_param_loss":
         criterion = SParamLoss()
+    elif name == "direct_s_param_loss":
+        criterion = DirectCompareSParam()
     else:
         raise NotImplementedError(name)
     return criterion

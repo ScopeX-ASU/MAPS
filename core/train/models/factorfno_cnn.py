@@ -107,7 +107,8 @@ class FactorFNO2d(ModelBase):
         fourier_feature="none",
         pos_encoding="none",
         mapping_size=2,
-        incident_field_fwd=False,
+        output_sparam=False,
+        incident_field=False,
         device=torch.device("cuda"),
         conv_cfg=dict(type="Conv2d", padding_mode="replicate"),
         linear_cfg=dict(type="Linear"),
@@ -291,6 +292,9 @@ class FactorFNO2d(ModelBase):
         else:
             self.aux_head = None
 
+        if self.output_sparam:
+            self.build_sparam_head(self.kernel_list[-1])
+
     def fourier_feature_mapping(self, x: Tensor) -> Tensor:
         if self.fourier_feature == "none":
             return x
@@ -308,83 +312,31 @@ class FactorFNO2d(ModelBase):
     def set_trainable_permittivity(self, mode: bool = True) -> None:
         self.trainable_permittivity = mode
 
-    def incident_field_from_src(self, src: Tensor) -> Tensor:
-        if self.train_field == "fwd":
-            mode = src[:, int(0.4 * src.shape[-2] / 2), :]
-            mode = mode.unsqueeze(1).repeat(1, src.shape[-2], 1)
-            source_index = int(0.4 * src.shape[-2] / 2)
-            resolution = (
-                2e-8  # hardcode here since the we are now using resolution of 50px/um
-            )
-            epsilon = Si_eps(1.55)
-            lambda_0 = (
-                1.55e-6  # wavelength is hardcode here since we are now using 1.55um
-            )
-            k = (2 * torch.pi / lambda_0) * torch.sqrt(torch.tensor(epsilon)).to(
-                src.device
-            )
-            x_coords = torch.arange(src.shape[-2]).float().to(src.device)
-            distances = torch.abs(x_coords - source_index) * resolution
-            phase_shifts = (k * distances).unsqueeze(1)
-            mode = mode * torch.exp(1j * phase_shifts)
-
-        elif self.train_field == "adj":
-            # in the adjoint mode, there are two sources and we need to calculate the incident field for each of them
-            # then added together as the incident field
-            mode_x = src[:, int(0.41 * src.shape[-2] / 2), :]
-            mode_x = mode_x.unsqueeze(1).repeat(1, src.shape[-2], 1)
-            source_index = int(0.41 * src.shape[-2] / 2)
-            resolution = (
-                2e-8  # hardcode here since the we are now using resolution of 50px/um
-            )
-            epsilon = Si_eps(1.55)
-            lambda_0 = (
-                1.55e-6  # wavelength is hardcode here since we are now using 1.55um
-            )
-            k = (2 * torch.pi / lambda_0) * torch.sqrt(torch.tensor(epsilon)).to(
-                src.device
-            )
-            x_coords = torch.arange(src.shape[-2]).float().to(src.device)
-            distances = torch.abs(x_coords - source_index) * resolution
-            phase_shifts = (k * distances).unsqueeze(1)
-            mode_x = mode_x * torch.exp(1j * phase_shifts)
-
-            mode_y = src[
-                :, :, -int(0.4 * src.shape[-1] / 2)
-            ]  # not quite sure with this index, need to plot it out to check
-            mode_y = mode_y.unsqueeze(-1).repeat(1, 1, src.shape[-1])
-            source_index = src.shape[-1] - int(0.4 * src.shape[-1] / 2)
-            resolution = 2e-8
-            epsilon = Si_eps(1.55)
-            lambda_0 = 1.55e-6
-            k = (2 * torch.pi / lambda_0) * torch.sqrt(torch.tensor(epsilon)).to(
-                src.device
-            )
-            y_coords = torch.arange(src.shape[-1]).float().to(src.device)
-            distances = torch.abs(y_coords - source_index) * resolution
-            phase_shifts = (k * distances).unsqueeze(0)
-            mode_y = mode_y * torch.exp(1j * phase_shifts)
-
-            mode = mode_x + mode_y  # superposition of two sources
-        return mode
-
     def forward(
         self,
         eps,
         src,
+        monitor_slices,
+        monitor_slice_list,
+        in_slice_name,
+        wl,
+        temp,
     ):
-        if self.incident_field_fwd:
-            incident_field_fwd = self.incident_field_from_src(src)
-            incident_field_fwd = torch.view_as_real(incident_field_fwd).permute(
-                0, 3, 1, 2
-            )  # B, 2, H, W
-            incident_field_fwd = incident_field_fwd / (
-                torch.abs(incident_field_fwd).amax(dim=(1, 2, 3), keepdim=True) + 1e-6
-            )
-        src = torch.view_as_real(src.resolve_conj()).permute(0, 3, 1, 2)  # B, 2, H, W
-        src = src / (torch.abs(src).amax(dim=(1, 2, 3), keepdim=True) + 1e-6)
-
-        eps = eps / 12.11
+        src = src / (torch.abs(src).amax(dim=(1, 2), keepdim=True) + 1e-6) # B, H, W
+        if self.incident_field:
+            incident_field = self.calculate_incident_light_field(
+                                                        source=src,
+                                                        monitor_slices=monitor_slices,
+                                                        monitor_slice_list=monitor_slice_list,
+                                                        in_slice_name=in_slice_name,
+                                                        wl=wl,
+                                                        temp=temp,
+                                                    ) # Bs, 2, H, W
+        temp_multiplier = self._get_temp_multiplier(temp).unsqueeze(-1).unsqueeze(-1)  # B, 1, 1
+        eps_min = torch.amin(eps, dim=(-1, -2), keepdim=True)
+        eps = (eps - torch.amin(eps, dim=(-1, -2), keepdim=True)) / (torch.amax(eps, dim=(-1, -2), keepdim=True) - torch.amin(eps, dim=(-1, -2), keepdim=True))
+        # now it is normalized to [0, 1]
+        eps = (eps * temp_multiplier + eps_min) / 12.11
         eps = eps.unsqueeze(1)  # B, 1, H, W
 
         if self.fourier_feature == "learnable":
@@ -409,9 +361,10 @@ class FactorFNO2d(ModelBase):
                 else eps
             )
 
-        if self.incident_field_fwd:
-            x = torch.cat((eps_enc_fwd, incident_field_fwd), dim=1)
+        if self.incident_field:
+            x = torch.cat((eps_enc_fwd, incident_field), dim=1)
         else:
+            src = torch.view_as_real(src).permute(0, 3, 1, 2) # B, 2, H, W
             x = torch.cat((eps_enc_fwd, src), dim=1)
 
         # positional encoding
@@ -430,5 +383,10 @@ class FactorFNO2d(ModelBase):
         x = self.features(x)
 
         forward_Ez_field = self.head(x)  # 1x1 conv
+
+        if self.output_sparam:
+            assert hasattr(self, "sparam_head"), "sparam_head is not defined"
+            s_parameter = self.sparam_head(forward_Ez_field)
+            return forward_Ez_field, s_parameter
 
         return forward_Ez_field

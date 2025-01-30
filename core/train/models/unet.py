@@ -66,6 +66,7 @@ class UNet(ModelBase):
         with_cp=False,
         fourier_feature="none",
         mapping_size=2,
+        output_sparam=False,
         norm_cfg=dict(type="LayerNorm", data_format="channels_first"),
         act_cfg=dict(type="GELU"),
         wl=1.55,
@@ -73,7 +74,7 @@ class UNet(ModelBase):
         mode=1,
         conv_cfg=dict(type="Conv2d", padding_mode="replicate"),
         linear_cfg=dict(type="Linear"),
-        incident_field_fwd=False,
+        incident_field=False,
     )
 
     def __init__(
@@ -169,6 +170,9 @@ class UNet(ModelBase):
         self.drop_out = nn.Dropout2d(self.dropout_rate)
         self.conv_last = nn.Conv2d(dim, self.out_channels, 1)
 
+        if self.output_sparam:
+            self.build_sparam_head(dim)
+
     def set_trainable_permittivity(self, mode: bool = True) -> None:
         self.trainable_permittivity = mode
 
@@ -195,19 +199,27 @@ class UNet(ModelBase):
         self,
         eps,
         src,
+        monitor_slices,
+        monitor_slice_list,
+        in_slice_name,
+        wl,
+        temp,
     ):
-        if self.incident_field_fwd:
-            incident_field_fwd = self.incident_field_from_src(src)
-            incident_field_fwd = torch.view_as_real(incident_field_fwd).permute(
-                0, 3, 1, 2
-            )  # B, 2, H, W
-            incident_field_fwd = incident_field_fwd / (
-                torch.abs(incident_field_fwd).amax(dim=(1, 2, 3), keepdim=True) + 1e-6
-            )
-        src = torch.view_as_real(src.resolve_conj()).permute(0, 3, 1, 2)  # B, 2, H, W
-        src = src / (torch.abs(src).amax(dim=(1, 2, 3), keepdim=True) + 1e-6)
-
-        eps = eps / 12.11
+        src = src / (torch.abs(src).amax(dim=(1, 2), keepdim=True) + 1e-6) # B, H, W
+        if self.incident_field:
+            incident_field = self.calculate_incident_light_field(
+                                                        source=src,
+                                                        monitor_slices=monitor_slices,
+                                                        monitor_slice_list=monitor_slice_list,
+                                                        in_slice_name=in_slice_name,
+                                                        wl=wl,
+                                                        temp=temp,
+                                                    ) # Bs, 2, H, W
+        temp_multiplier = self._get_temp_multiplier(temp).unsqueeze(-1).unsqueeze(-1)  # B, 1, 1
+        eps_min = torch.amin(eps, dim=(-1, -2), keepdim=True)
+        eps = (eps - torch.amin(eps, dim=(-1, -2), keepdim=True)) / (torch.amax(eps, dim=(-1, -2), keepdim=True) - torch.amin(eps, dim=(-1, -2), keepdim=True))
+        # now it is normalized to [0, 1]
+        eps = (eps * temp_multiplier + eps_min) / 12.11
         eps = eps.unsqueeze(1)  # B, 1, H, W
 
         if self.fourier_feature == "learnable":
@@ -232,9 +244,10 @@ class UNet(ModelBase):
                 else eps
             )
 
-        if self.incident_field_fwd:
-            x = torch.cat((eps_enc_fwd, incident_field_fwd), dim=1)
+        if self.incident_field:
+            x = torch.cat((eps_enc_fwd, incident_field), dim=1)
         else:
+            src = torch.view_as_real(src).permute(0, 3, 1, 2) # B, 2, H, W
             x = torch.cat((eps_enc_fwd, src), dim=1)
 
         # positional encoding
@@ -243,11 +256,12 @@ class UNet(ModelBase):
             x.device,
             mode=self.pos_encoding,
             epsilon=eps * 12.11,
-            wavelength=self.wl,
-            grid_step=1 / self.img_res,
+            wavelength=wl.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) * 1e-6, # B, 1, 1, 1
+            grid_step=1 / self.img_res * 1e-6,
         )  # [bs, 2 or 4 or 8, h, w] real
         if grid is not None:
             x = torch.cat((x, grid), dim=1)  # [bs, inc*2+4, h, w] real
+
         conv1 = self.dconv_down1(x)
         x = self.maxpool(conv1)
 
@@ -272,6 +286,11 @@ class UNet(ModelBase):
 
         x = self.dconv_up1(x)
 
-        x = self.conv_last(x)  # [bs, outc, h, w] real
+        forward_Ez_field = self.conv_last(x)  # [bs, outc, h, w] real
+        
+        if self.output_sparam:
+            assert hasattr(self, "sparam_head"), "sparam_head is not defined"
+            s_parameter = self.sparam_head(forward_Ez_field)
+            return forward_Ez_field, s_parameter
 
-        return x
+        return forward_Ez_field

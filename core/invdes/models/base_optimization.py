@@ -15,6 +15,7 @@ import h5py
 import numpy as np
 import torch
 import yaml
+import ryaml
 from autograd.numpy.numpy_boxes import ArrayBox
 from pyutils.config import Config
 from pyutils.general import logger
@@ -25,6 +26,7 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 )
 from thirdparty.ceviche.constants import C_0, MICRON_UNIT
+from core.utils import print_stat
 
 from .layers.device_base import N_Ports
 from .layers.fom_layer import SimulatedFoM
@@ -199,15 +201,16 @@ class BaseOptimization(nn.Module):
     ):
         design_region_eps_dict = {}
         hr_design_region_eps_dict = {}
+        ### we need to fill in the permittivity of each design region to the whole device eps_map
+        eps_map = self.epsilon_map.data.clone() # why clone here?
+        hr_eps_map = self.hr_eps_map
+
         for region_name, design_region in self.design_region_param_dict.items():
             ## obtain each design region's denormalized permittivity only in the design region
-            hr_region, region = design_region(sharpness)
+            hr_region_mask = self.hr_device.design_region_masks[region_name]
+            hr_region, region = design_region(sharpness, hr_eps_map, hr_region_mask)
             design_region_eps_dict[region_name] = region
             hr_design_region_eps_dict[region_name] = hr_region
-
-        ### then we need to fill in the permittivity of each design region to the whole device eps_map
-        eps_map = self.epsilon_map.data.clone()
-        hr_eps_map = self.hr_eps_map
 
         for region_name, design_region_eps in design_region_eps_dict.items():
             region_mask = self.design_region_masks[region_name]
@@ -227,8 +230,8 @@ class BaseOptimization(nn.Module):
             fwd_trans=dict(
                 weight=1,
                 #### objective is evaluated at this port
-                in_port_name="in_port_1",
-                out_port_name="out_port_1",
+                in_slice_name="in_slice_1",
+                out_slice_name="out_slice_1",
                 #### objective is evaluated at all points by sweeping the wavelength and modes
                 wl=1.55,
                 in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
@@ -341,10 +344,10 @@ class BaseOptimization(nn.Module):
         plot_filename,
         eps_map=None,
         obj=None,
-        field_key: Tuple = ("in_port_1", 1.55, 1, 300),
+        field_key: Tuple = ("in_slice_1", 1.55, 1, 300),
         field_component: str = "Ez",
-        in_port_name: str = "in_port_1",
-        exclude_port_names: List[str] = [],
+        in_slice_name: str = "in_slice_1",
+        exclude_slice_names: List[str] = [],
     ):
         # print("this is the kyes of self.objective.solutions", list(self.objective.solutions.keys()), flush=True)
         Ez = self.objective.solutions[field_key][field_component]
@@ -357,9 +360,9 @@ class BaseOptimization(nn.Module):
             x_shift_idx = extended_Ez.shape[0]
         monitors = []
         for name, m in self.device.port_monitor_slices.items():
-            if name in exclude_port_names:
+            if name in exclude_slice_names:
                 continue
-            if name == in_port_name:
+            if name == in_slice_name:
                 color = "r"
             elif name.startswith("rad_"):
                 color = "g"
@@ -397,7 +400,7 @@ class BaseOptimization(nn.Module):
             eps_map.detach().cpu().numpy(),
             filepath=os.path.join(self.sim_cfg["plot_root"], plot_filename),
             monitors=monitors,
-            x_width=self.device.cell_size[0],
+            x_width=self.device.cell_size[0] + (extended_Ez.shape[0] if extended_Ez is not None else 0) * self.device.grid_step,
             y_height=self.device.cell_size[1],
             NPML=self.device.NPML,
             title=f"|{field_component}|^2: {field_key}, FoM: {obj:.3f}",
@@ -429,64 +432,75 @@ class BaseOptimization(nn.Module):
         eps_conponent.write_gds(
             gdspath=os.path.join(self.sim_cfg["plot_root"], filename)
         )
-
+        
     def dump_data(self, filename_h5, filename_yml, step):
         """
-        data needed to be dumped:
-            1. eps_map (denormalized), downsample to different resolution
-            2. E field, H field, corrresponding to different resolution eps_map
-            3. Source_profile
-            4. Scattering matrix
-            5. gradient
+        switch to another different dump_data function
+        for multiple times of shining the source
+        before, we store them into one single h5 file with different keys to access them
+        now, we want to store them into different h5 files just like in NeurOLight where the separate h5 files according to the input port
+
+        the only difference should be before the gradient stored is the total gradient calculated from the two forward simulations
+
+        now we need to seperate the gradient into two parts, one for each forward simulation and store them into different h5 files
         """
         # print("grad fn of self._eps_map", self._eps_map.grad_fn)
         # print("grad of self._eps_map", self._eps_map.grad)
         complex_type = [torch.complex64, torch.complex32, torch.complex128]
+        filename_base = filename_h5[:-3]
         with torch.no_grad():
-            with h5py.File(filename_h5, "w") as f:
-                f.create_dataset(
-                    "eps_map", data=self._eps_map.detach().cpu().numpy()
-                )  # 2d numpy array
-                for slice_name, slice in self.device.port_monitor_slices.items():
-                    if isinstance(slice, np.ndarray):
-                        f.create_dataset(f"port_slice-{slice_name}", data=slice)
-                    else:
-                        f.create_dataset(f"port_slice-{slice_name}_x", data=slice.x)
-                        f.create_dataset(f"port_slice-{slice_name}_y", data=slice.y)
-                for port_name, source_profile in self.norm_run_profiles.items():
-                    for (wl, mode), profile in source_profile.items():
-                        if isinstance(profile[0], np.ndarray):
-                            src_mode = profile[0].astype(np.complex64)
-                            ht_m = profile[1].astype(np.complex64)
-                            et_m = profile[2].astype(np.complex64)
-                        if isinstance(profile[0], Tensor):
-                            if profile[0].dtype in complex_type:
-                                profile[0] = profile[0].to(torch.complex64)
-                                profile[1] = profile[1].to(torch.complex64)
-                                profile[2] = profile[2].to(torch.complex64)
-                            src_mode = profile[0].detach().cpu().numpy()
-                            ht_m = profile[1].detach().cpu().numpy()
-                            et_m = profile[2].detach().cpu().numpy()
-                        if isinstance(profile[0], ArrayBox):
-                            src_mode = profile[0]._value
-                            ht_m = profile[1]._value
-                            et_m = profile[2]._value
-                        f.create_dataset(
-                            f"source_profile-wl-{wl}-port-{port_name}-mode-{mode}",
-                            data=src_mode,
-                        )
-                        f.create_dataset(
-                            f"ht_m-wl-{wl}-port-{port_name}-mode-{mode}", data=ht_m
-                        )
-                        f.create_dataset(
-                            f"et_m-wl-{wl}-port-{port_name}-mode-{mode}", data=et_m
-                        )
-                for (
-                    port_name,
-                    wl,
-                    mode,
-                    temp,
-                ), fields in self.objective.solutions.items():
+            adj_srcs, fields_adj, field_adj_normalizer = self.objective.obtain_adj_srcs()
+            gradients = self.objective.read_gradient()
+            # the for loop shoul according to the keys of the solutions
+            for (SliceName, WaveLen, SrcMode, Temperture), fields in self.objective.solutions.items():
+                filename = filename_base + f"-{SliceName}-{WaveLen}-{SrcMode}-{Temperture}.h5"
+                with h5py.File(filename, "w") as f:
+                    # eps
+                    f.create_dataset(
+                        "eps_map", data=self._eps_map.detach().cpu().numpy()
+                    )  # 2d numpy array
+                    # all the slices
+                    for slice_name, slice in self.device.port_monitor_slices.items():
+                        if isinstance(slice, np.ndarray):
+                            f.create_dataset(f"port_slice-{slice_name}", data=slice)
+                        else:
+                            f.create_dataset(f"port_slice-{slice_name}_x", data=slice.x)
+                            f.create_dataset(f"port_slice-{slice_name}_y", data=slice.y)
+                    # only the source I care
+                    for slice_name, source_profile in self.norm_run_profiles.items():
+                        for key in list(source_profile.keys()):
+                            if isinstance(key, str):
+                                continue
+                            wl, mode = key
+                            profile = source_profile[key]
+                            if isinstance(profile[0], np.ndarray):
+                                src_mode = profile[0].astype(np.complex64)
+                                ht_m = profile[1].astype(np.complex64)
+                                et_m = profile[2].astype(np.complex64)
+                            if isinstance(profile[0], Tensor):
+                                if profile[0].dtype in complex_type:
+                                    profile[0] = profile[0].to(torch.complex64)
+                                    profile[1] = profile[1].to(torch.complex64)
+                                    profile[2] = profile[2].to(torch.complex64)
+                                src_mode = profile[0].detach().cpu().numpy()
+                                ht_m = profile[1].detach().cpu().numpy()
+                                et_m = profile[2].detach().cpu().numpy()
+                            if isinstance(profile[0], ArrayBox):
+                                src_mode = profile[0]._value
+                                ht_m = profile[1]._value
+                                et_m = profile[2]._value
+                            if slice_name == SliceName and wl == WaveLen and mode == SrcMode:
+                                f.create_dataset(
+                                    f"source_profile",
+                                    data=src_mode,
+                                )
+                            f.create_dataset(
+                                f"ht_m-wl-{wl}-slice-{slice_name}-mode-{mode}", data=ht_m
+                            )
+                            f.create_dataset(
+                                f"et_m-wl-{wl}-slice-{slice_name}-mode-{mode}", data=et_m
+                            )
+                    fields = self.objective.solutions[(SliceName, WaveLen, SrcMode, Temperture)]
                     store_fields = {}
                     for key, field in fields.items():
                         if isinstance(fields[key], Tensor):
@@ -500,10 +514,11 @@ class BaseOptimization(nn.Module):
                         axis=0,
                     )
                     f.create_dataset(
-                        f"field_solutions-wl-{wl}-port-{port_name}-mode-{mode}-temp-{temp}",
+                        f"field_solutions",
                         data=store_fields,
                     )  # 3d numpy array
-                for (wl, temp), A in self.objective.As.items():
+                    # only the A matrix I care
+                    A = self.objective.As[(WaveLen, Temperture)]
                     Alist = []
                     for item in A:
                         if isinstance(item, Tensor):
@@ -516,121 +531,120 @@ class BaseOptimization(nn.Module):
                             raise ValueError(
                                 f"A is not a tensor, arraybox or numpy array, the type is {type(item)}"
                             )
-                    f.create_dataset(f"A-wl-{wl}-temp-{temp}-entries_a", data=Alist[0])
-                    f.create_dataset(f"A-wl-{wl}-temp-{temp}-indices_a", data=Alist[1])
-                for (
-                    port_name,
-                    wl,
-                    obj_type,
-                    temp,
-                ), s_params in self.objective.s_params.items():
-                    # the obj_type is a string, if it is an integer, it implys the eigenmode type and the value is the mode index
-                    store_s_params = {}
-                    for key, s_param in s_params.items():
-                        if isinstance(s_param, Tensor):
-                            if s_param.dtype in complex_type:
-                                s_param = s_param.to(torch.complex64)
-                            store_s_params[key] = s_param.detach().cpu().numpy()
-                        if isinstance(s_param, ArrayBox):
-                            store_s_params = s_param._value
-                    if "s_p" in store_s_params.keys():
-                        store_s_params = np.stack(
-                            (store_s_params["s_p"], store_s_params["s_m"]), axis=0
-                        )
-                    else:
-                        store_s_params = store_s_params["s"]
-                    f.create_dataset(
-                        f"s_params-port-{port_name}-wl-{wl}-type-{obj_type}-temp-{temp}",
-                        data=store_s_params,
-                    )  # 3d numpy array
-                adj_srcs, fields_adj, field_adj_normalizer = (
-                    self.objective.obtain_adj_srcs()
-                )
-                for wl, adj_src in adj_srcs.items():
-                    for (port_name, mode), b_adj in adj_src.items():
-                        b_adj = b_adj.reshape(self.epsilon_map.shape)
-                        if isinstance(b_adj, Tensor):
-                            if b_adj.dtype in complex_type:
-                                b_adj = b_adj.to(torch.complex64)
-                            b_adj = b_adj.detach().cpu().numpy()
-                        if isinstance(b_adj, ArrayBox):
-                            b_adj = b_adj._value
+                    f.create_dataset(f"A-entries_a", data=Alist[0])
+                    f.create_dataset(f"A-indices_a", data=Alist[1])
+                    # save all the s_params
+                    for (input_slice_name, slice_name, obj_type, wl, in_mode, temp), s_params in self.objective.s_params.items():
+                        # if wl != WaveLen or temp != Temperture or input_slice_name != SliceName or in_mode != SrcMode:
+                        #     continue
+                        # the obj_type is a string, if it is an integer, it implys the eigenmode type and the value is the mode index
+                        store_s_params = {}
+                        for key, s_param in s_params.items():
+                            if isinstance(s_param, Tensor):
+                                if s_param.dtype in complex_type:
+                                    s_param = s_param.to(torch.complex64)
+                                store_s_params[key] = s_param.detach().cpu().numpy()
+                            if isinstance(s_param, ArrayBox):
+                                store_s_params = s_param._value
+                        if "s_p" in store_s_params.keys():
+                            store_s_params = np.stack(
+                                (store_s_params["s_p"], store_s_params["s_m"]), axis=0
+                            )
+                        else:
+                            store_s_params = store_s_params["s"]
                         f.create_dataset(
-                            f"adj_src-wl-{wl}-port-{port_name}-mode-{mode}", data=b_adj
-                        )
-                for wl, fields in fields_adj.items():
-                    for (port_name, mode), field in fields.items():
-                        store_fields = {}
-                        for components_key, component in field.items():
-                            if isinstance(component, Tensor):
-                                if component.dtype in complex_type:
-                                    component = component.to(torch.complex64)
-                                store_fields[components_key] = (
-                                    component.detach().cpu().numpy()
-                                )
-                            if isinstance(component, ArrayBox):
-                                store_fields[components_key] = component._value
-                        store_fields = np.stack(
-                            (
-                                store_fields["Hx"],
-                                store_fields["Hy"],
-                                store_fields["Ez"],
-                            ),
-                            axis=0,
-                        )
-                        f.create_dataset(
-                            f"fields_adj-wl-{wl}-port-{port_name}-mode-{mode}",
-                            data=store_fields,
+                            f"s_params-obj_slice_name-{slice_name}-type-{obj_type}-in_slice_name-{input_slice_name}-wl-{wl}-in_mode-{in_mode}-temp-{temp}", data=store_s_params
                         )  # 3d numpy array
-                for wl, field_normalizer in field_adj_normalizer.items():
-                    for (port_name, mode), normalizer in field_normalizer.items():
-                        if isinstance(normalizer, Tensor):
-                            if normalizer.dtype in complex_type:
-                                normalizer = normalizer.to(torch.complex64)
-                            normalizer = normalizer.detach().cpu().numpy()
-                        if isinstance(normalizer, ArrayBox):
-                            normalizer = normalizer._value
-                        f.create_dataset(
-                            f"field_adj_normalizer-wl-{wl}-port-{port_name}-mode-{mode}",
-                            data=normalizer,
-                        )  # 2d numpy array
-                if hasattr(self, "current_eps_grad"):
-                    if isinstance(self.current_eps_grad, ArrayBox):
-                        self.current_eps_grad = self.current_eps_grad._value
+                    # only the adj_src I care
+                    adj_src = adj_srcs[(WaveLen, SrcMode[:2])]
+                    J_adj = adj_src[(SliceName, SrcMode, Temperture)]
+                    J_adj = J_adj.reshape(self.epsilon_map.shape)
+                    if isinstance(J_adj, Tensor):
+                        if J_adj.dtype in complex_type:
+                            J_adj = J_adj.to(torch.complex64)
+                        J_adj = J_adj.detach().cpu().numpy()
+                    if isinstance(J_adj, ArrayBox):
+                        J_adj = J_adj._value
                     f.create_dataset(
-                        "gradient", data=self.current_eps_grad
+                        f"adj_src", data=J_adj
+                    )
+                    # only the fields_adj I care
+                    field = fields_adj[(WaveLen, SrcMode[:2])][(SliceName, SrcMode, Temperture)]
+                    store_fields = {}
+                    for components_key, component in field.items():
+                        if isinstance(component, Tensor):
+                            if component.dtype in complex_type:
+                                component = component.to(torch.complex64)
+                            store_fields[components_key] = (
+                                component.detach().cpu().numpy()
+                            )
+                        if isinstance(component, ArrayBox):
+                            store_fields[components_key] = component._value
+                    store_fields = np.stack(
+                        (
+                            store_fields["Hx"],
+                            store_fields["Hy"],
+                            store_fields["Ez"],
+                        ),
+                        axis=0,
+                    )
+                    f.create_dataset(
+                        f"fields_adj",
+                        data=store_fields,
+                    )  # 3d numpy array
+                    # only the field_adj_normalizer I care
+                    normalizer = field_adj_normalizer[(WaveLen, SrcMode[:2])][(SliceName, SrcMode, Temperture)]
+                    if isinstance(normalizer, Tensor):
+                        if normalizer.dtype in complex_type:
+                            normalizer = normalizer.to(torch.complex64)
+                        normalizer = normalizer.detach().cpu().numpy()
+                    if isinstance(normalizer, ArrayBox):
+                        normalizer = normalizer._value
+                    f.create_dataset(
+                        f"field_adj_normalizer",
+                        data=normalizer,
                     )  # 2d numpy array
-                else:
+                    # all the design region mask
+                    for (design_region_name, design_region_mask) in self.design_region_masks.items():
+                        f.create_dataset(
+                            f"design_region_mask-{design_region_name}_x_start",
+                            data=design_region_mask.x.start,
+                        )
+                        f.create_dataset(
+                            f"design_region_mask-{design_region_name}_x_stop",
+                            data=design_region_mask.x.stop,
+                        )
+                        f.create_dataset(
+                            f"design_region_mask-{design_region_name}_y_start",
+                            data=design_region_mask.y.start,
+                        )
+                        f.create_dataset(
+                            f"design_region_mask-{design_region_name}_y_stop",
+                            data=design_region_mask.y.stop,
+                        )
+                    # store the total gradient 
                     f.create_dataset(
-                        "gradient", data=self._eps_map.grad.detach().cpu().numpy()
+                        "total_gradient", data=self._eps_map.grad.detach().cpu().numpy()
                     )
-                for (
-                    design_region_name,
-                    design_region_mask,
-                ) in self.design_region_masks.items():
+                    # only the gradient I care
+                    # not the total gradient, but the gradient from this specific forward simulation
+                    if isinstance(gradients[(WaveLen, SrcMode[:2])][(SliceName, SrcMode, Temperture)], torch.Tensor):
+                        grad = gradients[(WaveLen, SrcMode[:2])][(SliceName, SrcMode, Temperture)].detach().cpu().numpy()
                     f.create_dataset(
-                        f"design_region_mask-{design_region_name}_x_start",
-                        data=design_region_mask.x.start,
+                        "gradient", data=grad
                     )
-                    f.create_dataset(
-                        f"design_region_mask-{design_region_name}_x_stop",
-                        data=design_region_mask.x.stop,
-                    )
-                    f.create_dataset(
-                        f"design_region_mask-{design_region_name}_y_start",
-                        data=design_region_mask.y.start,
-                    )
-                    f.create_dataset(
-                        f"design_region_mask-{design_region_name}_y_stop",
-                        data=design_region_mask.y.stop,
-                    )
-
+                    # we don't store the breakdown of the objective for now since we don't need to plot the distribution
+                    # # for bending, we still save the fom:
+                    # for name, item in self.objective.breakdown.items(): # store the breakdown of the objective
+                    #     f.create_dataset(f"breakdown_{name}_weight", data=item["weight"])
+                    #     f.create_dataset(f"breakdown_{name}_value", data=float(item["value"].item()))
+        # in the following code, we just store the config files so we don't need to change them
         # Check if the file exists using os.path.exists
         if os.path.exists(filename_yml):
             # File exists, read its content
             with open(filename_yml, "r") as f:
                 existing_data = (
-                    yaml.safe_load(f) or {}
+                    ryaml.load(f) or {}
                 )  # Load existing data or use an empty dict if file is empty
         else:
             # File does not exist, start with an empty dictionary

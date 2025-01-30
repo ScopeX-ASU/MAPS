@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from autograd import numpy as npa
 from torch import Tensor
-
+import matplotlib.pyplot as plt
 from core.fdfd.near2far import (
     get_farfields_GreenFunction,
 )
@@ -18,17 +18,17 @@ from core.utils import (
 )
 from thirdparty.ceviche import jacobian
 from thirdparty.ceviche.constants import MU_0
-
+from core.utils import print_stat
 
 class EigenmodeObjective(object):
     def __init__(
         self,
         sims: dict,  # {wl: Simulation}
         s_params: dict,
-        port_profiles: dict,  # port monitor profiles {port_name: {(wl, mode): (profile, ht_m, et_m)}}
+        port_profiles: dict,  # port monitor profiles {slice_name: {(wl, mode): (profile, ht_m, et_m)}}
         port_slices: dict,
-        in_port_name: str,
-        out_port_name: str,
+        in_slice_name: str,
+        out_slice_name: str,
         in_mode: int,
         out_modes: Tuple[int],
         direction: str,
@@ -43,8 +43,8 @@ class EigenmodeObjective(object):
         self.s_params = s_params
         self.port_profiles = port_profiles
         self.port_slices = port_slices
-        self.in_port_name = in_port_name
-        self.out_port_name = out_port_name
+        self.in_slice_name = in_slice_name
+        self.out_slice_name = out_slice_name
         self.in_mode = in_mode
         self.out_modes = out_modes
         self.direction = direction
@@ -60,8 +60,8 @@ class EigenmodeObjective(object):
         (
             target_wls,
             target_temps,
-            in_port_name,
-            out_port_name,
+            in_slice_name,
+            out_slice_name,
             in_mode,
             out_modes,
             direction,
@@ -70,8 +70,8 @@ class EigenmodeObjective(object):
         ) = (
             self.target_wls,
             self.target_temps,
-            self.in_port_name,
-            self.out_port_name,
+            self.in_slice_name,
+            self.out_slice_name,
             self.in_mode,
             self.out_modes,
             self.direction,
@@ -87,12 +87,12 @@ class EigenmodeObjective(object):
                 continue
             for out_mode in out_modes:
                 for temp in target_temps:
-                    src, ht_m, et_m, norm_p = self.port_profiles[out_port_name][
+                    src, ht_m, et_m, norm_p, require_sim = self.port_profiles[out_slice_name][
                         (wl, out_mode)
                     ]
-                    norm_power = self.port_profiles[in_port_name][(wl, in_mode)][3]
-                    monitor_slice = self.port_slices[out_port_name]
-                    field = fields[(in_port_name, wl, in_mode, temp)]
+                    norm_power = self.port_profiles[in_slice_name][(wl, in_mode)][3]
+                    monitor_slice = self.port_slices[out_slice_name]
+                    field = fields[(in_slice_name, wl, in_mode, temp)]
                     pol = in_mode[:2]
                     if pol == "Ez":
                         fx, fy, fz = (
@@ -109,11 +109,12 @@ class EigenmodeObjective(object):
                     if isinstance(ht_m, Tensor) and ht_m.device != fz.device:
                         ht_m = ht_m.to(fz.device)
                         et_m = et_m.to(fz.device)
-                        self.port_profiles[out_port_name][(wl, out_mode)] = [
+                        self.port_profiles[out_slice_name][(wl, out_mode)] = [
                             src.to(fz.device),
                             ht_m,
                             et_m,
                             norm_p,
+                            require_sim,
                         ]
                     s_p, s_m = get_eigenmode_coefficients(
                         fx,
@@ -142,7 +143,7 @@ class EigenmodeObjective(object):
                     if self.obj_type == "eigenmode":
                         # only record the s parameters for eigenmode
                         # we don't need to record the s parameters if we calculate the phase
-                        self.s_params[(self.out_port_name, wl, out_mode, temp)] = {
+                        self.s_params[(in_slice_name, out_slice_name, out_mode, wl, in_mode, temp)] = {
                             "s_p": s_p / norm_power
                             if self.energy
                             else s_p / norm_power**0.5,  # normalized by input power
@@ -164,8 +165,8 @@ class FluxNear2FarObjective(object):
         port_profiles: dict,  # port monitor profiles {port_name: {(wl, mode): (profile, ht_m, et_m)}}
         port_slices: dict,
         port_slices_info: dict,
-        in_port_name: str,
-        out_port_name: str,
+        in_slice_name: str,
+        out_slice_name: str,
         in_mode: int,
         direction: str,
         name: str,
@@ -180,8 +181,8 @@ class FluxNear2FarObjective(object):
         self.port_profiles = port_profiles
         self.port_slices = port_slices
         self.port_slices_info = port_slices_info
-        self.in_port_name = in_port_name
-        self.out_port_name = out_port_name
+        self.in_slice_name = in_slice_name
+        self.out_slice_name = out_slice_name
         self.in_mode = in_mode
         self.direction = direction
         self.name = name
@@ -195,16 +196,16 @@ class FluxNear2FarObjective(object):
         s_list = []
         (
             target_temps,
-            in_port_name,
-            out_port_name,
+            in_slice_name,
+            out_slice_name,
             in_mode,
             direction,
             name,
             grid_step,
         ) = (
             self.target_temps,
-            self.in_port_name,
-            self.out_port_name,
+            self.in_slice_name,
+            self.out_slice_name,
             self.in_mode,
             self.direction,
             self.name,
@@ -218,9 +219,9 @@ class FluxNear2FarObjective(object):
                 continue
             for temp in target_temps:
                 # monitor_slice = self.port_slices[out_port_name]
-                norm_power = self.port_profiles[in_port_name][(wl, in_mode)][3]
+                norm_power = self.port_profiles[in_slice_name][(wl, in_mode)][3]
                 # this is how ez, hx and hy are calculated in regular simulation
-                field = fields[(in_port_name, wl, in_mode, temp)]
+                field = fields[(in_slice_name, wl, in_mode, temp)]
                 if pol == "Ez":
                     fx_near, fy_near, fz_near = (
                         field["Hx"],
@@ -235,7 +236,7 @@ class FluxNear2FarObjective(object):
                     )
                 # print("this is the keys of the self.port_slices_info", list(self.port_slices.keys()))
                 extended_farfield_slice_info = copy.deepcopy(
-                    self.port_slices_info[out_port_name]
+                    self.port_slices_info[out_slice_name]
                 )
                 ## Ez, extend toward negative dir, Hz extend toward positive dir
                 if direction[0] == "x":
@@ -258,7 +259,7 @@ class FluxNear2FarObjective(object):
                         extended_farfield_slice_info["ys"] = np.concatenate(
                             [ys[0:1] - grid_step, ys] if pol == "Ez" else [ys, ys[-1:] + grid_step], axis=0
                         )
-                if out_port_name == "total_farfield_region":
+                if out_slice_name == "total_farfield_region":
                     with torch.inference_mode():
                         farfield = get_farfields_GreenFunction(
                             nearfield_slices=[
@@ -279,7 +280,7 @@ class FluxNear2FarObjective(object):
                             Fx=fx_near[None, ..., None],
                             Fy=fy_near[None, ..., None],
                             farfield_x=None,
-                            farfield_slice_info=self.port_slices_info[out_port_name],
+                            farfield_slice_info=self.port_slices_info[out_slice_name],
                             freqs=torch.tensor([1 / wl], device=fz_near.device),
                             eps=self.eps_bg,
                             mu=MU_0,
@@ -292,7 +293,7 @@ class FluxNear2FarObjective(object):
                         fx = farfield["Hx"][0, ..., 0]
                         fy = farfield["Hy"][0, ..., 0]
                         self.total_farfield_region_solutions[
-                            (in_port_name, wl, in_mode, temp)
+                            (in_slice_name, wl, in_mode, temp)
                         ] = {
                             "Ez": fz,
                             "Hx": fx,
@@ -303,7 +304,7 @@ class FluxNear2FarObjective(object):
                         fx = farfield["Ex"][0, ..., 0]
                         fy = farfield["Ey"][0, ..., 0]
                         self.total_farfield_region_solutions[
-                            (in_port_name, wl, in_mode, temp)
+                            (in_slice_name, wl, in_mode, temp)
                         ] = {
                             "Hz": fz,
                             "Ex": fx,
@@ -328,7 +329,7 @@ class FluxNear2FarObjective(object):
                         Fx=fx_near[None, ..., None],
                         Fy=fy_near[None, ..., None],
                         farfield_x=None,
-                        farfield_slice_info=self.port_slices_info[out_port_name],
+                        farfield_slice_info=self.port_slices_info[out_slice_name],
                         freqs=torch.tensor([1 / wl], device=fz_near.device),
                         eps=self.eps_bg,
                         mu=MU_0,
@@ -381,7 +382,7 @@ class FluxNear2FarObjective(object):
                 s = s / (fz.shape[0] if direction[0] == "x" else fz.shape[1])
 
                 s_list.append(s)
-                self.s_params[(self.out_port_name, wl, self.obj_type, temp)] = {
+                self.s_params[(in_slice_name, out_slice_name, self.obj_type, wl, in_mode, temp)] = {
                     "s": s,
                 }
         if isinstance(s_list[0], Tensor):
@@ -397,8 +398,8 @@ class FluxObjective(object):
         s_params: dict,
         port_profiles: dict,  # port monitor profiles {port_name: {(wl, mode): (profile, ht_m, et_m)}}
         port_slices: dict,
-        in_port_name: str,
-        out_port_name: str,
+        in_slice_name: str,
+        out_slice_name: str,
         in_mode: int,
         direction: str,
         name: str,
@@ -411,8 +412,8 @@ class FluxObjective(object):
         self.s_params = s_params
         self.port_profiles = port_profiles
         self.port_slices = port_slices
-        self.in_port_name = in_port_name
-        self.out_port_name = out_port_name
+        self.in_slice_name = in_slice_name
+        self.out_slice_name = out_slice_name
         self.in_mode = in_mode
         self.direction = direction
         self.name = name
@@ -425,16 +426,16 @@ class FluxObjective(object):
         s_list = []
         (
             target_temps,
-            in_port_name,
-            out_port_name,
+            in_slice_name,
+            out_slice_name,
             in_mode,
             direction,
             name,
             grid_step,
         ) = (
             self.target_temps,
-            self.in_port_name,
-            self.out_port_name,
+            self.in_slice_name,
+            self.out_slice_name,
             self.in_mode,
             self.direction,
             self.name,
@@ -445,9 +446,9 @@ class FluxObjective(object):
         ## for each wavelength, we evaluate the objective
         for (wl, pol), _ in self.sims.items():
             for temp in target_temps:
-                monitor_slice = self.port_slices[out_port_name]
-                norm_power = self.port_profiles[in_port_name][(wl, in_mode)][3]
-                field = fields[(in_port_name, wl, in_mode, temp)]
+                monitor_slice = self.port_slices[out_slice_name]
+                norm_power = self.port_profiles[in_slice_name][(wl, in_mode)][3]
+                field = fields[(in_slice_name, wl, in_mode, temp)]
                 pol = in_mode[:2]
                 if pol == "Ez":
                     fx, fy, fz = (
@@ -483,12 +484,12 @@ class FluxObjective(object):
 
                 s_list.append(s)
                 if self.minus_src:  # which means that we are calculating the reflection
-                    self.s_params[(self.out_port_name, wl, self.obj_type, temp)] = {
+                    self.s_params[(in_slice_name, out_slice_name, self.obj_type, wl, in_mode, temp)] = {
                         "s_m": s,
                         "s_p": 1 - s,
                     }
                 else:
-                    self.s_params[(self.out_port_name, wl, self.obj_type, temp)] = {
+                    self.s_params[(in_slice_name, out_slice_name, self.obj_type, wl, in_mode, temp)] = {
                         "s": s,
                     }
         if isinstance(s_list[0], Tensor):
@@ -496,6 +497,75 @@ class FluxObjective(object):
         else:
             return npa.mean(npa.array(s_list))  # we only need absolute flux
 
+class PhaseRecorderObjective(object):
+    def __init__(
+        self,
+        sims: dict,  # {wl: Simulation}
+        phase_shift: dict,
+        port_slices: dict,
+        in_slice_name: str,
+        out_slice_name: str,
+        in_mode: int,
+        target_wls: Tuple[float],
+        target_temps: Tuple[float],
+        obj_type: str = "phase_recorder",
+    ):
+        self.sims = sims
+        self.phase_shift = phase_shift
+        self.port_slices = port_slices
+        self.in_slice_name = in_slice_name
+        self.out_slice_name = out_slice_name
+        self.in_mode = in_mode
+        self.target_wls = target_wls
+        self.target_temps = target_temps
+        self.obj_type = obj_type
+
+    def __call__(self, fields):
+        (
+            target_wls,
+            target_temps,
+            in_slice_name,
+            out_slice_name,
+            in_mode,
+        ) = (
+            self.target_wls,
+            self.target_temps,
+            self.in_slice_name,
+            self.out_slice_name,
+            self.in_mode,
+        )
+
+        mean_phase_list = []
+        ## for each wavelength, we evaluate the objective
+        for wl, sim in self.sims.items():
+            ## we calculate the average eigen energy for all output modes
+            if wl not in target_wls:
+                continue
+            for temp in target_temps:
+                monitor_slice = self.port_slices[out_slice_name]
+                ez = fields[(in_slice_name, wl, in_mode, temp)]["Ez"]
+                ez = ez[monitor_slice]
+                assert (
+                    len(monitor_slice.x.shape) <= 1
+                    or len(monitor_slice.y.shape) <= 1
+                ), "Only 1D slice is supported for phase recorder"
+                ez = ez.reshape(1, -1)
+                # calculate the phase of Ez
+                phase = torch.angle(ez)
+                phase_std = torch.std(phase)
+                phase_mean = torch.mean(phase)
+                phase_mean = torch.remainder(phase_mean, 2 * torch.pi)
+                self.phase_shift[(in_slice_name, out_slice_name, wl, in_mode, temp)] = {
+                    "phase": torch.remainder(phase, 2 * torch.pi),
+                    "phase_std": phase_std,
+                    "phase_mean": phase_mean,
+                }
+                mean_phase_list.append(phase_mean)
+
+        if isinstance(mean_phase_list[0], Tensor):
+            return torch.mean(torch.stack(mean_phase_list))
+        else:
+            return npa.mean(npa.array(mean_phase_list))
 
 class ShapeSimilarityObjective(object):
     def __init__(
@@ -503,8 +573,8 @@ class ShapeSimilarityObjective(object):
         sims: dict,  # {wl: Simulation}
         port_slices: dict,
         port_slices_info: dict,
-        in_port_name: str,
-        out_port_name: str,
+        in_slice_name: str,
+        out_slice_name: str,
         in_mode: int,
         out_modes: Tuple[int],
         name: str,
@@ -520,8 +590,8 @@ class ShapeSimilarityObjective(object):
         self.sims = sims
         self.port_slices = port_slices
         self.port_slices_info = port_slices_info
-        self.in_port_name = in_port_name
-        self.out_port_name = out_port_name
+        self.in_slice_name = in_slice_name
+        self.out_slice_name = out_slice_name
         self.in_mode = in_mode
         self.out_modes = out_modes
         self.name = name
@@ -538,8 +608,8 @@ class ShapeSimilarityObjective(object):
         (
             target_wls,
             target_temps,
-            in_port_name,
-            out_port_name,
+            in_slice_name,
+            out_slice_name,
             in_mode,
             out_modes,
             shape_type,
@@ -547,8 +617,8 @@ class ShapeSimilarityObjective(object):
         ) = (
             self.target_wls,
             self.target_temps,
-            self.in_port_name,
-            self.out_port_name,
+            self.in_slice_name,
+            self.out_slice_name,
             self.in_mode,
             self.out_modes,
             self.shape_type,
@@ -565,11 +635,11 @@ class ShapeSimilarityObjective(object):
                 continue
             for out_mode in out_modes:
                 for temp in target_temps:
-                    monitor_slice = self.port_slices[out_port_name]
-                    monitor_direction = self.port_slices_info[out_port_name][
+                    monitor_slice = self.port_slices[out_slice_name]
+                    monitor_direction = self.port_slices_info[out_slice_name][
                         "direction"
                     ]
-                    fz = fields[(in_port_name, wl, in_mode, temp)][pol]
+                    fz = fields[(in_slice_name, wl, in_mode, temp)][pol]
                     fz = fz[monitor_slice]
                     if (
                         len(monitor_slice.x.shape) <= 1
@@ -600,8 +670,8 @@ class ShapeSimilarityNear2FarObjective(object):
         sims: dict,  # {wl: Simulation}
         port_slices: dict,
         port_slices_info: dict,
-        in_port_name: str,
-        out_port_name: str,
+        in_slice_name: str,
+        out_slice_name: str,
         in_mode: int,
         out_modes: Tuple[int],
         name: str,
@@ -619,8 +689,8 @@ class ShapeSimilarityNear2FarObjective(object):
         self.sims = sims
         self.port_slices = port_slices
         self.port_slices_info = port_slices_info
-        self.in_port_name = in_port_name
-        self.out_port_name = out_port_name
+        self.in_slice_name = in_slice_name
+        self.out_slice_name = out_slice_name
         self.in_mode = in_mode
         self.out_modes = out_modes
         self.name = name
@@ -639,8 +709,8 @@ class ShapeSimilarityNear2FarObjective(object):
         (
             target_wls,
             target_temps,
-            in_port_name,
-            out_port_name,
+            in_slice_name,
+            out_slice_name,
             in_mode,
             out_modes,
             shape_type,
@@ -648,8 +718,8 @@ class ShapeSimilarityNear2FarObjective(object):
         ) = (
             self.target_wls,
             self.target_temps,
-            self.in_port_name,
-            self.out_port_name,
+            self.in_slice_name,
+            self.out_slice_name,
             self.in_mode,
             self.out_modes,
             self.shape_type,
@@ -666,11 +736,11 @@ class ShapeSimilarityNear2FarObjective(object):
                 continue
             for out_mode in out_modes:
                 for temp in target_temps:
-                    monitor_slice = self.port_slices[out_port_name]
-                    monitor_direction = self.port_slices_info[out_port_name][
+                    monitor_slice = self.port_slices[out_slice_name]
+                    monitor_direction = self.port_slices_info[out_slice_name][
                         "direction"
                     ]
-                    field = fields[(in_port_name, wl, in_mode, temp)]
+                    field = fields[(in_slice_name, wl, in_mode, temp)]
                     if pol == "Ez":
                         fx_near, fy_near, fz_near = (
                             field["Hx"],
@@ -701,7 +771,7 @@ class ShapeSimilarityNear2FarObjective(object):
                         Fx=fx_near[None, ..., None],
                         Fy=fy_near[None, ..., None],
                         farfield_x=None,
-                        farfield_slice_info=self.port_slices_info[out_port_name],
+                        farfield_slice_info=self.port_slices_info[out_slice_name],
                         freqs=torch.tensor([1 / wl], device=fz_near.device),
                         eps=self.eps_bg,
                         mu=MU_0,
@@ -785,8 +855,8 @@ class ObjectiveFunc(object):
                 weight=1,
                 type="eigenmode",
                 #### objective is evaluated at this port
-                in_port_name="in_port_1",
-                out_port_name="out_port_1",
+                in_slice_name="in_slice_1",
+                out_slice_name="out_slice_1",
                 #### objective is evaluated at all points by sweeping the wavelength and modes
                 in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                 out_modes=(
@@ -797,6 +867,7 @@ class ObjectiveFunc(object):
         ),
     ):
         self.s_params = {}
+        self.phase_shift = {}
         self._obj_fusion_func = cfgs["_fusion_func"]
         cfgs = deepcopy(cfgs)
         del cfgs["_fusion_func"]
@@ -804,8 +875,8 @@ class ObjectiveFunc(object):
         ### build objective functions from solved fields to fom
         for name, cfg in cfgs.items():
             obj_type = cfg["type"]
-            in_port_name = cfg["in_port_name"]
-            out_port_name = cfg["out_port_name"]
+            in_slice_name = cfg["in_slice_name"]
+            out_slice_name = cfg["out_slice_name"]
             in_mode = cfg["in_mode"]
             out_modes = cfg["out_modes"]
             direction = cfg["direction"]
@@ -820,8 +891,8 @@ class ObjectiveFunc(object):
                     s_params=self.s_params,
                     port_profiles=self.port_profiles,
                     port_slices=self.port_slices,
-                    in_port_name=in_port_name,
-                    out_port_name=out_port_name,
+                    in_slice_name=in_slice_name,
+                    out_slice_name=out_slice_name,
                     in_mode=in_mode,
                     out_modes=out_modes,
                     direction=direction,
@@ -837,8 +908,8 @@ class ObjectiveFunc(object):
                     s_params=self.s_params,
                     port_profiles=self.port_profiles,
                     port_slices=self.port_slices,
-                    in_port_name=in_port_name,
-                    out_port_name=out_port_name,
+                    in_slice_name=in_slice_name,
+                    out_slice_name=out_slice_name,
                     in_mode=in_mode,
                     direction=direction,
                     name=name,
@@ -855,8 +926,8 @@ class ObjectiveFunc(object):
                     port_profiles=self.port_profiles,
                     port_slices=self.port_slices,
                     port_slices_info=self.port_slices_info,
-                    in_port_name=in_port_name,
-                    out_port_name=out_port_name,
+                    in_slice_name=in_slice_name,
+                    out_slice_name=out_slice_name,
                     in_mode=in_mode,
                     direction=direction,
                     name=name,
@@ -874,8 +945,8 @@ class ObjectiveFunc(object):
                     s_params=self.s_params,
                     port_profiles=self.port_profiles,
                     port_slices=self.port_slices,
-                    in_port_name=in_port_name,
-                    out_port_name=out_port_name,
+                    in_slice_name=in_slice_name,
+                    out_slice_name=out_slice_name,
                     in_mode=in_mode,
                     out_modes=out_modes,
                     direction=direction,
@@ -886,13 +957,25 @@ class ObjectiveFunc(object):
                     energy=False,
                     obj_type=obj_type,
                 )
+            elif obj_type == "phase_recoder":
+                objfn = PhaseRecorderObjective(
+                    sims=self.sims,
+                    phase_shift=self.phase_shift,
+                    port_slices=self.port_slices,
+                    in_slice_name=in_slice_name,
+                    out_slice_name=out_slice_name,
+                    in_mode=in_mode,
+                    target_wls=target_wls,
+                    target_temps=target_temps,
+                    obj_type=obj_type,
+                )
             elif obj_type == "intensity_shape":
                 objfn = ShapeSimilarityObjective(
                     sims=self.sims,
                     port_slices=self.port_slices,
                     port_slices_info=self.port_slices_info,
-                    in_port_name=in_port_name,
-                    out_port_name=out_port_name,
+                    in_slice_name=in_slice_name,
+                    out_slice_name=out_slice_name,
                     in_mode=in_mode,
                     out_modes=out_modes,
                     name=name,
@@ -911,8 +994,8 @@ class ObjectiveFunc(object):
                     sims=self.sims,
                     port_slices=self.port_slices,
                     port_slices_info=self.port_slices_info,
-                    in_port_name=in_port_name,
-                    out_port_name=out_port_name,
+                    in_slice_name=in_slice_name,
+                    out_slice_name=out_slice_name,
                     in_mode=in_mode,
                     out_modes=out_modes,
                     name=name,
@@ -935,10 +1018,12 @@ class ObjectiveFunc(object):
             self.Js[name] = {"weight": cfg["weight"], "fn": objfn}
 
     def build_jacobian(self):
+        # deprecated
         ## obtain_objective is the complete forward function starts from permittivity to solved fields, then to fom
         self.dJ = jacobian(self.obtain_objective, mode="reverse")
 
     def build_adj_jacobian(self):
+        # deprecated
         self.dJ_dE = {}
         for name, obj in self.adj_Js.items():
             dJ_dE_fn = {}
@@ -953,26 +1038,35 @@ class ObjectiveFunc(object):
         field_adj = {}
         field_adj_normalizer = {}
         for key, sim in self.sims.items():
-            adj_sources[key] = sim.solver.adj_src  # this is the b_adj
             fz_adj, fx_adj, fy_adj, flux = sim.norm_adj_power()
             # field_adj[key] = {"Ez": ez_adj, "Hx": hx_adj, "Hy": hy_adj}
             field_adj[key] = {}
-            for (port_name, mode), _ in fz_adj.items():
+            adj_sources[key] = {}
+            for (slice_name, mode, temp), _ in fz_adj.items():
                 pol = mode[:2]
                 if pol == "Ez":
-                    field_adj[key][(port_name, mode)] = {
-                        "Ez": fz_adj[(port_name, mode)],
-                        "Hx": fx_adj[(port_name, mode)],
-                        "Hy": fy_adj[(port_name, mode)],
+                    field_adj[key][(slice_name, mode, temp)] = {
+                        "Ez": fz_adj[(slice_name, mode, temp)],
+                        "Hx": fx_adj[(slice_name, mode, temp)],
+                        "Hy": fy_adj[(slice_name, mode, temp)],
                     }
                 elif pol == "Hz":
-                    field_adj[key][(port_name, mode)] = {
-                        "Hz": fz_adj[(port_name, mode)],
-                        "Ex": fx_adj[(port_name, mode)],
-                        "Ey": fy_adj[(port_name, mode)],
+                    field_adj[key][(slice_name, mode, temp)] = {
+                        "Hz": fz_adj[(slice_name, mode, temp)],
+                        "Ex": fx_adj[(slice_name, mode, temp)],
+                        "Ey": fy_adj[(slice_name, mode, temp)],
                     }
+                # convert the b_adj --> J_adj since I want uniform here, in forward, we store the J source 
+                # and this adj_src is normalized so that the power is 1e-8 matches the ez_adj
+                adj_sources[key][(slice_name, mode, temp)] = sim.solver.adj_src[(slice_name, mode, temp)] / 1j / sim.omega 
             field_adj_normalizer[key] = flux
         return adj_sources, field_adj, field_adj_normalizer
+    
+    def read_gradient(self):
+        gradients = {}
+        for wl, sim in self.sims.items():
+            gradients[wl] = sim.read_gradients()
+        return gradients
 
     def obtain_objective(
         self, permittivity: np.ndarray | Tensor
@@ -983,8 +1077,10 @@ class ObjectiveFunc(object):
         for _, cfg in self.obj_cfgs.items():
             temperatures = temperatures + cfg["temp"]
         temperatures = set(temperatures)
-        for port_name, port_profile in self.port_profiles.items():
-            for (wl, mode), (source, _, _, norm_power) in port_profile.items():
+        for slice_name, port_profile in self.port_profiles.items():
+            for (wl, mode), (source, _, _, norm_power, require_sim) in port_profile.items():
+                if not require_sim:
+                    continue
                 ## here the source is already normalized during norm_run to make sure it has target power
                 ## here is the key part that build the common "eps to field" autograd graph
                 ## later on, multiple "field to fom" autograd graph(s) will be built inside of multiple obj_fn's
@@ -1014,17 +1110,17 @@ class ObjectiveFunc(object):
                     #     dn_dT=1.8e-4,
                     # )
                     Fx, Fy, Fz = self.sims[(wl, pol)].solve(
-                        source, port_name=port_name, mode=mode
+                        source, slice_name=slice_name, mode=mode, temp=temp
                     )
                     pol = mode[:2]
                     if pol == "Ez":
-                        self.solutions[(port_name, wl, mode, temp)] = {
+                        self.solutions[(slice_name, wl, mode, temp)] = {
                             "Hx": Fx,
                             "Hy": Fy,
                             "Ez": Fz,
                         }
                     elif pol == "Hz":
-                        self.solutions[(port_name, wl, mode, temp)] = {
+                        self.solutions[(slice_name, wl, mode, temp)] = {
                             "Ex": Fx,
                             "Ey": Fy,
                             "Hz": Fz,

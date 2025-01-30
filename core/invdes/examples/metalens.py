@@ -27,6 +27,7 @@ from core.invdes.models import (
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import MetaLens
 from core.utils import set_torch_deterministic
+import h5py
 
 sys.path.pop(0)
 if __name__ == "__main__":
@@ -81,6 +82,7 @@ if __name__ == "__main__":
 
     device = MetaLens(
         material_bg="Air",
+        material_inport="SiO2",
         sim_cfg=sim_cfg,
         # aperture=20,
         aperture=20.1,
@@ -156,3 +158,8 @@ if __name__ == "__main__":
         in_port_names=["in_port_1"],
         exclude_port_names=["farfield_region"],
     )
+    # save the eps_map to a h5 file
+    with h5py.File("./unitest/metalens_FL30_init.h5", "w") as f:
+        f.create_dataset(
+                    "eps_map", data=opt._eps_map.detach().cpu().numpy()
+                )

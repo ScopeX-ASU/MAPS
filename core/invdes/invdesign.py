@@ -6,13 +6,7 @@ basically, this should be like the training logic like in train_NN.py
 
 import os
 import sys
-
-from pyutils.general import TimerCtx
-
-# Add the project root to sys.path
-project_root = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "/home/pingchua/projects/MAPS")
-)
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../MAPS"))
 sys.path.insert(0, project_root)
 from concurrent.futures import ThreadPoolExecutor
 
@@ -27,7 +21,7 @@ from core.invdes.models import (
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import Bending
 from core.utils import set_torch_deterministic
-
+from pyutils.torch_train import BestKModelSaver
 
 class InvDesign:
     """
@@ -83,6 +77,13 @@ class InvDesign:
             config_total=self._cfg,
         )
         self.plot_thread = ThreadPoolExecutor(2)
+        self.saver = BestKModelSaver(
+            k=1,
+            descend=False,
+            truncate=10,
+            metric_name="err",
+            format="{:.4f}",
+        )
 
     def load_cfgs(self, **cfgs):
         # Start with default configurations
@@ -99,17 +100,18 @@ class InvDesign:
         plot_filename=None,
         objs=[],
         field_keys=[],
-        in_port_names=[],
-        exclude_port_names=[],
+        in_slice_names=[],
+        exclude_slice_names=[],
         dump_gds=False,
+        save_model=False,
     ):
         if plot:
             assert plot_filename is not None, "plot_filename must be provided"
             assert len(objs) > 0, "objs must be provided"
             assert len(field_keys) > 0, "field_keys must be provided"
-            assert len(in_port_names) > 0, "in_port_names must be provided"
-            if len(exclude_port_names) == 0:
-                exclude_port_names = [[]] * len(objs)
+            assert len(in_slice_names) > 0, "in_port_names must be provided"
+            if len(exclude_slice_names) == 0:
+                exclude_slice_names = [[]] * len(objs)
 
         class Closure(object):
             def __init__(
@@ -153,6 +155,11 @@ class InvDesign:
             log += ", ".join(
                 [f"{k}: {obj['value']:.3f}" for k, obj in results["breakdown"].items()]
             )
+            if i == self._cfg.run.n_epochs - 1 and save_model:
+                if plot_filename.endswith(".png"):
+                    plot_filename = plot_filename[:-4]
+                self.save_model(results["obj"].item(), f"./checkpoint/{plot_filename}.pt")
+            
             logger.info(log)
             # update the learning rate
             self.lr_scheduler.step()
@@ -165,24 +172,43 @@ class InvDesign:
                 for j in range(len(objs)):
                     # (port_name, wl, mode, temp), extract pol from mode, e.g., Ez1 -> Ez
                     pol = field_keys[j][2][:2]
-                    self.plot_thread.submit(
-                        self.devOptimization.plot,
+                    self.devOptimization.plot(
                         eps_map=self.devOptimization._eps_map,
                         obj=results["breakdown"][objs[j]]["value"],
                         plot_filename=plot_filename + f"_{i}" + f"_{objs[j]}.jpg",
-                        # field_key=("in_port_1", 1.55, 1),
                         field_key=field_keys[j],
                         field_component=pol,
-                        # in_port_name="in_port_1",
-                        in_port_name=in_port_names[j],
-                        # exclude_port_names=["refl_port_2"],
-                        exclude_port_names=exclude_port_names[j],
+                        in_slice_name=in_slice_names[j],
+                        exclude_slice_names=exclude_slice_names[j],
                     )
+                    # self.plot_thread.submit(
+                    #     self.devOptimization.plot,
+                    #     eps_map=self.devOptimization._eps_map,
+                    #     obj=results["breakdown"][objs[j]]["value"],
+                    #     plot_filename=plot_filename + f"_{i}" + f"_{objs[j]}.jpg",
+                    #     # field_key=("in_port_1", 1.55, 1),
+                    #     field_key=field_keys[j],
+                    #     field_component=pol,
+                    #     # in_port_name="in_port_1",
+                    #     in_slice_name=in_slice_names[j],
+                    #     # exclude_port_names=["refl_port_2"],
+                    #     exclude_slice_names=exclude_slice_names[j],
+                    # )
 
         if dump_gds:
             if plot_filename.endswith(".png"):
                 plot_filename = plot_filename[:-4]
             self.devOptimization.dump_gds_files(plot_filename + ".gds")
+
+    def save_model(self, fom, path):
+        self.saver.save_model(
+            self.devOptimization,
+            fom,
+            epoch=self._cfg.run.n_epochs,
+            path=path,
+            save_model=False,
+            print_msg=True,
+        )
 
 
 if __name__ == "__main__":

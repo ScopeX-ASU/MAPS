@@ -4,13 +4,90 @@ import torch
 import torch.amp as amp
 import torch.fft
 import torch.nn.functional as F
-
-from core.utils import plot_fields
-from thirdparty.ceviche.constants import *
 from core.utils import train_configs as configs
-from pyutils.general import AverageMeter
-from pyutils.general import logger as lg
+from pyutils.general import AverageMeter, logger as lg
+from pyutils.torch_train import (
+    BestKModelSaver,
+    count_parameters,
+    get_learning_rate,
+    load_model,
+    set_torch_deterministic,
+)
+from pyutils.typing import Criterion, DataLoader, Optimizer, Scheduler
+import torch.fft
+from core.train import builder
+from core.utils import DeterministicCtx, print_stat
+import wandb
+import datetime
+import random
+from core.utils import plot_fields, cal_total_field_adj_src_from_fwd_field
+from thirdparty.ceviche.ceviche.constants import *
+from core.train.models.utils import from_Ez_to_Hx_Hy
+import math
 
+def data_preprocess(data, device):
+    input_slice, wavelength, mode, temp, eps_map, adj_src, gradient, fwd_field, s_params, src_profile, adj_field, field_adj_normalizer, design_region_mask, ht_m, et_m, monitor_slices, A, data_file_path = data
+
+    eps_map = eps_map.to(device, non_blocking=True)
+    gradient = gradient.to(device, non_blocking=True)
+    
+    fwd_field = torch.view_as_real(fwd_field).permute(0, 1, 4, 2, 3)
+    fwd_field = fwd_field.flatten(1, 2)
+    fwd_field = fwd_field.to(device, non_blocking=True) # (batch_size, 6, H, W)
+
+    for key, s_param in s_params.items():
+        s_params[key] = s_param.to(device, non_blocking=True)
+
+    adj_src = adj_src.to(device, non_blocking=True)
+
+    src_profile = src_profile.to(device, non_blocking=True)
+
+    adj_field = torch.view_as_real(adj_field).permute(0, 1, 4, 2, 3)
+    adj_field = adj_field.flatten(1, 2)
+    adj_field = adj_field.to(device, non_blocking=True) # (batch_size, 6, H, W)
+
+    field_adj_normalizer = field_adj_normalizer.to(device, non_blocking=True)
+
+    for key, monitor_slice in monitor_slices.items():
+        monitor_slices[key] = monitor_slice.to(device, non_blocking=True)
+
+    for key, ht in ht_m.items():
+        ht_m[key] = ht.to(device, non_blocking=True)
+    for key, et in et_m.items():
+        et_m[key] = et.to(device, non_blocking=True)
+    for key, value in A.items():
+        A[key] = value.to(device, non_blocking=True)
+
+    opt_cfg_file_path = []
+    for filepath in data_file_path:
+        if "perturbed" in filepath:
+            config_path = filepath.split("_opt_step")[0] + "_perturbed_" + filepath.split("_perturbed_")[1].split("-")[0] + ".yml"
+            opt_cfg_file_path.append(config_path)
+        else:
+            opt_cfg_file_path.append(filepath.split("_opt_step")[0] + ".yml")
+
+    return_dict = {
+        "eps_map": eps_map,
+        "adj_src": adj_src,
+        "gradient": gradient,
+        "fwd_field": fwd_field,
+        "s_params": s_params,
+        "src_profile": src_profile,
+        "adj_field": adj_field,
+        "field_normalizer": field_adj_normalizer,
+        "design_region_mask": design_region_mask,
+        "ht_m": ht_m,
+        "et_m": et_m,
+        "monitor_slices": monitor_slices,
+        "A": A,
+        "opt_cfg_file_path": opt_cfg_file_path,
+        "input_slice": input_slice,
+        "wavelength": wavelength.to(device, non_blocking=True),
+        "mode": mode.to(device, non_blocking=True),
+        "temp": temp.to(device, non_blocking=True),
+    }
+
+    return return_dict
 
 class PredTrainer(object):
     """Base class for a trainer used to train a field predictor."""
@@ -42,19 +119,25 @@ class PredTrainer(object):
         self.lossv = []
 
     def train(
-        self,
-        data_loader,
-        task,
-        epoch,
-        fp16=False,
-    ):
+            self,
+            data_loader,
+            task,
+            epoch,
+            fp16 = False,
+            n_sample=None,
+        ):
         assert task.lower() in ["train", "val", "test"], f"Invalid task {task}"
         self.set_model_status(task)
+        if task.lower() == "test":
+            set_torch_deterministic(42)
         main_criterion_meter, aux_criterion_meter = self.build_meters(task)
 
         data_counter = 0
         total_data = len(data_loader.dataset)  # Total samples
         num_batches = len(data_loader)  # Number of batches
+        if n_sample is not None:
+            num_batches = min(int(n_sample / data_loader.batch_size), num_batches)
+            total_data = num_batches * data_loader.batch_size
 
         iterator = iter(data_loader)
         local_step = 0
@@ -65,13 +148,13 @@ class PredTrainer(object):
                 iterator = iter(data_loader)
                 data = next(iterator)
 
-            data = self.data_preprocess(data)
-            with amp.autocast("cuda", enabled=self.grad_scaler._enabled):
+            data = data_preprocess(data, self.device)
+            with amp.autocast('cuda', enabled=self.grad_scaler._enabled):
                 if task.lower() != "train":
                     with torch.no_grad():
-                        output = self.forward(data)
+                        output = self.forward(data, epoch)
                 else:
-                    output = self.forward(data)
+                    output = self.forward(data, epoch)
                 loss = self.loss_calculation(
                     output,
                     data,
@@ -133,7 +216,7 @@ class PredTrainer(object):
 
         iterator = iter(data_loader)
         data = next(iterator)
-        data = self.data_preprocess(data)
+        data = data_preprocess(data, self.device)
         local_step = 0
         while local_step < num_batches:
             if task.lower() != "train":
@@ -191,111 +274,6 @@ class PredTrainer(object):
             print_msg=True,
         )
 
-    def data_preprocess(self, data):
-        (
-            eps_map,
-            adj_srcs,
-            gradient,
-            field_solutions,
-            s_params,
-            src_profiles,
-            fields_adj,
-            field_normalizer,
-            design_region_mask,
-            ht_m,
-            et_m,
-            monitor_slices,
-            As,
-            data_file_path,
-        ) = data
-        eps_map = eps_map.to(self.device, non_blocking=True)
-        gradient = gradient.to(self.device, non_blocking=True)
-        for key, field in field_solutions.items():
-            field = torch.view_as_real(field).permute(0, 1, 4, 2, 3)
-            field = field.flatten(1, 2)
-            field_solutions[key] = field.to(self.device, non_blocking=True)
-        for key, s_param in s_params.items():
-            s_params[key] = s_param.to(self.device, non_blocking=True)
-        for key, adj_src in adj_srcs.items():
-            adj_srcs[key] = adj_src.to(self.device, non_blocking=True)
-        for key, src_profile in src_profiles.items():
-            src_profiles[key] = src_profile.to(self.device, non_blocking=True)
-        for key, field_adj in fields_adj.items():
-            field_adj = torch.view_as_real(field_adj).permute(0, 1, 4, 2, 3)
-            field_adj = field_adj.flatten(1, 2)
-            fields_adj[key] = field_adj.to(self.device, non_blocking=True)
-        for key, field_norm in field_normalizer.items():
-            field_normalizer[key] = field_norm.to(self.device, non_blocking=True)
-        for key, monitor_slice in monitor_slices.items():
-            monitor_slices[key] = monitor_slice.to(self.device, non_blocking=True)
-        for key, ht in ht_m.items():
-            if key.endswith("-origin_size"):
-                continue
-            else:
-                size = ht_m[key + "-origin_size"]
-                ht_list = []
-                for i in range(size.shape[0]):
-                    item_to_add = torch.view_as_real(ht[i]).permute(1, 0).unsqueeze(0)
-                    item_to_add = F.interpolate(
-                        item_to_add,
-                        size=size[i].item(),
-                        mode="linear",
-                        align_corners=True,
-                    )
-                    item_to_add = item_to_add.squeeze(0).permute(1, 0).contiguous()
-                    ht_list.append(
-                        torch.view_as_complex(item_to_add).to(
-                            self.device, non_blocking=True
-                        )
-                    )
-                ht_m[key] = ht_list
-        for key, et in et_m.items():
-            if key.endswith("-origin_size"):
-                continue
-            else:
-                size = et_m[key + "-origin_size"]
-                et_list = []
-                for i in range(size.shape[0]):
-                    item_to_add = torch.view_as_real(et[i]).permute(1, 0).unsqueeze(0)
-                    item_to_add = F.interpolate(
-                        item_to_add,
-                        size=size[i].item(),
-                        mode="linear",
-                        align_corners=True,
-                    )
-                    item_to_add = item_to_add.squeeze(0).permute(1, 0).contiguous()
-                    et_list.append(
-                        torch.view_as_complex(item_to_add).to(
-                            self.device, non_blocking=True
-                        )
-                    )
-                et_m[key] = et_list
-        for key, A in As.items():
-            As[key] = A.to(self.device, non_blocking=True)
-
-        opt_cfg_file_path = [
-            filepath.split("_opt_step")[0] + ".yml" for filepath in data_file_path
-        ]
-
-        return_dict = {
-            "eps_map": eps_map,
-            "adj_srcs": adj_srcs,
-            "gradient": gradient,
-            "field_solutions": field_solutions,
-            "s_params": s_params,
-            "src_profiles": src_profiles,
-            "fields_adj": fields_adj,
-            "field_normalizer": field_normalizer,
-            "design_region_mask": design_region_mask,
-            "ht_m": ht_m,
-            "et_m": et_m,
-            "monitor_slices": monitor_slices,
-            "As": As,
-            "opt_cfg_file_path": opt_cfg_file_path,
-        }
-
-        return return_dict
-
     def set_model_status(self, task):
         if task.lower() == "train":
             self.model.train()
@@ -315,350 +293,185 @@ class PredTrainer(object):
 
         return main_criterion_meter, aux_criterion_meter
 
-    def forward(self, data):
-        output = self.model(data)
-        return output  # the output has to be a dictionary in which the available keys must be 'forward_field' and 'adjoint_field' or others
+
+    def forward(self, data, epoch):
+        output = self.model(data, epoch)
+        return output # the output has to be a dictionary in which the available keys must be 'forward_field' and 'adjoint_field' or others
 
     def loss_calculation(
-        self,
-        output,
-        data,
-        task,
-        crietrion_meter,
-        aux_criterion_meter,
-    ):
+            self, 
+            output, 
+            data, 
+            task,
+            crietrion_meter,
+            aux_criterion_meter,
+        ):
+    # return_dict = {
+    #     "eps_map": eps_map,
+    #     "adj_src": adj_src,
+    #     "gradient": gradient,
+    #     "fwd_field": fwd_field,
+    #     "s_params": s_params,
+    #     "src_profile": src_profile,
+    #     "adj_field": adj_field,
+    #     "field_normalizer": field_adj_normalizer,
+    #     "design_region_mask": design_region_mask,
+    #     "ht_m": ht_m,
+    #     "et_m": et_m,
+    #     "monitor_slices": monitor_slices,
+    #     "A": A,
+    #     "opt_cfg_file_path": opt_cfg_file_path,
+    #     "input_slice": input_slice,
+    #     "wavelength": wavelength,
+    #     "mode": mode,
+    #     "temp": temp,
+    # }
         # for forward prediction, the output must contain the forward field and this should be a dictionary: (wl, mode, temp, in_port_name, out_port_name) -> forward field
-        assert "forward_field" in list(
-            output.keys()
-        ), "The output must contain the forward field"
-        assert "adjoint_field" in list(
-            output.keys()
-        ), "The output must contain the adjoint field, even if the value is None"
-        assert (
-            "adjoint_source" in list(output.keys())
-        ), "The output must contain the adjoint source, ensure the value is None if the adjoint field is None"
-        forward_field = output["forward_field"]
-        adjoint_field = output["adjoint_field"]
-        adjoint_source = output["adjoint_source"]
+        assert 'forward_field' in list(output.keys()), "The output must contain the forward field"
+        assert 'adjoint_field' in list(output.keys()), "The output must contain the adjoint field, even if the value is None"
+        assert 'adjoint_source' in list(output.keys()), "The output must contain the adjoint source, ensure the value is None if the adjoint field is None"
+        forward_field = output['forward_field']
+        adjoint_field = output['adjoint_field']
+        adjoint_source = output['adjoint_source']
+        s_params = output.get('s_params', None) # if it is not none, means that we have an S-param head to directly predict the S-params
         criterion = self.criterion
         if task.lower() == "train":
             aux_criterions = self.aux_criterion
         else:
             aux_criterions = self.log_criterion
-        regression_loss = [
-            criterion(
-                field[:, -2:, ...],
-                data["field_solutions"][
-                    f"field_solutions-wl-{wl}-port-{in_port_name}-mode-{mode}-temp-{temp}"
-                ][:, -2:, ...],
-                torch.ones_like(field[:, -2:, ...]).to(self.device),
+        regression_loss = criterion(
+                forward_field[:, -2:, ...], 
+                data['fwd_field'][:, -2:, ...],
+                torch.ones_like(forward_field[:, -2:, ...]).to(self.device)
             )
-            for (wl, mode, temp, in_port_name, _), field in forward_field.items()
-        ]
-        regression_loss = torch.stack(regression_loss).mean()
         if adjoint_field is not None:
-            adjoint_loss = [
-                criterion(
-                    field[:, -2:, ...],
-                    # TODO need to add temp when collecting the adjoint field
-                    # data['fields_adj'][f"fields_adj-wl-{wl}-port-{in_port_name}-mode-{mode}-temp-{temp}"][:, -2:, ...],
-                    data["fields_adj"][
-                        f"fields_adj-wl-{wl}-port-{in_port_name}-mode-{mode}"
-                    ][:, -2:, ...],
-                    torch.ones_like(field[:, -2:, ...]).to(self.device),
+            adjoint_loss = criterion(
+                    adjoint_field[:, -2:, ...], 
+                    data['adj_field'][:, -2:, ...],
+                    torch.ones_like(adjoint_field[:, -2:, ...]).to(self.device)
                 )
-                for (wl, mode, temp, in_port_name, _), field in adjoint_field.items()
-            ]
-            adjoint_loss = torch.stack(adjoint_loss).mean()
-            regression_loss = (regression_loss + adjoint_loss) / 2
+            regression_loss = (regression_loss + adjoint_loss)/2
         crietrion_meter.update(regression_loss.item())
         regression_loss = regression_loss * float(configs.criterion.weight)
         loss = regression_loss
         for name, config in aux_criterions.items():
             aux_criterion, weight = config
             if name == "maxwell_residual_loss":
-                aux_loss = [
-                    weight
-                    * aux_criterion(
-                        field,
-                        data["src_profiles"][
-                            f"source_profile-wl-{wl}-port-{in_port_name}-mode-{mode}"
-                        ],
-                        data["As"],
+                aux_loss = weight * aux_criterion(
+                        forward_field, 
+                        # data['fwd_field'][:, -2:, ...],
+                        data['src_profile'],
+                        data['A'],
                         transpose_A=False,
-                        wl=wl,
-                        temp=temp,
-                    )
-                    for (
-                        wl,
-                        mode,
-                        temp,
-                        in_port_name,
-                        _,
-                    ), field in forward_field.items()
-                ]
-                aux_loss = torch.stack(aux_loss).mean()
-                # aux_loss = weight * aux_criterion(
-                #         Ez=forward_field,
-                #         source=data['src_profiles']["source_profile-wl-1.55-port-in_port_1-mode-1"],
-                #         As=data['As'],
-                #         transpose_A=False,
-                #     )
+                        wl=data['wavelength'],
+                        field_normalizer=data['field_normalizer'],
+                    ) 
                 if adjoint_field is not None:
-                    adjoint_loss = [
-                        weight
-                        * aux_criterion(
-                            field,
-                            adjoint_source,
-                            data["As"],
+                    adjoint_loss = weight * aux_criterion(
+                            adjoint_field, 
+                            # data['adj_field'][:, -2:, ...], # label is normalized field
+                            adjoint_source, # b_adj, not normalized to 1e-8
+                            data['A'],
                             transpose_A=True,
-                            wl=wl,
-                            temp=temp,
+                            wl=data['wavelength'],
+                            field_normalizer=data['field_normalizer'],
                         )
-                        for (wl, _, temp, _, _), field in adjoint_field.items
-                    ]
-                    adjoint_loss = torch.stack(adjoint_loss).mean()
-                    aux_loss = (aux_loss + adjoint_loss) / 2
-                    # aux_loss = (aux_loss + weight * aux_criterion(
-                    #     Ez=adjoint_field,
-                    #     source=adjoint_source,
-                    #     As=data['As'],
-                    #     transpose_A=True,
-                    # ))/2
+                    aux_loss = (aux_loss + adjoint_loss)/2
+                    # print("maxwell aux_loss: ", aux_loss, flush=True)
             elif name == "grad_loss":
                 if adjoint_field is not None:
                     aux_loss = weight * aux_criterion(
                         forward_fields=forward_field,
-                        # forward_fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
-                        # backward_fields=field_solutions["field_solutions-wl-1.55-port-out_port_1-mode-1"][:, -2:, ...],
-                        adjoint_fields=adjoint_field,
-                        # adjoint_fields=fields_adj["fields_adj-wl-1.55-port-in_port_1-mode-1"][:, -2:, ...],
-                        # backward_adjoint_fields = fields_adj['fields_adj-wl-1.55-port-in_port_1-mode-1'][:, -2:, ...],
-                        target_gradient=data["gradient"],
-                        gradient_multiplier=data[
-                            "field_normalizer"
-                        ],  # TODO the nomalizer should calculate from the forward field
-                        # dr_mask=None,
-                        dr_mask=data["design_region_mask"],
+                        adjoint_fields=adjoint_field,  
+                        # forward_fields=data["fwd_field"][:, -2:, ...],
+                        # adjoint_fields=data["adj_field"][:, -2:, ...],
+                        target_gradient=data['gradient'],
+                        gradient_multiplier=data['field_normalizer'],
+                        dr_mask=data['design_region_mask'],
+                        wl = data['wavelength'],
                     )
+                    # print("grad aux_loss: ", aux_loss, flush=True)
                 else:
-                    raise ValueError(
-                        "The adjoint field is None, the gradient loss cannot be calculated"
+                    raise ValueError("The adjoint field is None, the gradient loss cannot be calculated")
+            elif name == "grad_similarity_loss":
+                if adjoint_field is not None:
+                    aux_loss = weight * aux_criterion(
+                        # forward_fields=data["fwd_field"][:, -2:, ...],
+                        # adjoint_fields=data["adj_field"][:, -2:, ...],
+                        forward_fields=forward_field,
+                        adjoint_fields=adjoint_field,  
+                        target_gradient=data['gradient'],
+                        dr_mask=data['design_region_mask'],
                     )
-            elif name == "s_param_loss":
-                # make a warning saying that this loss is not ready yet
-                raise NotImplementedError("The S-parameter loss is not ready yet")
-                # there is also no need to distinguish the forward and adjoint field here
-                # the s_param_loss is calculated based on the forward field and there is no label for the adjoint field
-                # this is the key in data s_params:
-                # [
-                #     's_params-port-mode1_rad_trans_xm-wl-1.55-type-flux-temp-300',
-                #     's_params-port-mode1_rad_trans_xp-wl-1.55-type-flux-temp-300',
-                #     's_params-port-mode1_rad_trans_ym-wl-1.55-type-flux-temp-300',
-                #     's_params-port-mode1_rad_trans_yp-wl-1.55-type-flux-temp-300',
-                #     's_params-port-mode1_refl_trans-wl-1.55-type-flux_minus_src-temp-300',
-                #     's_params-port-mode1_trans-wl-1.55-type-1-temp-300',
-                #     's_params-port-mode2_rad_trans_xm-wl-1.55-type-flux-temp-300',
-                #     's_params-port-mode2_rad_trans_xp-wl-1.55-type-flux-temp-300',
-                #     's_params-port-mode2_rad_trans_ym-wl-1.55-type-flux-temp-300',
-                #     's_params-port-mode2_rad_trans_yp-wl-1.55-type-flux-temp-300',
-                #     's_params-port-mode2_refl_trans-wl-1.55-type-flux_minus_src-temp-300',
-                #     's_params-port-mode2_trans-wl-1.55-type-2-temp-300'
-                # ]
-                # this is the key of monitor slices:
-                # [
-                #     'port_slice-in_port_1_x',
-                #     'port_slice-in_port_1_y',
-                #     'port_slice-out_port_1_x',
-                #     'port_slice-out_port_1_y',
-                #     'port_slice-out_port_2_x',
-                #     'port_slice-out_port_2_y',
-                #     'port_slice-rad_monitor_xm',
-                #     'port_slice-rad_monitor_xp',
-                #     'port_slice-rad_monitor_ym',
-                #     'port_slice-rad_monitor_yp',
-                #     'port_slice-refl_port_1_x',
-                #     'port_slice-refl_port_1_y'
-                # ]
-                aux_loss = [
-                    weight
-                    * aux_criterion(
-                        fields=field,
-                        # fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"],
-                        ht_m=data["ht_m"][
-                            f"ht_m-wl-{wl}-port-{out_port_name}-mode-{mode}"
-                        ],
-                        et_m=data["et_m"][
-                            f"et_m-wl-{wl}-port-{out_port_name}-mode-{mode}"
-                        ],
-                        monitor_slices_x=data["monitor_slices"][
-                            f"port_slice-{out_port_name}_x"
-                        ],
-                        monitor_slices_y=data["monitor_slices"][
-                            f"port_slice-{out_port_name}_y"
-                        ],
-                        target_SParam=data["s_params"][
-                            f"s_params-port-{out_port_name}-wl-{wl}-type-{mode}-temp-{temp}"
-                        ],
-                    )
-                    for (
-                        wl,
-                        mode,
-                        temp,
-                        in_port_name,
-                        out_port_name,
-                    ), field in forward_field.items
-                ]
+                    # print("grad similarity aux_loss: ", aux_loss, flush=True)
+                else:
+                    raise ValueError("The adjoint field is None, the gradient loss cannot be calculated")
+            elif name == "s_param_loss": 
                 aux_loss = weight * aux_criterion(
-                    fields=forward_field,
-                    # fields=field_solutions["field_solutions-wl-1.55-port-in_port_1-mode-1"],
-                    ht_m=data["ht_m"]["ht_m-wl-1.55-port-out_port_1-mode-1"],
-                    et_m=data["et_m"]["et_m-wl-1.55-port-out_port_1-mode-1"],
-                    monitor_slices=data[
-                        "monitor_slices"
-                    ],  # 'port_slice-out_port_1_x', 'port_slice-out_port_1_y'
-                    target_SParam=data["s_params"][
-                        "s_params-port-fwd_trans-wl-1.55-type-1-temp-300"
-                    ],
-                )
+                        fields=forward_field, 
+                        # fields=data['fwd_field'],
+                        ht_m=data['ht_m'],
+                        et_m=data['et_m'],
+                        monitor_slices=data['monitor_slices'],
+                        target_SParam=data['s_params'],
+                        opt_cfg_file_path=data['opt_cfg_file_path'],
+                        mode=data['mode'],
+                        temp=data['temp'],
+                        wl=data['wavelength'],
+                        src_in_slice_name=data['input_slice'],
+                    )
+            elif name == "direct_s_param_loss":
+                # in this loss function, we don't calculate the S-params from the forward field, 
+                # we directly compare the S-params from the prediction and the GT S-params from the data
+                assert s_params is not None, "The s_params should not be None"
+                aux_loss = weight * aux_criterion(
+                        s_params, 
+                        data['s_params'],
+                    )
             elif name == "Hx_loss":
-                aux_loss = [
-                    weight
-                    * aux_criterion(
-                        field[:, :2, ...],
-                        data["field_solutions"][
-                            f"field_solutions-wl-{wl}-port-{in_port_name}-mode-{mode}-temp-{temp}"
-                        ][:, :2, ...],
-                        torch.ones_like(field[:, :2, ...]).to(self.device),
+                aux_loss = weight * aux_criterion(
+                        forward_field[:, :2, ...],
+                        data['fwd_field'][:, :2, ...],
+                        torch.ones_like(forward_field[:, :2, ...]).to(self.device)
                     )
-                    for (
-                        wl,
-                        mode,
-                        temp,
-                        in_port_name,
-                        _,
-                    ), field in forward_field.items()
-                ]
-                aux_loss = torch.stack(aux_loss).mean()
-                # aux_loss = weight * aux_criterion(
-                #     forward_field[:, :2, ...],
-                #     data['field_solutions']["field_solutions-wl-1.55-port-in_port_1-mode-1-temp-300"][:, :2, ...],
-                #     torch.ones_like(forward_field[:, :2, ...]).to(self.device)
-                # )
                 if adjoint_field is not None:
-                    adjoint_loss = [
-                        weight
-                        * aux_criterion(
-                            field[:, :2, ...],
-                            # data['fields_adj'][f"fields_adj-wl-{wl}-port-{in_port_name}-mode-{mode}-temp-{temp}"][:, :2, ...],
-                            data["fields_adj"][
-                                f"fields_adj-wl-{wl}-port-{in_port_name}-mode-{mode}"
-                            ][:, :2, ...],
-                            torch.ones_like(field[:, :2, ...]).to(self.device),
+                    adjoint_loss = weight * aux_criterion(
+                            adjoint_field[:, :2, ...],
+                            # data['adj_field'],
+                            data['adj_field'][:, :2, ...],
+                            torch.ones_like(adjoint_field[:, :2, ...]).to(self.device)
                         )
-                        for (
-                            wl,
-                            mode,
-                            temp,
-                            in_port_name,
-                            _,
-                        ), field in adjoint_field.items()
-                    ]
-                    adjoint_loss = torch.stack(adjoint_loss).mean()
-                    aux_loss = (aux_loss + adjoint_loss) / 2
-                    # aux_loss = (aux_loss + weight * aux_criterion(
-                    #     adjoint_field[:, :2, ...],
-                    #     data['fields_adj']["fields_adj-wl-1.55-port-in_port_1-mode-1-temp-300"][:, :2, ...],
-                    #     torch.ones_like(adjoint_field[:, :2, ...]).to(self.device)
-                    # ))/2
+                    aux_loss = (aux_loss + adjoint_loss)/2
             elif name == "Hy_loss":
-                aux_loss = [
-                    weight
-                    * aux_criterion(
-                        field[:, 2:4, ...],
-                        data["field_solutions"][
-                            f"field_solutions-wl-{wl}-port-{in_port_name}-mode-{mode}-temp-{temp}"
-                        ][:, 2:4, ...],
-                        torch.ones_like(field[:, 2:4, ...]).to(self.device),
+                aux_loss = weight * aux_criterion(
+                        forward_field[:, 2:4, ...],
+                        data['fwd_field'][:, 2:4, ...],
+                        torch.ones_like(forward_field[:, 2:4, ...]).to(self.device)
                     )
-                    for (
-                        wl,
-                        mode,
-                        temp,
-                        in_port_name,
-                        _,
-                    ), field in forward_field.items()
-                ]
-                aux_loss = torch.stack(aux_loss).mean()
-                # aux_loss = weight * aux_criterion(
-                #     forward_field[:, 2:4, ...],
-                #     data['field_solutions']["field_solutions-wl-1.55-port-in_port_1-mode-1-temp-300"][:, 2:4, ...],
-                #     torch.ones_like(forward_field[:, 2:4, ...]).to(self.device)
-                # )
                 if adjoint_field is not None:
-                    adjoint_loss = [
-                        weight
-                        * aux_criterion(
-                            field[:, 2:4, ...],
-                            # data['fields_adj'][f"fields_adj-wl-{wl}-port-{in_port_name}-mode-{mode}-temp-{temp}"][:, 2:4, ...],
-                            data["fields_adj"][
-                                f"fields_adj-wl-{wl}-port-{in_port_name}-mode-{mode}"
-                            ][:, 2:4, ...],
-                            torch.ones_like(field[:, 2:4, ...]).to(self.device),
+                    adjoint_loss = weight * aux_criterion(
+                            adjoint_field[:, 2:4, ...],
+                            # data['adj_field'],
+                            data['adj_field'][:, 2:4, ...],
+                            torch.ones_like(adjoint_field[:, 2:4, ...]).to(self.device)
                         )
-                        for (
-                            wl,
-                            mode,
-                            temp,
-                            in_port_name,
-                            _,
-                        ), field in adjoint_field.items()
-                    ]
-                    adjoint_loss = torch.stack(adjoint_loss).mean()
-                    aux_loss = (aux_loss + adjoint_loss) / 2
-                    # aux_loss = (aux_loss + weight * aux_criterion(
-                    #     adjoint_field[:, 2:4, ...],
-                    #     data['fields_adj']["fields_adj-wl-1.55-port-in_port_1-mode-1-temp-300"][:, 2:4, ...],
-                    #     torch.ones_like(adjoint_field[:, 2:4, ...]).to(self.device)
-                    # ))/2
-            aux_criterion_meter[name].update(
-                aux_loss.item()
-            )  # record the aux loss first
+                    aux_loss = (aux_loss + adjoint_loss)/2
+            aux_criterion_meter[name].update(aux_loss.item()) # record the aux loss first
             loss = loss + aux_loss
 
         return loss
 
     def result_visualization(self, data, output, filepath):
-        forward_field = output["forward_field"]
-        adjoint_field = output["adjoint_field"]
-        for (
-            wl,
-            mode,
-            temp,
-            in_port_name,
-            out_port_name,
-        ), field in forward_field.items():
-            plot_fields(
-                fields=field.clone().detach(),
-                ground_truth=data["field_solutions"][
-                    f"field_solutions-wl-{wl}-port-{in_port_name}-mode-{mode}-temp-{temp}"
-                ],
-                filepath=filepath
-                + f"-wl-{wl}-port-{in_port_name}-mode-{mode}-temp-{temp}-fwd.png",
-            )
+        forward_field = output['forward_field']
+        adjoint_field = output['adjoint_field']
+        plot_fields(
+            fields=forward_field.detach(),
+            ground_truth=data['fwd_field'],
+            filepath=filepath + f"-fwd.png",
+        )
         if adjoint_field is not None:
-            for (
-                wl,
-                mode,
-                temp,
-                in_port_name,
-                out_port_name,
-            ), field in adjoint_field.items():
-                plot_fields(
-                    fields=field.clone().detach(),
-                    ground_truth=data["fields_adj"][
-                        f"fields_adj-wl-{wl}-port-{in_port_name}-mode-{mode}"
-                    ],
-                    filepath=filepath
-                    + f"-wl-{wl}-port-{in_port_name}-mode-{mode}-temp-{temp}-adj.png",
-                )
+            plot_fields(
+                fields=adjoint_field.clone().detach(),
+                ground_truth=data['adj_field'],
+                filepath=filepath + f"-adj.png",
+            )

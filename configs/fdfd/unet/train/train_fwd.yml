@@ -46,6 +46,8 @@ log_criterion:
     weight: 1
   Hy_loss:
     weight: 1
+  direct_s_param_loss:
+    weight: 0
 
 test_criterion:
   name: mse

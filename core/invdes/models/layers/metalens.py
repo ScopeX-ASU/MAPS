@@ -62,13 +62,16 @@ class MetaLens(N_Ports):
         self.eps_bg = eps_bg_fn(wl_cen)
         self.resolution = sim_cfg["resolution"]
         self.max_port_width = max(port_width)
-
+        # print("this is the substrate eps we are useing: ", eps_sub_fn(wl_cen), flush=True)
+        # print("this is the background eps we are useing: ", eps_bg_fn(wl_cen), flush=True)
+        # print("this is the ridge eps we are useing: ", eps_r_fn(wl_cen), flush=True)
+        # quit()
         port_cfgs = dict(
             in_port_1=dict(
                 type="box",
                 direction="x",
-                center=[-size_x / 2 + port_len[0] / 2 + 0.5 / self.resolution, 0],
-                size=[port_len[0] + 1 / self.resolution, port_width[0]],
+                center=[-size_x / 2 + port_len[0] / 2, 0],
+                size=[port_len[0], port_width[0]],
                 eps=eps_sub_fn(wl_cen),
             ),
             out_port_1=dict(
@@ -123,15 +126,15 @@ class MetaLens(N_Ports):
             logger.info("Start generating sources and monitors ...")
         src_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
-            slice_name="in_port_1",
-            rel_loc=0.85,
+            slice_name="in_slice_1",
+            rel_loc=0.6,
             rel_width=float("inf"),
             direction="x+",
         )
         refl_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
-            slice_name="refl_port_1",
-            rel_loc=0.9,
+            slice_name="refl_slice_1",
+            rel_loc=0.61,
             rel_width=float("inf"),
             direction="x+",
         )
@@ -191,7 +194,8 @@ class MetaLens(N_Ports):
         # ]
 
         self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=1)
-        radiation_monitor = self.build_radiation_monitor(monitor_name="rad_monitor")
+        radiation_monitor = None
+        # radiation_monitor = self.build_radiation_monitor(monitor_name="rad_slice")
         # farfield_radiation_monitor = self.build_farfield_radiation_monitor(monitor_name="farfield_rad_monitor")
 
         surface_x = (
@@ -284,12 +288,8 @@ class MetaLens(N_Ports):
         return (
             src_slice,
             nearfield_slice_1,
-            # nearfield_slice_2,
-            # nearfield_slice_3,
             refl_slice,
-            # farfield_slices,
             radiation_monitor,
-            # farfield_radiation_monitor,
             farfield_regions,
             total_farfield_region,
             farfield_rad_trans_yp_region,
@@ -303,25 +303,27 @@ class MetaLens(N_Ports):
         norm_source_profiles = self.build_norm_sources(
             source_modes=("Hz1",),
             input_port_name="in_port_1",
-            input_slice_name="in_port_1",
+            input_slice_name="in_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             solver=self.sim_cfg["solver"],
             source_type="plane_wave",
             plot=True,
+            require_sim=True,
         )
 
         norm_refl_profiles_1 = self.build_norm_sources(
             source_modes=("Hz1",),
             input_port_name="in_port_1",
-            input_slice_name="refl_port_1",
+            input_slice_name="refl_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             solver=self.sim_cfg["solver"],
             source_type="plane_wave",
             plot=True,
+            require_sim=False,
         )
 
         return norm_source_profiles, norm_refl_profiles_1

@@ -13,15 +13,9 @@ import torch.nn.functional as F
 import torch.optim
 from torch import Tensor
 from torch_sparse import spmm
-
-from core.utils import (
-    LevelSetInterp,
-    Slice,
-    get_eigenmode_coefficients,
-    get_eps,
-    get_flux,
-)
-from thirdparty.ceviche.constants import *
+from typing import Callable, List, Tuple
+from core.utils import get_eigenmode_coefficients, Slice, get_flux, _load_opt_cfgs
+from core.fdfd.fdfd import fdfd_ez
 
 if TYPE_CHECKING:
     from torch.optim.optimizer import _params_t
@@ -1042,103 +1036,6 @@ def rip_padding(eps, pady_0, pady_1, padx_0, padx_1):
     """
     return eps[padx_0:-padx_1, pady_0:-pady_1]
 
-
-# class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
-#     def __init__(
-#         self,
-#         wl_cen: float = 1.55,
-#         wl_width: float = 0,
-#         n_wl: int = 1,
-#         size_average=None,
-#         reduce=None,
-#         reduction: str = "mean",
-#         using_ALM: bool = False,
-#     ):
-#         super().__init__(size_average, reduce, reduction)
-#         self.wl_list = torch.linspace(
-#             wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl
-#         )
-#         self.omegas = 2 * np.pi * C_0 / (self.wl_list * MICRON_UNIT)
-#         self.using_ALM = using_ALM
-
-#     def forward(self, Ez: Tensor, source: Tensor, As, transpose_A):
-#         Ez = Ez[:, -2:, :, :]
-#         Ez = Ez.permute(0, 2, 3, 1).contiguous()
-#         Ez = torch.view_as_complex(Ez) # convert Ez to the required complex format
-#         source = torch.view_as_real(source.resolve_conj()).permute(0, 3, 1, 2) # B, 2, H, W
-#         source = source.permute(0, 2, 3, 1).contiguous()
-#         source = torch.view_as_complex(source) # convert source to the required complex format
-
-
-#         # there is only one omega in this case
-#         Ez = Ez.unsqueeze(1)
-#         source = source.unsqueeze(1)
-
-#         free_space_mask = source.abs() <= 1e-10
-#         free_space_mask = free_space_mask.flatten(0, 1).flatten(1)
-
-#         ## Ez: [bs, n_wl, h, w] complex tensor
-#         ## eps_r: [bs, h, w] real tensor
-#         ## source: [bs, n_wl, h, w] complex tensor, source in sim.solve(source), not b, b = 1j * omega * source
-
-#         # step 2: calculate loss
-#         lhs = []
-#         if self.omegas.device != source.device:
-#             self.omegas = self.omegas.to(source.device)
-#         for i in range(Ez.shape[0]): # loop over samples in a batch
-#             for j in range(Ez.shape[1]): # loop over different wavelengths
-#                 ez = Ez[i, j].flatten()
-#                 # omega = 2 * np.pi * C_0 / (self.wl_list[j] * MICRON_UNIT)
-#                 wl = round(self.wl_list[j].item()*100)/100
-#                 # print("this is the key of As", list(As.keys()), flush=True)
-#                 # quit()
-#                 # wl-1.55-temp-300
-#                 entries = As[f'A-wl-{wl}-temp-{300}-entries_a'][i]
-#                 indices = As[f'A-wl-{wl}-temp-{300}-indices_a'][i]
-#                 # b = source[i, j].flatten() * (1j * omega)
-#                 # print("this is the shape of the indices", indices.shape, flush=True) # this is the shape of the indices torch.Size([2, 405600])
-#                 # assert len(indices.shape) == 3
-#                 if transpose_A:
-#                     # print("this is the shape of the indices", indices.shape, flush=True) # this is the shape of the indices torch.Size([2, 405600])
-#                     indices = torch.flip(indices, [0]) # considering the batch dimension, the axis set to 1 corresponds to axis = 0 in solver.
-#                     # b = b / 1j / omega
-#                 A_by_e = spmm(
-#                     indices,
-#                     entries,
-#                     m=ez.shape[0],
-#                     n=ez.shape[0],
-#                     matrix=ez[:, None],
-#                 )[:, 0]
-#                 lhs.append(A_by_e)
-#         lhs = torch.stack(lhs, 0)  # [bs*n_wl, h*w]
-#         if not transpose_A:
-#             b = (
-#                 (source * (1j * self.omegas[None, :, None, None])).flatten(0, 1).flatten(1)
-#             )  # [bs*n_wl, h*w]
-#         else:
-#             b = (
-#                 (source).flatten(0, 1).flatten(1)
-#             )
-#         difference = lhs - b
-#         if not self.using_ALM: # when we are not using ALM, we set the difference to zero in the free space region
-#             difference[~free_space_mask] = 0
-#         # b[~free_space_mask] = 0
-#         # fig, ax = plt.subplots(1, 3, figsize=(15, 5))
-#         # diff = ax[0].imshow(torch.abs(difference[0]).reshape(Ez.shape[-2], Ez.shape[-1]).detach().cpu().numpy())
-#         # lhs_plot = ax[1].imshow(torch.abs(lhs[0]).reshape(Ez.shape[-2], Ez.shape[-1]).detach().cpu().numpy())
-#         # b_plot = ax[2].imshow(torch.abs(b[0]).reshape(Ez.shape[-2], Ez.shape[-1]).detach().cpu().numpy())
-#         # plt.colorbar(diff, ax=ax[0])
-#         # plt.colorbar(lhs_plot, ax=ax[1])
-#         # plt.colorbar(b_plot, ax=ax[2])
-#         # plt.savefig("./figs/maxwell_residual_plot.png", dpi = 300)
-#         # plt.close()
-#         difference = torch.view_as_real(difference).double()
-#         b = torch.view_as_real(b).double()
-#         # print("this is the l2 norm of the b ", torch.norm(b, p=2, dim=(-2, -1)), flush=True) # ~e+22
-#         loss = (torch.norm(difference, p=2, dim=(-2, -1)) / (torch.norm(b, p=2, dim=(-2, -1)) + 1e-6)).mean()
-#         return loss
-
-
 class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
     def __init__(
         self,
@@ -1149,14 +1046,14 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
         super().__init__(size_average, reduce, reduction)
 
     def forward(
-        self,
-        Ez: Tensor,
-        source: Tensor,
-        As,
-        transpose_A,
-        wl,
-        temp,
-    ):
+            self, 
+            Ez: Tensor, 
+            source: Tensor, 
+            A, 
+            transpose_A,
+            wl,
+            field_normalizer,
+        ):
         Ez = Ez[:, -2:, :, :]
         Ez = Ez.permute(0, 2, 3, 1).contiguous()
         Ez = torch.view_as_complex(Ez)  # convert Ez to the required complex format
@@ -1178,15 +1075,10 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
 
         for i in range(Ez.shape[0]):  # loop over samples in a batch
             ez = Ez[i].flatten()
-            wl = round(wl * 100) / 100
-            entries = As[f"A-wl-{wl}-temp-{temp}-entries_a"][i]
-            indices = As[f"A-wl-{wl}-temp-{temp}-indices_a"][i]
+            entries = A['entries_a'][i]
+            indices = A['indices_a'][i]
             if transpose_A:
-                # print("this is the shape of the indices", indices.shape, flush=True) # this is the shape of the indices torch.Size([2, 405600])
-                indices = torch.flip(
-                    indices, [0]
-                )  # considering the batch dimension, the axis set to 1 corresponds to axis = 0 in solver.
-                # b = b / 1j / omega
+                indices = torch.flip(indices, [0]) # considering the batch dimension, the axis set to 1 corresponds to axis = 0 in solver.
             A_by_e = spmm(
                 indices,
                 entries,
@@ -1197,19 +1089,15 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
             lhs.append(A_by_e)
         lhs = torch.stack(lhs, 0)  # [bs*n_wl, h*w]
         if not transpose_A:
-            b = (source * (1j * omega)).flatten(1)  # [bs, h*w]
+            b = (
+                (source * (1j * omega.unsqueeze(-1).unsqueeze(-1))).flatten(1)
+            )  # [bs, h*w]
         else:
-            b = (source).flatten(1)
+            b = (
+                (source * field_normalizer.unsqueeze(-1)).flatten(1)
+            )
         difference = lhs - b
-        # fig, ax = plt.subplots(1, 3, figsize=(15, 5))
-        # diff = ax[0].imshow(torch.abs(difference[0]).reshape(Ez.shape[-2], Ez.shape[-1]).detach().cpu().numpy())
-        # lhs_plot = ax[1].imshow(torch.abs(lhs[0]).reshape(Ez.shape[-2], Ez.shape[-1]).detach().cpu().numpy())
-        # b_plot = ax[2].imshow(torch.abs(b[0]).reshape(Ez.shape[-2], Ez.shape[-1]).detach().cpu().numpy())
-        # plt.colorbar(diff, ax=ax[0])
-        # plt.colorbar(lhs_plot, ax=ax[1])
-        # plt.colorbar(b_plot, ax=ax[2])
-        # plt.savefig("./figs/maxwell_residual_plot.png", dpi = 300)
-        # plt.close()
+
         difference = torch.view_as_real(difference).double()
         b = torch.view_as_real(b).double()
         # print("this is the l2 norm of the b ", torch.norm(b, p=2, dim=(-2, -1)), flush=True) # ~e+22
@@ -1218,7 +1106,6 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
             / (torch.norm(b, p=2, dim=(-2, -1)) + 1e-6)
         ).mean()
         return loss
-
 
 class SParamLoss(torch.nn.modules.loss._Loss):
     def __init__(self, reduce="mean"):
@@ -1231,58 +1118,145 @@ class SParamLoss(torch.nn.modules.loss._Loss):
         fields,  # bs, 3, H, W, complex
         ht_m,
         et_m,
-        monitor_slices_x,
-        monitor_slices_y,
+        monitor_slices,
         target_SParam,
+        opt_cfg_file_path,
+        mode,
+        temp,
+        wl,
+        src_in_slice_name,
     ):
-        # Step 1: Resize all the fields to the target size
-        Ez = fields[:, -2:, :, :].permute(0, 2, 3, 1).contiguous()
-        Ez = torch.view_as_complex(Ez)  # convert Ez to the required complex format
-
-        Hx = fields[:, :2, :, :].permute(0, 2, 3, 1).contiguous()
+        Ez = fields[:, -2:, :, :]
+        Hx = fields[:, :2, :, :]
+        Hy = fields[:, 2:4, :, :]
+        Ez = Ez.permute(0, 2, 3, 1).contiguous()
+        Hx = Hx.permute(0, 2, 3, 1).contiguous()
+        Hy = Hy.permute(0, 2, 3, 1).contiguous()
+        Ez = torch.view_as_complex(Ez)
         Hx = torch.view_as_complex(Hx)
-
-        Hy = fields[:, 2:4, :, :].permute(0, 2, 3, 1).contiguous()
         Hy = torch.view_as_complex(Hy)
-
-        # print("this is the monitor_slices_x", monitor_slices_x, flush=True)
-        # print("this is the monitor_slices_y", monitor_slices_y, flush=True)
-        ## Hx, Hy, Ez: [bs, h, w] complex tensor
-        # Stpe 2: Calculate the S-parameters
-        batch_size = Ez.shape[0]
         s_params = []
-        for i in range(batch_size):
-            monitor_slice = Slice(
-                y=monitor_slices_y[i],
-                x=torch.arange(
-                    monitor_slices_x[i][0],
-                    monitor_slices_x[i][1],
-                ).to(monitor_slices_y[i].device),
-            )
-            # ht_m and et_m are lists
-            s_p, s_m = get_eigenmode_coefficients(
-                hx=Hx[i],
-                hy=Hy[i],
-                ez=Ez[i],
-                ht_m=ht_m[i],
-                et_m=et_m[i],
-                monitor=monitor_slice,
-                grid_step=1 / 50,
-                direction="y",
-                autograd=True,
-                energy=True,
-            )
-            s_params.append(torch.tensor([s_p, s_m], device=Ez.device))
-        s_params = torch.stack(s_params, 0)
-        s_params_diff = s_params - target_SParam
-        # Step 3: Calculate the loss
-        # print("this is the l2 norm of the target_SParam ", torch.norm(target_SParam, p=2, dim=-1), flush=True) ~e-9
-        loss = (
-            torch.norm(s_params_diff, p=2, dim=-1)
-            / (torch.norm(target_SParam, p=2, dim=-1) + 1e-12)
-        ).mean()
-        return loss
+        target_s = []
+        for i in range(Ez.shape[0]):
+            opt_cfgs, resolution = _load_opt_cfgs(opt_cfg_file_path[i])
 
+            for obj_name, opt_cfg in opt_cfgs.items():
+                direction = opt_cfg["direction"]
+                out_slice_name = opt_cfg["out_slice_name"]
+                in_mode = opt_cfg["in_mode"]
+                out_modes = opt_cfg.get("out_modes", [])
+                out_modes = [int(mode) for mode in out_modes]
+                assert len(out_modes) == 1, f"The code can handle multiple modes, but I have not check if it is correct"
+                temperture = opt_cfg["temp"]
+                temperture = [float(temp) for temp in temperture]
+                wavelength = opt_cfg["wl"]
+                assert len(wavelength) == 1, f"only support one wavelength for now but the wavelength is: {wavelength}"
+                wavelength = wavelength[0]
+                input_slice_name = opt_cfg["in_slice_name"]
+                obj_type = opt_cfg["type"]
+                monitor = Slice(
+                    x=monitor_slices[f"port_slice-{out_slice_name}_x"][i],
+                    y=monitor_slices[f"port_slice-{out_slice_name}_y"][i],
+                )
+                # print(f"this is the wl: {wl}, mode: {mode}, temp: {temp}, in_port_name: {in_port_name}")
+                # print(f"this is the corresponding we read from current obj mode: {in_mode}, temp: {temperture}, in_port_name: {input_port_name}")
+                if (
+                    in_mode != int(mode[i].item())
+                    or temp[i] not in temperture
+                    or input_slice_name != src_in_slice_name[i]
+                    or round(wavelength, 2) != float(wl[i].item())
+                ):
+                    continue
+                if obj_type == "eigenmode":
+                    for output_mode in out_modes:
+                        fom, _ = get_eigenmode_coefficients(
+                            hx=Hx[i],
+                            hy=Hy[i],
+                            ez=Ez[i],
+                            ht_m=ht_m[f"ht_m-wl-{wl[i].item()}-slice-{out_slice_name}-mode-{output_mode}"][
+                                i
+                            ],
+                            et_m=et_m[f"et_m-wl-{wl[i].item()}-slice-{out_slice_name}-mode-{output_mode}"][
+                                i
+                            ],
+                            monitor=monitor,
+                            grid_step=1 / resolution,
+                            direction=direction,
+                            energy=True,
+                        )
+                        fom = fom / 1e-8  # normalize with the input power
+                        target_s.append(target_SParam[f"s_params-obj_slice_name-{out_slice_name}-type-{output_mode}-in_slice_name-{input_slice_name}-wl-{wl[i].item()}-in_mode-{in_mode}-temp-{temp[i]}"][i][0])
+                elif "flux" in obj_type:  # flux or flux_minus_src
+                    fom = get_flux(
+                        hx=Hx[i],
+                        hy=Hy[i],
+                        ez=Ez[i],
+                        monitor=monitor,
+                        grid_step=1 / resolution,
+                        direction=direction,
+                    )
+                    # f"s_params-obj_slice_name-{slice_name}-type-{obj_type}-in_slice_name-{input_slice_name}-wl-{wl}-in_mode-{in_mode}-temp-{temp}"
+                    if "minus_src" in opt_cfg["type"]:
+                        fom = torch.abs(torch.abs(fom / 1e-8) - 1)
+                        target_s.append(target_SParam[f"s_params-obj_slice_name-{out_slice_name}-type-{obj_type}-in_slice_name-{input_slice_name}-wl-{wl[i].item()}-in_mode-{in_mode}-temp-{temp[i]}"][i][1])
+                    else:
+                        fom = torch.abs(fom / 1e-8)
+                        target_s.append(target_SParam[f"s_params-obj_slice_name-{out_slice_name}-type-{obj_type}-in_slice_name-{input_slice_name}-wl-{wl[i].item()}-in_mode-{in_mode}-temp-{temp[i]}"][i])
+                else:
+                    raise ValueError(f"Unknown optimization type: {opt_cfg['type']}")
+                s_params.append(fom)
+        s_params = torch.stack(s_params, 0)
+        target_s = torch.stack(target_s, 0)
+        s_params_diff = s_params - target_s
+        normalizeMSE = (s_params_diff.norm(p=2, dim=-1) / (target_s.norm(p=2, dim=-1)).mean() + 1e-9)
+        return normalizeMSE
+    
+class DirectCompareSParam(torch.nn.modules.loss._Loss):
+    '''
+    There is no need to calculate the S from the field
+    Only need to compare the S parameters GT and the predicted S parameters
+    '''
+    def __init__(self, reduce="mean"):
+        super(DirectCompareSParam, self).__init__()
+
+        self.reduce = reduce
+
+    def forward(
+        self,
+        s_params_pred,  # bs, 2, real
+        s_params_GT,  # bs, 2, real
+    ):
+        # read the required S parameters from the s_params_GT
+        # print("this is the shape and dtye of the predicted S parameters", s_params_pred.shape, s_params_pred.dtype, flush=True)
+        # print("this is the keys in the s_params_GT", list(s_params_GT.keys()), flush=True)
+        # quit()
+        # ['s_params-obj_slice_name-out_slice_1-type-1-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300', 's_params-obj_slice_name-rad_slice_xm-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300', 's_params-obj_slice_name-rad_slice_xp-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300', 's_params-obj_slice_name-rad_slice_ym-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300', 's_params-obj_slice_name-rad_slice_yp-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300', 's_params-obj_slice_name-refl_slice_1-type-flux_minus_src-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
+        fwd_trans_GT = s_params_GT['s_params-obj_slice_name-out_slice_1-type-1-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
+        ref_GT = s_params_GT['s_params-obj_slice_name-refl_slice_1-type-flux_minus_src-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
+        rad_xp_GT = s_params_GT['s_params-obj_slice_name-rad_slice_xp-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
+        rad_xm_GT = s_params_GT['s_params-obj_slice_name-rad_slice_xm-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
+        rad_yp_GT = s_params_GT['s_params-obj_slice_name-rad_slice_yp-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
+        rad_ym_GT = s_params_GT['s_params-obj_slice_name-rad_slice_ym-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
+
+        target_s = torch.cat(
+            (
+                fwd_trans_GT[:, 0].unsqueeze(1), 
+                ref_GT[:, 1].unsqueeze(1),
+                rad_xp_GT[:].unsqueeze(1),
+                rad_xm_GT[:].unsqueeze(1),
+                rad_yp_GT[:].unsqueeze(1),
+                rad_ym_GT[:].unsqueeze(1),
+            ),
+            dim=1,
+        )
+        # print("this is the target s parameters", target_s, flush=True)
+        # quit()
+        prediction_error = s_params_pred - target_s
+        normalizeMSE = (prediction_error.norm(p=2, dim=-1) / (target_s.norm(p=2, dim=-1)).mean() + 1e-9)
+        return normalizeMSE.mean()
+
+
+class GradientLoss(torch.nn.modules.loss._Loss):
 
 class GradientLoss(torch.nn.modules.loss._Loss):
     def __init__(self, reduce="mean"):
@@ -1296,7 +1270,8 @@ class GradientLoss(torch.nn.modules.loss._Loss):
         adjoint_fields,
         target_gradient,
         gradient_multiplier,
-        dr_mask=None,
+        dr_mask = None,
+        wl = 1.55,
     ):
         forward_fields_ez = forward_fields[
             :, -2:, :, :
@@ -1313,12 +1288,58 @@ class GradientLoss(torch.nn.modules.loss._Loss):
         gradient = -(adjoint_fields * forward_fields_ez).real
         batch_size = gradient.shape[0]
         for i in range(batch_size):
-            gradient[i] = (
-                gradient[i]
-                / gradient_multiplier[
-                    "field_adj_normalizer-wl-1.55-port-in_port_1-mode-1"
-                ][i]
-            )
+            gradient[i] = gradient[i] / gradient_multiplier[i]
+        # Step 0: build one_mask from dr_mask
+        ## This is not correct
+        # need to build a design region mask whose size shold be b, H, W
+        if dr_mask is not None:
+            dr_masks = []
+            for i in range(batch_size):
+                mask = torch.zeros_like(gradient[i]).to(gradient.device)
+                for key, value in dr_mask.items():
+                    if key.endswith("x_start"):
+                        x_start = value[i]
+                    elif key.endswith("x_stop"):
+                        x_stop = value[i]
+                    elif key.endswith("y_start"):
+                        y_start = value[i]
+                    elif key.endswith("y_stop"):
+                        y_stop = value[i]
+                    else:
+                        raise ValueError(f"Invalid key: {key}")
+                mask[x_start:x_stop, y_start:y_stop] = 1
+                dr_masks.append(mask)
+            dr_masks = torch.stack(dr_masks, 0)
+        else:
+            dr_masks = torch.ones_like(gradient)
+        
+        x = - EPSILON_0 * (2 * torch.pi * C_0 / (wl.unsqueeze(-1).unsqueeze(-1) * 1e-6))**2 * (gradient)
+        y = target_gradient
+        error_energy = torch.norm((x - y) * dr_masks, p=2, dim=(-1, -2))
+        field_energy = torch.norm(y * dr_masks, p=2, dim=(-1, -2)) + 1e-6
+        return (error_energy / field_energy).mean()
+
+
+class GradSimilarityLoss(torch.nn.modules.loss._Loss):
+
+    def __init__(self, reduce="mean"):
+        super(GradSimilarityLoss, self).__init__()
+
+        self.reduce = reduce
+
+    def forward(
+        self, 
+        forward_fields,
+        adjoint_fields,  
+        target_gradient,
+        dr_mask = None,
+    ):
+        forward_fields_ez = forward_fields[:, -2:, :, :] # the forward fields has three components, we only need the Ez component
+        forward_fields_ez = torch.view_as_complex(forward_fields_ez.permute(0, 2, 3, 1).contiguous())
+        adjoint_fields = adjoint_fields[:, -2:, :, :] # the adjoint fields has three components, we only need the Ez component
+        adjoint_fields = torch.view_as_complex(adjoint_fields.permute(0, 2, 3, 1).contiguous()) # adjoint fields only Ez 
+        gradient = (adjoint_fields*forward_fields_ez).real
+        batch_size = gradient.shape[0]
         # Step 0: build one_mask from dr_mask
         ## This is not correct
         # need to build a design region mask whose size shold be b, H, W
@@ -1343,8 +1364,22 @@ class GradientLoss(torch.nn.modules.loss._Loss):
         else:
             dr_masks = torch.ones_like(gradient)
 
-        x = -EPSILON_0 * (2 * torch.pi * C_0 / (1.55 * MICRON_UNIT)) ** 2 * (gradient)
-        y = target_gradient
-        error_energy = torch.norm((x - y) * dr_masks, p=2, dim=(-1, -2))
-        field_energy = torch.norm(y * dr_masks, p=2, dim=(-1, -2)) + 1e-6
-        return (error_energy / field_energy).mean()
+        # Apply the design region mask
+        masked_gradient = gradient * dr_masks
+        masked_target_gradient = target_gradient * dr_masks
+
+        # Flatten the gradients for F.cosine_similarity
+        masked_gradient_flat = masked_gradient.view(masked_gradient.size(0), -1)
+        masked_target_gradient_flat = masked_target_gradient.view(masked_target_gradient.size(0), -1)
+
+        cosine_similarity = F.cosine_similarity(masked_gradient_flat, masked_target_gradient_flat, dim=1)
+
+        # Apply reduction
+        if self.reduce == "mean":
+            loss = 1 - cosine_similarity.mean()
+        elif self.reduce == "sum":
+            loss = 1 - cosine_similarity.sum()
+        else:  # Default to no reduction
+            loss = 1 - cosine_similarity
+        
+        return loss

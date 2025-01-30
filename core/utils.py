@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Tuple
 import autograd.numpy as npa
 import matplotlib.pyplot as plt
 import numpy as np
+import ryaml
 import torch
 import torch.distributed as dist
 import torch.fft
@@ -15,6 +16,8 @@ import torch.nn.functional as F
 import torch.optim
 import yaml
 from pyutils.config import Config
+from pyutils.config import Config
+from pyutils.general import TimerCtx
 from torch import Tensor
 from torch.types import Device
 from torch_sparse import spmm
@@ -356,106 +359,95 @@ def cal_fom_from_fields(
     return total_fom
 
 
-def cal_total_field_adj_src_from_fwd_field(
-    Ez,
+@lru_cache(maxsize=1024)
+def _load_opt_cfgs(opt_cfg_file_path):
+    with open(opt_cfg_file_path, "r") as opt_cfg_file:
+        opt_cfgs = ryaml.load(opt_cfg_file)
+        resolution = opt_cfgs["sim_cfg"]["resolution"]
+        opt_cfgs = opt_cfgs["obj_cfgs"]
+        # fusion_fn = opt_cfgs["_fusion_func"]
+        del opt_cfgs["_fusion_func"]
+    return opt_cfgs, resolution
+
+def cal_fom_from_fwd_field(
+    Ez4adj,
+    Ez4fullfield,
     eps,
     ht_ms,
     et_ms,
     monitors,
-    pml_mask,
-    from_Ez_to_Hx_Hy_func,
-    return_adj_src,
     sim,
     opt_cfg_file_path,
     wl,
     mode,
     temp,
-    in_port_name,
-    out_port_name,
-) -> Tensor:
-    if not return_adj_src:
-        Hx, Hy = from_Ez_to_Hx_Hy_func(
-            sim,
-            eps,
-            Ez,  # the eps_map doesn't really matter here actually
-        )
-        total_field = torch.cat((Hx, Hy, Ez), dim=1)
-        total_field = pml_mask.unsqueeze(0).unsqueeze(0) * total_field
-        return total_field, None
-    else:
-        Ez_copy = Ez.clone()
-        Ez = Ez.permute(0, 2, 3, 1).contiguous()
-        Ez = torch.view_as_complex(Ez)
-        gradient_list = []
-        Hx_list = []
-        Hy_list = []
-        for i in range(Ez.shape[0]):
-            Ez_i = Ez[i].clone().requires_grad_()
+    src_in_slice_name,
+):
+    Ez4fullfield = Ez4fullfield.permute(0, 2, 3, 1).contiguous()
+    Ez4fullfield = torch.view_as_complex(Ez4fullfield)
+    Ez4adj = Ez4adj.permute(0, 2, 3, 1).contiguous()
+    Ez4adj = torch.view_as_complex(Ez4adj)
+    monitor_slice_list = []
+    total_fom_list = []
+    for i in range(Ez4adj.shape[0]):
+        Ez4adj_i = Ez4adj[i].requires_grad_()
+        Ez4fullfield_i = Ez4fullfield[i]
+        sim[wl[i].item()].eps_r = eps[i]
+        Hx4adj_vec, Hy4adj_vec = sim[wl[i].item()]._Ez_to_Hx_Hy(Ez4adj_i.flatten())
+        Hx4adj_i = Hx4adj_vec.reshape(Ez4adj_i.shape)
+        Hy4adj_i = Hy4adj_vec.reshape(Ez4adj_i.shape)
+        if torch.equal(Ez4fullfield_i, Ez4adj_i):
+            Hx4fullfield_i = Hx4adj_i
+            Hy4fullfield_i = Hy4adj_i
+        else:
+            Hx4fullfield_vec, Hy4fullfield_vec = sim[wl[i].item()]._Ez_to_Hx_Hy(Ez4fullfield_i.flatten())
+            Hx4fullfield_i = Hx4fullfield_vec.reshape(Ez4fullfield_i.shape)
+            Hy4fullfield_i = Hy4fullfield_vec.reshape(Ez4fullfield_i.shape)
 
-            sim.eps_r = eps[i]
-            Hx_vec, Hy_vec = sim._Ez_to_Hx_Hy(Ez_i.flatten())
-            Hx_i = Hx_vec.reshape(Ez_i.shape)
-            Hy_i = Hy_vec.reshape(Ez_i.shape)
+        total_fom = torch.tensor(0.0, device=Ez4fullfield_i.device)
+        opt_cfgs, resolution = _load_opt_cfgs(opt_cfg_file_path[i])
 
-            Hx_to_append = torch.view_as_real(Hx_i).permute(2, 0, 1)
-            Hy_to_append = torch.view_as_real(Hy_i).permute(2, 0, 1)
-
-            Hx_list.append(Hx_to_append)
-            Hy_list.append(Hy_to_append)
-
-            total_fom = torch.tensor(0.0).to(Ez_i.device)
-
-            with open(opt_cfg_file_path[i], "r") as opt_cfg_file:
-                opt_cfgs = yaml.safe_load(opt_cfg_file)
-                resolution = opt_cfgs["sim_cfg"]["resolution"]
-                opt_cfgs = opt_cfgs["obj_cfgs"]
-                fusion_fn = opt_cfgs["_fusion_func"]
-                del opt_cfgs["_fusion_func"]
-            for obj_name, opt_cfg in opt_cfgs.items():
-                weight = float(opt_cfg["weight"])
-                direction = opt_cfg["direction"]
-                out_slice_name = opt_cfg["out_port_name"]
-                in_mode = opt_cfg["in_mode"]
-                temperture = opt_cfg["temp"]
-                input_port_name = opt_cfg["in_port_name"]
-                # print(f"this is the wl: {wl}, mode: {mode}, temp: {temp}, in_port_name: {in_port_name}")
-                # print(f"this is the corresponding we read from current obj mode: {in_mode}, temp: {temperture}, in_port_name: {input_port_name}")
-                if (
-                    weight == 0
-                    or in_mode != mode
-                    or temp not in temperture
-                    or input_port_name != in_port_name
-                ):
-                    continue
-                if opt_cfg["type"] == "eigenmode":
-                    if "x" in direction:
-                        monitor = Slice(
-                            x=monitors[f"port_slice-{out_slice_name}_x"][i],
-                            y=torch.arange(
-                                monitors[f"port_slice-{out_slice_name}_y"][i][0],
-                                monitors[f"port_slice-{out_slice_name}_y"][i][1],
-                            ).to(monitors[f"port_slice-{out_slice_name}_y"][i].device),
-                        )
-                    else:
-                        monitor = Slice(
-                            y=monitors[f"port_slice-{out_slice_name}_y"][i],
-                            x=torch.arange(
-                                monitors[f"port_slice-{out_slice_name}_x"][i][0],
-                                monitors[f"port_slice-{out_slice_name}_x"][i][1],
-                            ).to(monitors[f"port_slice-{out_slice_name}_x"][i].device),
-                        )
-                    # print("this is the shape of Hx_i: ", Hx_i.shape)
-                    # print("this is the shape of Hy_i: ", Hy_i.shape)
-                    # print("this is the shape of Ez_i: ", Ez_i.shape)
-                    # print("this is the shape of ht_ms: ", ht_ms[f"ht_m-wl-{wl}-port-{out_slice_name}-mode-{mode}"].shape)
-                    fom, _ = get_eigenmode_coefficients(
-                        hx=Hx_i,
-                        hy=Hy_i,
-                        ez=Ez_i,
-                        ht_m=ht_ms[f"ht_m-wl-{wl}-port-{out_slice_name}-mode-{mode}"][
+        for obj_name, opt_cfg in opt_cfgs.items():
+            weight = float(opt_cfg["weight"])
+            direction = opt_cfg["direction"]
+            out_slice_name = opt_cfg["out_slice_name"]
+            in_mode = opt_cfg["in_mode"]
+            out_modes = opt_cfg.get("out_modes", [])
+            out_modes = [int(mode) for mode in out_modes]
+            assert len(out_modes) == 1, f"The code can handle multiple modes, but I have not check if it is correct"
+            temperture = opt_cfg["temp"]
+            temperture = [float(temp) for temp in temperture]
+            wavelength = opt_cfg["wl"]
+            assert len(wavelength) == 1, f"only support one wavelength for now but the wavelength is: {wavelength}"
+            wavelength = wavelength[0]
+            input_slice_name = opt_cfg["in_slice_name"]
+            obj_type = opt_cfg["type"]
+            monitor = Slice(
+                x=monitors[f"port_slice-{out_slice_name}_x"][i],
+                y=monitors[f"port_slice-{out_slice_name}_y"][i],
+            )
+            # print(f"this is the wl: {wl}, mode: {mode}, temp: {temp}, in_port_name: {in_port_name}")
+            # print(f"this is the corresponding we read from current obj mode: {in_mode}, temp: {temperture}, in_port_name: {input_port_name}")
+            if (
+                weight == 0
+                or in_mode != int(mode[i].item())
+                or temp[i] not in temperture
+                or input_slice_name != src_in_slice_name[i]
+                or wavelength != float(wl[i].item())
+            ):
+                continue
+            monitor_slice_list.append(monitor) # add the monitor to the list so that we can later calculate the incident light field
+            if obj_type == "eigenmode":
+                fom = torch.tensor(0.0, device=Ez4fullfield_i.device)
+                for output_mode in out_modes:
+                    fom_inner, _ = get_eigenmode_coefficients(
+                        hx=Hx4adj_i,
+                        hy=Hy4adj_i,
+                        ez=Ez4adj_i,
+                        ht_m=ht_ms[f"ht_m-wl-{float(wl[i].item())}-slice-{out_slice_name}-mode-{output_mode}"][
                             i
                         ],
-                        et_m=et_ms[f"et_m-wl-{wl}-port-{out_slice_name}-mode-{mode}"][
+                        et_m=et_ms[f"et_m-wl-{float(wl[i].item())}-slice-{out_slice_name}-mode-{output_mode}"][
                             i
                         ],
                         monitor=monitor,
@@ -463,38 +455,151 @@ def cal_total_field_adj_src_from_fwd_field(
                         direction=direction,
                         energy=True,
                     )
-                    fom = weight * fom / 1e-8  # normalize with the input power
-                elif "flux" in opt_cfg["type"]:  # flux or flux_minus_src
-                    if (
-                        "xm" in out_slice_name
-                        or "ym" in out_slice_name
-                        or "xp" in out_slice_name
-                        or "yp" in out_slice_name
-                    ):
-                        monitor = monitors[f"port_slice-{out_slice_name}"][i]
-                    elif "x" in direction:
-                        monitor = Slice(
-                            x=monitors[f"port_slice-{out_slice_name}_x"][i],
-                            y=torch.arange(
-                                monitors[f"port_slice-{out_slice_name}_y"][i][0],
-                                monitors[f"port_slice-{out_slice_name}_y"][i][1],
-                            ).to(monitors[f"port_slice-{out_slice_name}_y"][i].device),
+                    fom_inner = weight * fom_inner / 1e-8  # normalize with the input power
+                    fom = fom + fom_inner
+            elif "flux" in obj_type:  # flux or flux_minus_src
+                fom = get_flux(
+                    hx=Hx4adj_i,
+                    hy=Hy4adj_i,
+                    ez=Ez4adj_i,
+                    monitor=monitor,
+                    grid_step=1 / resolution,
+                    direction=direction,
+                )
+                if "minus_src" in opt_cfg["type"]:
+                    fom = torch.abs(torch.abs(fom / 1e-8) - 1)
+                else:
+                    fom = torch.abs(fom / 1e-8)
+                fom = weight * fom
+            else:
+                raise ValueError(f"Unknown optimization type: {opt_cfg['type']}")
+            total_fom = total_fom + fom
+        total_fom_list.append(total_fom * (-1))
+    return torch.stack(total_fom_list, dim=0)
+
+
+def cal_total_field_adj_src_from_fwd_field(
+    Ez4adj,
+    Ez4fullfield,
+    eps,
+    ht_ms,
+    et_ms,
+    monitors,
+    pml_mask,
+    return_adj_src,
+    sim,
+    opt_cfg_file_path,
+    wl,
+    mode,
+    temp,
+    src_in_slice_name,
+) -> Tensor:
+    Ez4fullfield_copy = Ez4fullfield
+    Ez4fullfield = Ez4fullfield.permute(0, 2, 3, 1).contiguous()
+    Ez4fullfield = torch.view_as_complex(Ez4fullfield)
+    Ez4adj = Ez4adj.permute(0, 2, 3, 1).contiguous()
+    Ez4adj = torch.view_as_complex(Ez4adj)
+    Hx_list = []
+    Hy_list = []
+    if not return_adj_src:
+        for i in range(Ez4fullfield.shape[0]):
+            sim[wl[i].item()].eps_r = eps[i]
+            Hx_vec, Hy_vec = sim[wl[i].item()]._Ez_to_Hx_Hy(Ez4fullfield[i].flatten())
+            Hx_i = Hx_vec.reshape(Ez4fullfield[i].shape)
+            Hy_i = Hy_vec.reshape(Ez4fullfield[i].shape)
+
+            Hx_to_append = torch.view_as_real(Hx_i).permute(2, 0, 1)
+            Hy_to_append = torch.view_as_real(Hy_i).permute(2, 0, 1)
+
+            Hx_list.append(Hx_to_append)
+            Hy_list.append(Hy_to_append)
+        Hx = torch.stack(Hx_list, dim=0)
+        Hy = torch.stack(Hy_list, dim=0)
+        total_field = torch.cat((Hx, Hy, Ez4fullfield_copy), dim=1)
+        total_field = pml_mask.unsqueeze(0).unsqueeze(0) * total_field
+        return total_field, None, None
+    else:
+        gradient_list = []
+        monitor_slice_list = []
+        for i in range(Ez4adj.shape[0]):
+            Ez4adj_i = Ez4adj[i].requires_grad_()
+            Ez4fullfield_i = Ez4fullfield[i]
+            sim[wl[i].item()].eps_r = eps[i]
+            Hx4adj_vec, Hy4adj_vec = sim[wl[i].item()]._Ez_to_Hx_Hy(Ez4adj_i.flatten())
+            Hx4adj_i = Hx4adj_vec.reshape(Ez4adj_i.shape)
+            Hy4adj_i = Hy4adj_vec.reshape(Ez4adj_i.shape)
+            if torch.equal(Ez4fullfield_i, Ez4adj_i):
+                Hx4fullfield_i = Hx4adj_i
+                Hy4fullfield_i = Hy4adj_i
+            else:
+                Hx4fullfield_vec, Hy4fullfield_vec = sim[wl[i].item()]._Ez_to_Hx_Hy(Ez4fullfield_i.flatten())
+                Hx4fullfield_i = Hx4fullfield_vec.reshape(Ez4fullfield_i.shape)
+                Hy4fullfield_i = Hy4fullfield_vec.reshape(Ez4fullfield_i.shape)
+
+            Hx_to_append = torch.view_as_real(Hx4fullfield_i).permute(2, 0, 1)
+            Hy_to_append = torch.view_as_real(Hy4fullfield_i).permute(2, 0, 1)
+
+            Hx_list.append(Hx_to_append)
+            Hy_list.append(Hy_to_append)
+
+            total_fom = torch.tensor(0.0, device=Ez4fullfield_i.device)
+            opt_cfgs, resolution = _load_opt_cfgs(opt_cfg_file_path[i])
+
+            for obj_name, opt_cfg in opt_cfgs.items():
+                weight = float(opt_cfg["weight"])
+                direction = opt_cfg["direction"]
+                out_slice_name = opt_cfg["out_slice_name"]
+                in_mode = opt_cfg["in_mode"]
+                out_modes = opt_cfg.get("out_modes", [])
+                out_modes = [int(mode) for mode in out_modes]
+                assert len(out_modes) == 1, f"The code can handle multiple modes, but I have not check if it is correct"
+                temperture = opt_cfg["temp"]
+                temperture = [float(temp) for temp in temperture]
+                wavelength = opt_cfg["wl"]
+                assert len(wavelength) == 1, f"only support one wavelength for now but the wavelength is: {wavelength}"
+                wavelength = wavelength[0]
+                input_slice_name = opt_cfg["in_slice_name"]
+                obj_type = opt_cfg["type"]
+                monitor = Slice(
+                    x=monitors[f"port_slice-{out_slice_name}_x"][i],
+                    y=monitors[f"port_slice-{out_slice_name}_y"][i],
+                )
+                # print(f"this is the wl: {wl}, mode: {mode}, temp: {temp}, in_port_name: {in_port_name}")
+                # print(f"this is the corresponding we read from current obj mode: {in_mode}, temp: {temperture}, in_port_name: {input_port_name}")
+                if (
+                    weight == 0
+                    or in_mode != int(mode[i].item())
+                    or temp[i] not in temperture
+                    or input_slice_name != src_in_slice_name[i]
+                    or wavelength != float(wl[i].item())
+                ):
+                    continue
+                monitor_slice_list.append(monitor) # add the monitor to the list so that we can later calculate the incident light field
+                if obj_type == "eigenmode":
+                    fom = torch.tensor(0.0, device=Ez4fullfield_i.device)
+                    for output_mode in out_modes:
+                        fom_inner, _ = get_eigenmode_coefficients(
+                            hx=Hx4adj_i,
+                            hy=Hy4adj_i,
+                            ez=Ez4adj_i,
+                            ht_m=ht_ms[f"ht_m-wl-{float(wl[i].item())}-slice-{out_slice_name}-mode-{output_mode}"][
+                                i
+                            ],
+                            et_m=et_ms[f"et_m-wl-{float(wl[i].item())}-slice-{out_slice_name}-mode-{output_mode}"][
+                                i
+                            ],
+                            monitor=monitor,
+                            grid_step=1 / resolution,
+                            direction=direction,
+                            energy=True,
                         )
-                    else:
-                        monitor = Slice(
-                            y=monitors[f"port_slice-{out_slice_name}_y"][i],
-                            x=torch.arange(
-                                monitors[f"port_slice-{out_slice_name}_x"][i][0],
-                                monitors[f"port_slice-{out_slice_name}_x"][i][1],
-                            ).to(monitors[f"port_slice-{out_slice_name}_x"][i].device),
-                        )
-                    # print("this is the obj type: ", opt_cfg["type"])
-                    # print("this is the monitor: ", monitor.shape)
-                    # quit()
+                        fom_inner = weight * fom_inner / 1e-8  # normalize with the input power
+                        fom = fom + fom_inner
+                elif "flux" in obj_type:  # flux or flux_minus_src
                     fom = get_flux(
-                        hx=Hx_i,
-                        hy=Hy_i,
-                        ez=Ez_i,
+                        hx=Hx4adj_i,
+                        hy=Hy4adj_i,
+                        ez=Ez4adj_i,
                         monitor=monitor,
                         grid_step=1 / resolution,
                         direction=direction,
@@ -508,46 +613,15 @@ def cal_total_field_adj_src_from_fwd_field(
                     raise ValueError(f"Unknown optimization type: {opt_cfg['type']}")
                 total_fom = total_fom + fom
             total_fom = total_fom * (-1)
-            gradient = torch.autograd.grad(total_fom, Ez_i, create_graph=True)[0]
+            gradient = torch.autograd.grad(total_fom, Ez4adj_i, create_graph=True)[0]
             gradient_list.append(gradient)
         Hx = torch.stack(Hx_list, dim=0)
         Hy = torch.stack(Hy_list, dim=0)
-        total_field = torch.cat((Hx, Hy, Ez_copy), dim=1)
+        assert Ez4fullfield_copy.dim() == 4, f"Ez_copy should be 4D, Bs, 2, H, W but now {Ez4fullfield_copy.shape}"
+        total_field = torch.cat((Hx, Hy, Ez4fullfield_copy), dim=1)
         total_field = pml_mask.unsqueeze(0).unsqueeze(0) * total_field
         adj_src = torch.conj(torch.stack(gradient_list, dim=0))
-        return total_field, adj_src
-        for i in range(Ez.shape[0]):
-            monitor_slice_out = Slice(
-                y=monitor_out_y[i],
-                x=torch.arange(
-                    monitor_out_x[i][0],
-                    monitor_out_x[i][1],
-                ).to(monitor_out_y[i].device),
-            )
-            monitor_slice_refl = Slice(
-                x=monitor_refl_x[i],
-                y=torch.arange(
-                    monitor_refl_y[i][0],
-                    monitor_refl_y[i][1],
-                ).to(monitor_refl_x[i].device),
-            )
-            fom = cal_fom_from_fields(
-                Ez_i,
-                Hx_i,
-                Hy_i,
-                ht_m[i],
-                et_m[i],
-                monitor_slice_out,
-                monitor_slice_refl,
-            )
-            gradient = torch.autograd.grad(fom, Ez_i, create_graph=True)[0]
-            gradient_list.append(gradient)
-        Hx = torch.stack(Hx_list, dim=0)
-        Hy = torch.stack(Hy_list, dim=0)
-        total_field = torch.cat((Hx, Hy, Ez_copy), dim=1)
-        total_field = pml_mask.unsqueeze(0).unsqueeze(0) * total_field
-        adj_src = torch.conj(torch.stack(gradient_list, dim=0))
-        return total_field, adj_src
+        return total_field, adj_src, monitor_slice_list
 
 
 def plot_fourier_eps(
@@ -624,14 +698,14 @@ def plot_fields(
         ).item()
         # Plot predicted fields in the first row
         im_pred = ax[0, idx].imshow(
-            torch.abs(fields[0, idx]).cpu().numpy(), vmin=0, vmax=v_range, cmap=cmap
+            torch.abs(fields[0, idx]).cpu().numpy().T, vmin=0, vmax=v_range, cmap=cmap
         )
         ax[0, idx].set_title(f"Predicted Field {field}")
         fig.colorbar(im_pred, ax=ax[0, idx])
 
         # Plot ground truth fields in the second row
         im_gt = ax[1, idx].imshow(
-            torch.abs(ground_truth[0, idx]).cpu().numpy(),
+            torch.abs(ground_truth[0, idx]).cpu().numpy().T,
             vmin=0,
             vmax=v_range,
             cmap=cmap,
@@ -641,7 +715,7 @@ def plot_fields(
 
         # Plot the difference between the predicted and ground truth fields in the third row
         im_err = ax[2, idx].imshow(
-            torch.abs(fields[0, idx] - ground_truth[0, idx]).cpu().numpy(), cmap=cmap
+            torch.abs(fields[0, idx] - ground_truth[0, idx]).cpu().numpy().T, cmap=cmap
         )
         ax[2, idx].set_title(f"Error {field}")
         fig.colorbar(im_err, ax=ax[2, idx])
@@ -649,14 +723,6 @@ def plot_fields(
     # Save the figure with high resolution
     plt.savefig(filepath, dpi=300)
     plt.close()
-    # fig, ax = plt.subplots(2, ground_truth.shape[1], figsize=(15, 10), squeeze=False)
-    # for i in range(ground_truth.shape[1]):
-    #     ax[0, i].imshow(torch.abs(fields[0, i]).cpu().numpy(), cmap=cmap)
-    #     ax[0, i].set_title(f"Field {i}")
-    #     ax[1, i].imshow(torch.abs(ground_truth[0, i]).cpu().numpy(), cmap=cmap)
-    #     ax[1, i].set_title(f"Ground Truth {i}")
-    # plt.savefig(filepath, dpi=300)
-    # plt.close()
 
 
 def resize_to_targt_size(image: Tensor, size: Tuple[int, int]) -> Tensor:
@@ -1532,72 +1598,6 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
         return loss
 
 
-class SParamLoss(torch.nn.modules.loss._Loss):
-    def __init__(self, reduce="mean"):
-        super(SParamLoss, self).__init__()
-
-        self.reduce = reduce
-
-    def forward(
-        self,
-        fields,  # bs, 3, H, W, complex
-        ht_m,
-        et_m,
-        monitor_slices,
-        target_SParam,
-    ):
-        # Step 1: Resize all the fields to the target size
-        Ez = fields[:, -2:, :, :].permute(0, 2, 3, 1).contiguous()
-        Ez = torch.view_as_complex(Ez)  # convert Ez to the required complex format
-
-        Hx = fields[:, :2, :, :].permute(0, 2, 3, 1).contiguous()
-        Hx = torch.view_as_complex(Hx)
-
-        Hy = fields[:, 2:4, :, :].permute(0, 2, 3, 1).contiguous()
-        Hy = torch.view_as_complex(Hy)
-
-        monitor_slices_x = monitor_slices["port_slice-out_port_1_x"]
-        monitor_slices_y = monitor_slices["port_slice-out_port_1_y"]
-
-        # print("this is the monitor_slices_x", monitor_slices_x, flush=True)
-        # print("this is the monitor_slices_y", monitor_slices_y, flush=True)
-        ## Hx, Hy, Ez: [bs, h, w] complex tensor
-        # Stpe 2: Calculate the S-parameters
-        batch_size = Ez.shape[0]
-        s_params = []
-        for i in range(batch_size):
-            monitor_slice = Slice(
-                y=monitor_slices_y[i],
-                x=torch.arange(
-                    monitor_slices_x[i][0],
-                    monitor_slices_x[i][1],
-                ).to(monitor_slices_y[i].device),
-            )
-            # ht_m and et_m are lists
-            s_p, s_m = get_eigenmode_coefficients(
-                hx=Hx[i],
-                hy=Hy[i],
-                ez=Ez[i],
-                ht_m=ht_m[i],
-                et_m=et_m[i],
-                monitor=monitor_slice,
-                grid_step=1 / 50,
-                direction="y",
-                autograd=True,
-                energy=True,
-            )
-            s_params.append(torch.tensor([s_p, s_m], device=Ez.device))
-        s_params = torch.stack(s_params, 0)
-        s_params_diff = s_params - target_SParam
-        # Step 3: Calculate the loss
-        # print("this is the l2 norm of the target_SParam ", torch.norm(target_SParam, p=2, dim=-1), flush=True) ~e-9
-        loss = (
-            torch.norm(s_params_diff, p=2, dim=-1)
-            / (torch.norm(target_SParam, p=2, dim=-1) + 1e-12)
-        ).mean()
-        return loss
-
-
 class GradientLoss(torch.nn.modules.loss._Loss):
     def __init__(self, reduce="mean"):
         super(GradientLoss, self).__init__()
@@ -1981,3 +1981,6 @@ material_fn_dict = {
     "SiN": SiN_eps,
     "Air": Air_eps,
 }
+
+train_configs = Config()
+inverse_configs = Config()

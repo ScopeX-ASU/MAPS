@@ -392,7 +392,7 @@ class LeveSetParameterization(BaseParametrization):
             weight = weight_dict["ls_knots"]
             weight.data.fill_(-0.2)
             weight.data[:, weight.shape[1] // 4 : 3 * weight.shape[1] // 4] = 0.05
-            # weight.data += torch.randn_like(weight) * 0.01
+            weight.data += torch.randn_like(weight) * 0.01
         elif init_method.startswith("grating_1d"):
             method = init_method.split("_")
             if len(method) > 1:
@@ -480,6 +480,26 @@ class LeveSetParameterization(BaseParametrization):
                 r > (box_size_x / 2 - half_wg_width),
             )
             weight.data[quater_ring_mask] = 0.05
+        elif init_method == "crossing":
+            rho_res = self.cfgs["rho_resolution"]
+            half_wg_width_x = int((
+                0.48 / 2
+            )  * rho_res[0])
+            half_wg_width_y = int((
+                0.48 / 2
+            )  * rho_res[1])
+
+            weight = weight_dict["ls_knots"]
+            weight.data.fill_(-0.2)
+            weight.data[
+                weight.shape[0] // 2 - half_wg_width_x: weight.shape[0] // 2 + half_wg_width_x, 
+                :
+            ] = 0.05
+            weight.data[
+                :,
+                weight.shape[1] // 2 - half_wg_width_y: weight.shape[1] // 2 + half_wg_width_y
+            ] = 0.05
+            weight.data += torch.randn_like(weight) * 0.01
         else:
             raise ValueError(f"Unsupported initialization method: {init_method}")
 
