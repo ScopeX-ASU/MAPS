@@ -43,7 +43,7 @@ if __name__ == "__main__":
             neural_solver=None,
             border_width=[0, 0, 0, 0],
             PML=[0.5, 0],
-            resolution=200,
+            resolution=50,
             wl_cen=wl,
             plot_root="./figs/metaatom_init_try",
         )
@@ -65,7 +65,7 @@ if __name__ == "__main__":
         device=operation_device,
     )
 
-    hr_device = device.copy(resolution=310)
+    hr_device = device.copy(resolution=200)
     # phase_shift_recoder_cfg = dict(
     #                 near_field_phase_record=dict(
     #                     weight=0,
@@ -93,30 +93,31 @@ if __name__ == "__main__":
     ).to(operation_device)
 
     assert len(list(opt.parameters())) == 1, "there should be only one parameter"
-    width = torch.linspace(0.01, 0.29, 29)
+    width = torch.linspace(0.01, 0.14, 140)
     w = []
     phase_std = []
     phase_mean = []
     for i in width:
         for p in opt.parameters():
-            init_weight = [-0.05, get_mid_weight(0.05, round(i.item(), 2)), -0.05]
+            init_weight = [-0.05, get_mid_weight(0.05, round(i.item(), 3)), -0.05]
             p.data = torch.tensor(init_weight, device=operation_device).unsqueeze(0)
 
         results = opt.forward(sharpness=256)
-        w.append(round(i.item(), 2))
-        phase_std.append(opt.objective.phase_shift[('in_slice_1', 'nearfield_1', 0.85, 1, 300)]["phase_std"].item())
-        phase_mean.append(opt.objective.phase_shift[('in_slice_1', 'nearfield_1', 0.85, 1, 300)]["phase_mean"].item() / math.pi)
+        w.append(round(i.item(), 3))
+        phase_std.append(opt.objective.phase_shift[('in_slice_1', 'nearfield_1', 0.85, "Hz1", 300)]["phase_std"].item())
+        phase_mean.append(opt.objective.phase_shift[('in_slice_1', 'nearfield_1', 0.85, "Hz1", 300)]["phase_mean"].item())
         opt.plot(
             eps_map=opt._eps_map,
             obj=None,
-            plot_filename=f"metaatom_init_try_{round(i.item(), 2)}.png",
-            field_key=("in_slice_1", 0.85, 1, 300),
-            field_component="Ez",
+            plot_filename=f"metaatom_init_try_{round(i.item(), 3)}.png",
+            field_key=("in_slice_1", 0.85, "Hz1", 300),
+            field_component="Hz",
             in_slice_name="in_slice_1",
             exclude_slice_names=[],
         )
     w = np.array(w)
     phase_mean = np.array(phase_mean)
+    phase_mean = (phase_mean[0] - phase_mean) % (2 * np.pi)
     phase_std = np.array(phase_std)
     # save them to csv
     with open('./unitest/metaatom_phase.csv', mode='w') as file:

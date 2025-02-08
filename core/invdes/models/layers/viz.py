@@ -9,7 +9,8 @@ import matplotlib.pylab as plt
 import matplotlib.pyplot as plot
 import numpy as np
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-
+from core.utils import print_stat
+import torch
 """ Utilities for plotting and visualization """
 
 
@@ -20,7 +21,6 @@ def real(
 
     if ax is None:
         fig, ax = plt.subplots(1, 1, constrained_layout=True)
-
     vmax = np.abs(val).max()
     h = ax.imshow(np.real(val.T), cmap=cmap, origin="lower", vmin=-vmax, vmax=vmax)
 

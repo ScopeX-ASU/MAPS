@@ -43,7 +43,7 @@ if __name__ == "__main__":
             # border_width=[port_len, port_len, 2, 2],
             border_width=[0, 0, 2, 2],
             resolution=50,
-            plot_root=f"./figs/wdm_{'init_try'}",
+            plot_root=f"./figs/wdm_{'BO'}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -96,16 +96,18 @@ if __name__ == "__main__":
     )
     invdesign.optimize(
         plot=True,
-        plot_filename=f"wdm_{'init_try'}",
+        plot_filename=f"wdm_{'BO'}",
         objs=["wl1_trans", "wl2_trans"],
         field_keys=[
-            ("in_port_1", wl, "Ez1", 300)
+            ("in_slice_1", wl, "Ez1", 300)
             for wl in np.linspace(
                 sim_cfg["wl_cen"] - sim_cfg["wl_width"] / 2,
                 sim_cfg["wl_cen"] + sim_cfg["wl_width"] / 2,
                 sim_cfg["n_wl"],
             )
         ],
-        in_port_names=["in_port_1", "in_port_1"],
-        exclude_port_names=[],
+        in_slice_names=["in_port_1", "in_port_1"],
+        exclude_slice_names=[],
+        dump_gds=False,
+        save_model=False,
     )

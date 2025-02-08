@@ -68,9 +68,10 @@ if __name__ == "__main__":
             neural_solver=None,
             border_width=[0, 0, 0, 0],
             PML=[0.5, 0.5],
-            resolution=200,
+            resolution=100,
             wl_cen=wl,
-            plot_root="./figs/metalens_near2far_FL30_init",
+            plot_root = f"./figs/metalens_{'init_try_ff'}",
+            # plot_root="./figs/metalens_near2far_FL30_init",
             # plot_root="./figs/metalens_near2far_FL50",
             # plot_root="./figs/metalens_near2far_FL60",
             # plot_root="./figs/metalens_near2far_FL80",
@@ -82,7 +83,7 @@ if __name__ == "__main__":
 
     device = MetaLens(
         material_bg="Air",
-        material_inport="SiO2",
+        material_sub="Air",
         sim_cfg=sim_cfg,
         # aperture=20,
         aperture=20.1,
@@ -113,7 +114,7 @@ if __name__ == "__main__":
     #     device=operation_device,
     # )
 
-    hr_device = device.copy(resolution=500)
+    hr_device = device.copy(resolution=100)
 
     # def fom_func(breakdown):
     #     ## maximization fom
@@ -152,14 +153,15 @@ if __name__ == "__main__":
     )
     invdesign.optimize(
         plot=True,
-        plot_filename=f"metalens_{'init_try'}",
-        objs=["fwd_trans"],
-        field_keys=[("in_port_1", wl, "Hz1", 300)],
-        in_port_names=["in_port_1"],
-        exclude_port_names=["farfield_region"],
+        plot_filename=f"metalens_{'init_try_ff'}",
+        objs=["near_field_phase_record"],
+        field_keys=[("in_slice_1", wl, "Hz1", 300)],
+        in_slice_names=["in_slice_1"],
+        exclude_slice_names=[["farfield_region", "in_slice_1", "nearfield_1", "refl_slice_1"]],
+        field_component="Hz",
     )
-    # save the eps_map to a h5 file
-    with h5py.File("./unitest/metalens_FL30_init.h5", "w") as f:
-        f.create_dataset(
-                    "eps_map", data=opt._eps_map.detach().cpu().numpy()
-                )
+    # # save the eps_map to a h5 file
+    # with h5py.File("./unitest/metalens_FL30_init.h5", "w") as f:
+    #     f.create_dataset(
+    #                 "eps_map", data=opt._eps_map.detach().cpu().numpy()
+    #             )

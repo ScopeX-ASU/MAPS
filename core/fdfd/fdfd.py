@@ -19,7 +19,7 @@ from thirdparty.ceviche.primitives import spsp_mult
 from .derivatives import compute_derivative_matrices
 from .preconditioner import create_symmetrizer
 from .solver import SparseSolveTorch, sparse_solve_torch
-
+import matplotlib.pyplot as plt
 # notataion is similar to that used in: http://www.jpier.org/PIERB/pierb36/11.11092006.pdf
 from .utils import sparse_mm, sparse_mv, torch_sparse_to_scipy_sparse
 __all__ = ["fdfd", "fdfd_ez", "fdfd_hz"]
@@ -1515,10 +1515,11 @@ class fdfd_hz(fdfd_hz_ceviche):
         Mz_vec,
         eps_vec_xx,
         eps_vec_yy,
-        port_name=None,
+        slice_name=None,
         mode=None,
+        temp=None,
     ):
-        assert port_name is not None, "port_name must be provided"
+        assert slice_name is not None, "slice_name must be provided"
         assert mode is not None, "mode must be provided"
         b_vec = 1j * self.omega * Mz_vec
 
@@ -1529,8 +1530,9 @@ class fdfd_hz(fdfd_hz_ceviche):
             eps_matrix,
             self.omega,
             b_vec,
-            port_name,
+            slice_name,
             mode,
+            temp,
             self.Pl,
             self.Pr,
             pol="Hz",
@@ -1569,5 +1571,4 @@ class fdfd_hz(fdfd_hz_ceviche):
         Fx = Fx_vec.reshape(self.shape)
         Fy = Fy_vec.reshape(self.shape)
         Fz = Fz_vec.reshape(self.shape)
-
         return Fx, Fy, Fz

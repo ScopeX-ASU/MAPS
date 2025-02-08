@@ -534,29 +534,29 @@ class PhaseRecorderObjective(object):
             self.out_slice_name,
             self.in_mode,
         )
-
         mean_phase_list = []
         ## for each wavelength, we evaluate the objective
-        for wl, sim in self.sims.items():
+        for (wl, pol), sim in self.sims.items():
             ## we calculate the average eigen energy for all output modes
             if wl not in target_wls:
                 continue
             for temp in target_temps:
                 monitor_slice = self.port_slices[out_slice_name]
-                ez = fields[(in_slice_name, wl, in_mode, temp)]["Ez"]
-                ez = ez[monitor_slice]
+                fz = fields[(in_slice_name, wl, in_mode, temp)][pol]
+                fz = fz[monitor_slice]
                 assert (
                     len(monitor_slice.x.shape) <= 1
                     or len(monitor_slice.y.shape) <= 1
                 ), "Only 1D slice is supported for phase recorder"
-                ez = ez.reshape(1, -1)
-                # calculate the phase of Ez
-                phase = torch.angle(ez)
+                fz = fz.reshape(1, -1)
+                # calculate the phase of fz
+                phase = torch.angle(fz)
                 phase_std = torch.std(phase)
                 phase_mean = torch.mean(phase)
-                phase_mean = torch.remainder(phase_mean, 2 * torch.pi)
+                # phase_mean = torch.remainder(phase_mean, 2 * torch.pi)
                 self.phase_shift[(in_slice_name, out_slice_name, wl, in_mode, temp)] = {
-                    "phase": torch.remainder(phase, 2 * torch.pi),
+                    # "phase": torch.remainder(phase, 2 * torch.pi),
+                    "phase": phase,
                     "phase_std": phase_std,
                     "phase_mean": phase_mean,
                 }
@@ -957,7 +957,7 @@ class ObjectiveFunc(object):
                     energy=False,
                     obj_type=obj_type,
                 )
-            elif obj_type == "phase_recoder":
+            elif obj_type == "phase_recorder":
                 objfn = PhaseRecorderObjective(
                     sims=self.sims,
                     phase_shift=self.phase_shift,
@@ -1092,12 +1092,12 @@ class ObjectiveFunc(object):
                             name: {"T": temp}
                             for name in self.device.active_region_masks.keys()
                         }
-
-                        self.sims[
-                            (wl, pol)
-                        ].eps_r = self.device.apply_active_modulation(
+                        modulated_eps = self.device.apply_active_modulation(
                             permittivity, control_cfgs
                         )
+                        self.sims[
+                            (wl, pol)
+                        ].eps_r = modulated_eps
                     else:
                         self.sims[(wl, pol)].eps_r = permittivity
                     ## eps_r: permittivity tensor, denormalized
@@ -1109,10 +1109,20 @@ class ObjectiveFunc(object):
                     #     eps_r_0=Si_eps(wl),
                     #     dn_dT=1.8e-4,
                     # )
+                    # plt.figure()
+                    # plt.imshow(source.real.detach().cpu().numpy(), cmap="hot")
+                    # plt.colorbar()
+                    # plt.savefig(f"source_{wl}_{pol}_{slice_name}_{mode}_{temp}.png")
+                    # plt.close()
+                    # quit()
                     Fx, Fy, Fz = self.sims[(wl, pol)].solve(
                         source, slice_name=slice_name, mode=mode, temp=temp
                     )
                     pol = mode[:2]
+                    # print("this is the stats of the Fz")
+                    # print_stat(Fz.real)
+                    # print("this is the dtype of the Fz", Fz.dtype, flush=True)
+                    # quit()
                     if pol == "Ez":
                         self.solutions[(slice_name, wl, mode, temp)] = {
                             "Hx": Fx,

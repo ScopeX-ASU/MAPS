@@ -250,7 +250,7 @@ def GreenFunctionProjection(
     dL: float,  # grid size, um, used in nearfield integral
     near_monitor_direction: str = "x+",
     decimation_factor: int = 1,  # subsampling rate on near field source
-    maximum_batch_size: int = 5000,
+    maximum_batch_size: int = 500,
     component: str = "Ez",  # Ez, Hz
 ):
     x_ref = x

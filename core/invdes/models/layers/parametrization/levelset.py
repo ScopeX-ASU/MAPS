@@ -503,13 +503,15 @@ class LeveSetParameterization(BaseParametrization):
         else:
             raise ValueError(f"Unsupported initialization method: {init_method}")
 
-    def _build_permittivity(self, weights, rho, phi, n_phi, sharpness: float):
+    def _build_permittivity(self, weights, rho, phi, n_phi, sharpness: float, ls_knots=None):
+        if ls_knots is not None:
+            assert ls_knots.shape == weights["ls_knots"].shape, f"the shape of ls_knots {ls_knots.shape} should be the same as the shape of ls_knots in weights {weights['ls_knots'].shape}"
         sigma = getattr(self.cfgs, "sigma", 1 / max(self.cfgs["rho_resolution"]))
         interpolation = getattr(self.cfgs, "interpolation", "gaussian")
-        design_param = weights["ls_knots"]
+        design_param = weights["ls_knots"] if ls_knots is None else ls_knots
         ### to avoid all knots becoming unreasonable large to make it stable
         ### also to avoid most knots concentrating near threshold, otherwise, binarization will not work
-        design_param = design_param / design_param.std() * 1 / 4
+        design_param = design_param / (design_param.std() + 1e-6) * 1 / 4
         phi_model = LevelSetInterp(
             x0=rho[0],
             y0=rho[1],
@@ -531,7 +533,7 @@ class LeveSetParameterization(BaseParametrization):
 
         return eps_phi
 
-    def build_permittivity(self, weights, sharpness: float):
+    def build_permittivity(self, weights, sharpness: float, ls_knots=None):
         ## this is the high resolution, e.g., res=200, 310 permittivity
         ## return:
         #   1. we need the first one for gds dump out
@@ -542,6 +544,7 @@ class LeveSetParameterization(BaseParametrization):
             self.params["hr_phi"],
             self.params["n_hr_phi"],
             sharpness,
+            ls_knots=ls_knots,
         )
 
         return hr_permittivity

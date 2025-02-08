@@ -52,7 +52,7 @@ if __name__ == "__main__":
             solver="ceviche_torch",
             border_width=[0, port_len, port_len, 0],
             resolution=50,
-            plot_root=f"./figs/bending_{'init_try_Ez1'}",
+            plot_root=f"./figs/bending_{'init_try_Hz1'}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -95,9 +95,9 @@ if __name__ == "__main__":
     )
     invdesign.optimize(
         plot=True,
-        plot_filename=f"bending_{'init_try_Ez1'}",
+        plot_filename=f"bending_{'init_try_Hz1'}",
         objs=["fwd_trans"],
-        field_keys=[("in_slice_1", 1.55, "Ez1", 300)],
+        field_keys=[("in_slice_1", 1.55, "Hz1", 300)],
         in_slice_names=["in_slice_1"],
         exclude_slice_names=[],
         dump_gds=False,

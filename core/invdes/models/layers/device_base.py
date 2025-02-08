@@ -718,35 +718,6 @@ class N_Ports(BaseDevice):
             self.port_monitor_slices[ym_slice_name],
         )
 
-        radiation_monitor_xp = np.zeros_like(self.epsilon_map, dtype=np.bool_)
-        radiation_monitor_xm = np.zeros_like(self.epsilon_map, dtype=np.bool_)
-        radiation_monitor_yp = np.zeros_like(self.epsilon_map, dtype=np.bool_)
-        radiation_monitor_ym = np.zeros_like(self.epsilon_map, dtype=np.bool_)
-        distance_PML = [int(round(i / self.grid_step)) for i in distance_to_PML]
-        left = self.NPML[0] + distance_PML[0]
-        right = self.Nx - self.NPML[0] - distance_PML[0]
-        lower = self.NPML[1] + distance_PML[1]
-        upper = self.Ny - self.NPML[1] - distance_PML[1]
-        radiation_monitor_xm[left : left + 1, lower:upper] = 1
-        radiation_monitor_xp[right : right + 1, lower:upper] = 1
-        radiation_monitor_ym[left:right, lower : lower + 1] = 1
-        radiation_monitor_yp[left:right, upper : upper + 1] = 1
-        radiation_monitor_xp[self.ports_regions] = 0
-        radiation_monitor_xm[self.ports_regions] = 0
-        radiation_monitor_yp[self.ports_regions] = 0
-        radiation_monitor_ym[self.ports_regions] = 0
-        self.port_monitor_slices[monitor_name + "_xp"] = radiation_monitor_xp
-        self.port_monitor_slices[monitor_name + "_xm"] = radiation_monitor_xm
-        self.port_monitor_slices[monitor_name + "_yp"] = radiation_monitor_yp
-        self.port_monitor_slices[monitor_name + "_ym"] = radiation_monitor_ym
-
-        return (
-            radiation_monitor_xp,
-            radiation_monitor_xm,
-            radiation_monitor_yp,
-            radiation_monitor_ym,
-        )
-
     def build_farfield_radiation_monitor(
         self, monitor_name: str = "farfield_rad_monitor"
     ):

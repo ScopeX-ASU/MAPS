@@ -198,6 +198,7 @@ class BaseOptimization(nn.Module):
     def build_device(
         self,
         sharpness: float = 1,
+        ls_knots: dict = None,
     ):
         design_region_eps_dict = {}
         hr_design_region_eps_dict = {}
@@ -208,7 +209,10 @@ class BaseOptimization(nn.Module):
         for region_name, design_region in self.design_region_param_dict.items():
             ## obtain each design region's denormalized permittivity only in the design region
             hr_region_mask = self.hr_device.design_region_masks[region_name]
-            hr_region, region = design_region(sharpness, hr_eps_map, hr_region_mask)
+            if ls_knots is None:
+                hr_region, region = design_region(sharpness, hr_eps_map, hr_region_mask)
+            else:
+                hr_region, region = design_region(sharpness, hr_eps_map, hr_region_mask, ls_knots[region_name])
             design_region_eps_dict[region_name] = region
             hr_design_region_eps_dict[region_name] = hr_region
 
@@ -683,11 +687,12 @@ class BaseOptimization(nn.Module):
     def forward(
         self,
         sharpness: float = 1,
+        ls_knots: dict = None,
     ):
         # eps_map, design_region_eps_dict = self.build_device(sharpness)
         self.current_sharpness = sharpness
         eps_map, design_region_eps_dict, hr_eps_map, hr_design_region_eps_dict = (
-            self.build_device(sharpness)
+            self.build_device(sharpness, ls_knots)
         ) # eps_map = outpt = model.forward(input)
         self._design_region_eps_dict = design_region_eps_dict
         ## need to create objective layer during forward, because all Simulations need to know the latest permittivity_list

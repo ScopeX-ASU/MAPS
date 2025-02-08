@@ -461,10 +461,10 @@ class BaseParametrization(nn.Module):
         permittivity = permittivity * (eps_r - eps_bg) + eps_bg
         return permittivity
 
-    def forward(self, sharpness: float, hr_entire_eps: torch.Tensor, hr_dr_mask: torch.Tensor):
+    def forward(self, sharpness: float, hr_entire_eps: torch.Tensor, hr_dr_mask: torch.Tensor, ls_knots=None):
         ## first build the normalized device permittivity using weights
         ## the built one is the high resolution permittivity for evaluation
-        permittivity = self.build_permittivity(self.weights, sharpness)
+        permittivity = self.build_permittivity(self.weights, sharpness, ls_knots)
 
         ## this is the cloned and detached permittivity for gds dumpout
         hr_permittivity = permittivity.detach().clone()

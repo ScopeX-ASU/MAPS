@@ -104,6 +104,7 @@ class InvDesign:
         exclude_slice_names=[],
         dump_gds=False,
         save_model=False,
+        field_component=None,
     ):
         if plot:
             assert plot_filename is not None, "plot_filename must be provided"
@@ -177,7 +178,8 @@ class InvDesign:
                         obj=results["breakdown"][objs[j]]["value"],
                         plot_filename=plot_filename + f"_{i}" + f"_{objs[j]}.jpg",
                         field_key=field_keys[j],
-                        field_component=pol,
+                        # field_component=pol,
+                        field_component=field_component if field_component is not None else pol,
                         in_slice_name=in_slice_names[j],
                         exclude_slice_names=exclude_slice_names[j],
                     )

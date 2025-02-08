@@ -120,7 +120,7 @@ class Bending(N_Ports):
         # norm_run_sim_cfg = copy.deepcopy(self.sim_cfg)
         # norm_run_sim_cfg["numerical_solver"] = "solve_direct"
         norm_source_profiles = self.build_norm_sources(
-            source_modes=("Ez1",),
+            source_modes=("Hz1",),
             input_port_name="in_port_1",
             input_slice_name="in_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],
@@ -132,7 +132,7 @@ class Bending(N_Ports):
         )
 
         norm_refl_profiles = self.build_norm_sources(
-            source_modes=("Ez1",),
+            source_modes=("Hz1",),
             input_port_name="in_port_1",
             input_slice_name="refl_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],
@@ -143,7 +143,7 @@ class Bending(N_Ports):
             require_sim=False,
         )
         norm_monitor_profiles = self.build_norm_sources(
-            source_modes=("Ez1",),
+            source_modes=("Hz1",),
             input_port_name="out_port_1",
             input_slice_name="out_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],

@@ -1974,12 +1974,18 @@ def SiN_eps(wavelength):
     return 2.45**2
     return SiO2.epsilon(1 / wavelength)[0, 0].real
 
+@lru_cache(maxsize=64)
+def TiO2_eps(wavelength):
+    """Returns the permittivity of silicon at the given wavelength"""
+    return 2.9**2
+
 
 material_fn_dict = {
     "Si": Si_eps,
     "SiO2": SiO2_eps,
     "SiN": SiN_eps,
     "Air": Air_eps,
+    "TiO2": TiO2_eps,
 }
 
 train_configs = Config()
