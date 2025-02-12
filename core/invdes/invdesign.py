@@ -33,10 +33,10 @@ class InvDesign:
         devOptimization=None,
         optimizer=Config(
             name="Adam",
-            lr=2e-2,
+            lr=1e-2,
             # name="lbfgs",
             # line_search_fn="strong_wolfe",
-            # lr=1e-2,
+            # lr=3e-3,
             weight_decay=0,
         ),
         lr_scheduler=Config(

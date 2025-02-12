@@ -1,7 +1,7 @@
 """
 Date: 2024-10-04 23:22:57
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-12-13 16:52:16
+LastEditTime: 2025-02-12 14:09:44
 FilePath: /MAPS/core/invdes/models/layers/parametrization/base_parametrization.py
 """
 
@@ -234,7 +234,8 @@ def _blur(x, mfs, res, dim="xy"):
         mfs_px += 1  # Ensure kernel size is odd
 
     # Build the 1D blur kernel
-    mfs_kernel_1d = 1 - torch.abs(torch.linspace(-1, 1, steps=mfs_px, device=x.device))
+    # mfs_kernel_1d = 1 - torch.abs(torch.linspace(-1, 1, steps=mfs_px, device=x.device))
+    mfs_kernel_1d = torch.ones(mfs_px, device=x.device)
     mfs_kernel_1d = mfs_kernel_1d / mfs_kernel_1d.sum()  # Normalize the kernel
 
     if dim == "x":

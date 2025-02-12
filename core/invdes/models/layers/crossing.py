@@ -109,31 +109,32 @@ class Crossing(N_Ports):
         src_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="in_slice_1",
-            rel_loc=0.4,
+            # rel_loc=0.4,
+            rel_loc=0.3,
             rel_width=rel_width,
         )
         refl_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="refl_slice_1",
-            rel_loc=0.41,
+            rel_loc=0.31,
             rel_width=rel_width,
         )
         out_slice = self.build_port_monitor_slice(
             port_name="out_port_1",
             slice_name="out_slice_1",
-            rel_loc=0.6,
+            rel_loc=0.7,
             rel_width=rel_width,
         )
         top_slice = self.build_port_monitor_slice(
             port_name="top_port",
             slice_name="top_slice",
-            rel_loc=0.6,
+            rel_loc=0.7,
             rel_width=rel_width,
         )
         bot_slice = self.build_port_monitor_slice(
             port_name="bot_port",
             slice_name="bot_slice",
-            rel_loc=0.4,
+            rel_loc=0.3,
             rel_width=rel_width,
         )
         self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=rel_width)
@@ -146,7 +147,7 @@ class Crossing(N_Ports):
         # norm_run_sim_cfg = copy.deepcopy(self.sim_cfg)
         # norm_run_sim_cfg["numerical_solver"] = "solve_direct"
         norm_source_profiles = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Ez1",),
             input_port_name="in_port_1",
             input_slice_name="in_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],
@@ -158,7 +159,7 @@ class Crossing(N_Ports):
         )
 
         norm_refl_profiles = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Ez1",),
             input_port_name="in_port_1",
             input_slice_name="refl_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],
@@ -169,7 +170,7 @@ class Crossing(N_Ports):
             require_sim=False,
         )
         norm_monitor_profiles = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Ez1",),
             input_port_name="out_port_1",
             input_slice_name="out_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],
@@ -180,7 +181,7 @@ class Crossing(N_Ports):
             require_sim=False,
         )
         norm_top_profiles = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Ez1",),
             input_port_name="top_port",
             input_slice_name="top_slice",
             wl_cen=self.sim_cfg["wl_cen"],
@@ -191,7 +192,7 @@ class Crossing(N_Ports):
             require_sim=False,
         )
         norm_bot_profiles = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Ez1",),
             input_port_name="bot_port",
             input_slice_name="bot_slice",
             wl_cen=self.sim_cfg["wl_cen"],

@@ -1,7 +1,7 @@
 """
 Date: 2024-10-04 18:49:06
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-06 15:43:37
+LastEditTime: 2025-02-12 12:49:50
 FilePath: /MAPS/core/invdes/models/base_optimization.py
 """
 
@@ -407,8 +407,10 @@ class BaseOptimization(nn.Module):
             x_width=self.device.cell_size[0] + (extended_Ez.shape[0] if extended_Ez is not None else 0) * self.device.grid_step,
             y_height=self.device.cell_size[1],
             NPML=self.device.NPML,
-            title=f"|{field_component}|^2: {field_key}, FoM: {obj:.3f}",
-            field_stat="intensity_real",
+            # title=f"|{field_component}|^2: {field_key}, FoM: {obj:.3f}",
+            title=f"|{field_component}|: {field_key}, FoM: {obj:.3f}",
+            # field_stat="intensity_real",
+            field_stat="abs_real",
             zoom_eps_factor=1,
             zoom_eps_center=design_region_center,
             x_shift_coord=x_shift_coord if extended_Ez is not None else 0,
