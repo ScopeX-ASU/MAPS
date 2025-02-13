@@ -30,7 +30,7 @@ if __name__ == "__main__":
     # first we need to instantiate the a optimization object
     sim_cfg = DefaultSimulationConfig()
 
-    crossing_region_size = (7, 7)
+    crossing_region_size = (5, 5)
     port_len = 2
 
     input_port_width = 0.48
