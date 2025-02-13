@@ -104,7 +104,7 @@ class Crossing(N_Ports):
         )
 
     def init_monitors(self, verbose: bool = True):
-        rel_width = 2
+        rel_width = 3
         if verbose:
             logger.info("Start generating sources and monitors ...")
         src_slice = self.build_port_monitor_slice(
