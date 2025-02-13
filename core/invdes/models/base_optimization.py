@@ -1,7 +1,7 @@
 """
 Date: 2024-10-04 18:49:06
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-02-12 12:49:50
+LastEditTime: 2025-02-12 19:32:27
 FilePath: /MAPS/core/invdes/models/base_optimization.py
 """
 
@@ -430,7 +430,7 @@ class BaseOptimization(nn.Module):
 
         eps_conponent = gf.read.from_np(
             final_design_eps,
-            nm_per_pixel=10,
+            nm_per_pixel=1000/self.sim_cfg["resolution"],
             threshold=(max_permittivity + min_permittivity) / 2,
         )
 
