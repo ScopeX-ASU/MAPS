@@ -1,7 +1,7 @@
 """
 Date: 2024-10-05 02:02:33
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-04 20:47:49
+LastEditTime: 2025-02-12 17:07:18
 FilePath: /MAPS/core/invdes/models/layers/parametrization/levelset.py
 """
 
@@ -385,6 +385,31 @@ class LeveSetParameterization(BaseParametrization):
         elif init_method == "ones":
             nn.init.normal_(weight_dict["ls_knots"], mean=0, std=0.01)
             weight_dict["ls_knots"].data += 0.05
+        elif init_method == "ball": ## same as diamond_2
+            nn.init.normal_(weight_dict["ls_knots"], mean=0, std=0.01)
+            ### create a map with center high, edge low as a ball using mesh grid
+            x, y = torch.meshgrid(
+                torch.linspace(-1, 1, weight_dict["ls_knots"].shape[0]),
+                torch.linspace(-1, 1, weight_dict["ls_knots"].shape[1]),
+            )
+            mask = (x.square() + y.square()) < 1
+            weight_dict["ls_knots"].data += -0.05
+            weight_dict["ls_knots"].data[mask] += 0.1
+        elif init_method.startswith("diamond"):
+            p = init_method.split("_")
+            if len(p) > 1:
+                p = float(p[-1])
+            else:
+                p = 1
+            nn.init.normal_(weight_dict["ls_knots"], mean=0, std=0.01)
+            ### create a map with center high, edge low as a ball using mesh grid
+            x, y = torch.meshgrid(
+                torch.linspace(-1, 1, weight_dict["ls_knots"].shape[0]),
+                torch.linspace(-1, 1, weight_dict["ls_knots"].shape[1]),
+            )
+            mask = (x.abs()**p + y.abs()**p) < 1.3
+            weight_dict["ls_knots"].data += -0.05
+            weight_dict["ls_knots"].data[mask] += 0.1
         elif init_method == "zeros":
             nn.init.normal_(weight_dict["ls_knots"], mean=0, std=0.01)
             weight_dict["ls_knots"].data -= 0.05

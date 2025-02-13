@@ -172,7 +172,9 @@ class CrossingOptimization(BaseOptimization):
                     dict(type="binarize"),
                     # dict(type="transpose_symmetry", flag=True),
                 ],
-                init_method="ones",
+                # init_method="ones",
+                # init_method="ball",
+                init_method="diamond_0.5",
                 binary_projection=dict(
                     fw_threshold=100,
                     bw_threshold=100,

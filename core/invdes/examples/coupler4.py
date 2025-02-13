@@ -30,7 +30,7 @@ if __name__ == "__main__":
     # first we need to instantiate the a optimization object
     sim_cfg = DefaultSimulationConfig()
 
-    crossing_region_size = (4, 4)
+    crossing_region_size = (5, 5)
     port_len = 2
 
     input_port_width = 0.48
@@ -70,7 +70,8 @@ if __name__ == "__main__":
             if "rad" in name:
                 fom = fom + obj["weight"] * obj["value"]
         ## add extra contrast ratio
-        balance = (breakdown["fwd_trans"]["value"] - 0.245)**2 + (breakdown["refl_trans"]["value"] - 0.245)**2 + (breakdown["top_cross_talk"]["value"] - 0.245)**2 + (breakdown["bot_cross_talk"]["value"] - 0.245)**2
+        target = 0.25
+        balance = (breakdown["fwd_trans"]["value"] - target)**2 + (breakdown["refl_trans"]["value"] - target)**2 + (breakdown["top_cross_talk"]["value"] - target)**2 + (breakdown["bot_cross_talk"]["value"] - target)**2
         # balance = (breakdown["fwd_trans"]["value"] - 0.33)**2 + (breakdown["top_cross_talk"]["value"] - 0.33)**2 + (breakdown["bot_cross_talk"]["value"] - 0.33)**2 + (breakdown["refl_trans"]["value"])**2
         fom = fom - balance
         return fom, {"balance": {"weight": -1, "value": balance}}
