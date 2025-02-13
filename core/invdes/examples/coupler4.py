@@ -30,7 +30,7 @@ if __name__ == "__main__":
     # first we need to instantiate the a optimization object
     sim_cfg = DefaultSimulationConfig()
 
-    crossing_region_size = (5, 5)
+    crossing_region_size = (7, 7)
     port_len = 2
 
     input_port_width = 0.48
@@ -42,7 +42,7 @@ if __name__ == "__main__":
             border_width=[0, 0, 0, 0],
             resolution=50,
             # plot_root=f"./figs/coupler4_{'port3'}",
-            plot_root=f"./figs/coupler4_{'port4'}",
+            plot_root=f"./figs/coupler4_{'port4'}_s{crossing_region_size[0]}x{crossing_region_size[1]}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -210,7 +210,7 @@ if __name__ == "__main__":
     invdesign.optimize(
         plot=True,
         # plot_filename=f"coupler4_{'port3'}",
-        plot_filename=f"coupler4_{'port4'}",
+        plot_filename=f"coupler4_{'port4'}_s{crossing_region_size[0]}x{crossing_region_size[1]}",
         objs=["fwd_trans"],
         field_keys=[("in_slice_1", 1.55, "Ez1", 300)],
         in_slice_names=["in_slice_1"],
