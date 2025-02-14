@@ -270,7 +270,6 @@ class MetaLensOptimization(BaseOptimization):
                 obj_cfgs=obj_cfgs,
             )
         )
-        print("this is the cfgs", cfgs)
 
         super().__init__(
             device=device,

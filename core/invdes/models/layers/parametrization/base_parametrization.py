@@ -229,7 +229,7 @@ def _blur(x, mfs, res, entire_eps, dr_mask, dim="xy"):
     Returns:
     - Blurred 2D tensor.
     """
-    mfs_px = int(2 * mfs * res) + 1  # Convert mfs to pixels and round up
+    mfs_px = int(2 * mfs * res) + 1  # Convert mfs to pixels and round up, 1.2 here is a margin coefficient
     if mfs_px % 2 == 0:
         mfs_px += 1  # Ensure kernel size is odd
 
@@ -259,10 +259,25 @@ def _blur(x, mfs, res, entire_eps, dr_mask, dim="xy"):
             .t()
         )  # Undo the transpose
     elif dim == "xy":
-        # Build the 2D blur kernel from the 1D kernel
-        mfs_kernel_2d = torch.outer(mfs_kernel_1d, mfs_kernel_1d)
-        mfs_kernel_2d = mfs_kernel_2d / mfs_kernel_2d.sum()  # Normalize the 2D kernel
+        # # Build the 2D blur kernel from the 1D kernel
+        # mfs_kernel_2d = torch.outer(mfs_kernel_1d, mfs_kernel_1d)
+        # # the mfs 2d kernel should be a circle like kernel instead of a square kernel
+        # for i in range(mfs_px):
+        #     for j in range(mfs_px):
+        #         if (i - mfs_px // 2) ** 2 + (j - mfs_px // 2) ** 2 > (mfs_px // 2) ** 2:
+        #             mfs_kernel_2d[i, j] = 0
+        # mfs_kernel_2d = mfs_kernel_2d / mfs_kernel_2d.sum()  # Normalize the 2D kernel
+        # Build a circular averaging kernel directly with PyTorch
+        y, x = torch.meshgrid(torch.arange(mfs_px, device=x.device), torch.arange(mfs_px, device=x.device), indexing='ij')
+        center = mfs_px // 2
+        distance = (y - center) ** 2 + (x - center) ** 2
+        radius = (mfs_px // 2) ** 2
 
+        # Generate circular kernel mask
+        mfs_kernel_2d = (distance <= radius).float()
+
+        # Normalize the kernel to ensure it sums to 1
+        mfs_kernel_2d /= mfs_kernel_2d.sum()
         # Blur using 2D convolution
         entire_eps = (
             F.conv2d(
@@ -298,7 +313,41 @@ def blur(xs, mfs, resolutions, entire_eps, dr_mask, dim="xy"):
     xs = [_blur(x, mfs, res, entire_eps, dr_mask, dim) for x, res in zip(xs, resolutions)]
     return xs
 
+def _fft(x, mfs, res, entire_eps, dr_mask, dim="xy"):
+    entire_eps[dr_mask] = x
+    assert dim == "xy", "Only 2D FFT filtering is supported for now"
 
+    # Calculate the number of frequencies to keep
+    height, width = entire_eps.shape
+    cutoff_y = int(height / (2 * mfs * res))
+    cutoff_x = int(width / (2 * mfs * res))
+
+    # Apply 2D FFT
+    freq = torch.fft.fft2(entire_eps)
+
+    # Create a mask to keep only the low frequencies
+    mask = torch.zeros_like(freq)
+    mask[:cutoff_y, :cutoff_x] = 1  # Top-left corner
+    mask[:cutoff_y, -cutoff_x:] = 1  # Top-right corner
+    mask[-cutoff_y:, :cutoff_x] = 1  # Bottom-left corner
+    mask[-cutoff_y:, -cutoff_x:] = 1  # Bottom-right corner
+
+    # Apply the mask to the frequency domain
+    filtered_freq = freq * mask
+
+    # Inverse FFT to get the filtered design
+    filtered_spatial = torch.fft.ifft2(filtered_freq).real
+
+    # Update the original tensor where dr_mask is True
+    return filtered_spatial[dr_mask]
+
+
+def fft(xs, mfs, resolutions, entire_eps, dr_mask, dim="xy"):
+    '''
+    apply fft to filter out the high frequency components for minimum feature size control
+    '''
+    xs = [_fft(x, mfs, res, entire_eps, dr_mask, dim) for x, res in zip(xs, resolutions)]
+    return xs
 permittivity_transform_collections = dict(
     mirror_symmetry=mirror_symmetry,
     transpose_symmetry=transpose_symmetry,
@@ -306,6 +355,7 @@ permittivity_transform_collections = dict(
     litho=litho,
     etching=etching,
     blur=blur,
+    fft=fft,
 )
 
 
@@ -405,7 +455,7 @@ class BaseParametrization(nn.Module):
                 # hr_res, res should be contained in the cfgs
                 cfg["entire_eps"] = (hr_entire_eps - hr_entire_eps.min()) / (hr_entire_eps.max() - hr_entire_eps.min()) # normalize the eps
                 cfg["dr_mask"] = hr_dr_mask
-            if "blur" in transform_type:
+            if "blur" in transform_type or "fft" in transform_type:
                 cfg["entire_eps"] = (hr_entire_eps - hr_entire_eps.min()) / (hr_entire_eps.max() - hr_entire_eps.min()) # normalize the eps
                 cfg["dr_mask"] = hr_dr_mask
             hr_permittivity, permittivity = permittivity_transform_collections[

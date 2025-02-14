@@ -33,7 +33,7 @@ from .layers.fom_layer import SimulatedFoM
 from .layers.objective import ObjectiveFunc
 from .layers.parametrization import parametrization_builder
 from .layers.utils import plot_eps_field
-
+import matplotlib.pyplot as plt
 sys.path.pop(0)
 
 __all__ = [
@@ -429,7 +429,11 @@ class BaseOptimization(nn.Module):
         else:
             raise ValueError(f"Unknown type of eps_map: {type(self._eps_map)}")
         final_design_eps = self._eps_map.detach().cpu().numpy()
-
+        plt.figure()
+        plt.imshow(final_design_eps, cmap="jet")
+        plt.colorbar()
+        plt.savefig(os.path.join(self.sim_cfg["plot_root"], "final_design_eps" + ".png"))
+        plt.close()
         eps_conponent = gf.read.from_np(
             final_design_eps,
             nm_per_pixel=1000/self.sim_cfg["resolution"],
