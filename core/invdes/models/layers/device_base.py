@@ -935,23 +935,43 @@ class N_Ports(BaseDevice):
         grid_step=None,
         power_scales: dict = None,
         direction: str = "x+",
+        custom_source: np.ndarray | torch.Tensor = None,
     ):
+        if isinstance(custom_source, torch.Tensor):
+            lib = torch
+            eps = torch.tensor(eps, dtype=torch.float32, device=custom_source.device)
+        elif isinstance(custom_source, np.ndarray) or custom_source is None:
+            lib = np
+        else:
+            raise ValueError("custom_source must be either np.ndarray or torch.Tensor")
         grid_step = grid_step or self.grid_step
         source_profiles = {}
         offset = -1 if direction[1] == "+" else 1
-        for wl in np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl):
+        for wl in lib.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl):
             for source_mode in source_modes:
-                source = np.zeros_like(eps, dtype=np.complex64)
+                source = lib.zeros_like(eps, dtype=lib.complex64)
+                if lib == torch:
+                    source = source.to(custom_source.device)
                 if direction[0] == "y":  # horizontal slice
-                    source[:, slice.y] = 1
-                    source[:, slice.y + offset] = np.exp(
-                        -1j * 2 * np.pi / wl_cen * grid_step - 1j * np.pi
-                    )
+                    source[:, slice.y] = 1 if custom_source is None else custom_source
+                    if lib == torch:
+                        source[:, slice.y + offset] = lib.exp(
+                            torch.tensor([-1j * 2 * lib.pi / wl_cen * grid_step - 1j * lib.pi,], device=source.device)
+                        ) * (1 if custom_source is None else custom_source)
+                    else:
+                        source[:, slice.y + offset] = lib.exp(
+                            -1j * 2 * lib.pi / wl_cen * grid_step - 1j * lib.pi
+                        ) * (1 if custom_source is None else custom_source)
                 elif direction[0] == "x":  # vertical slice
-                    source[slice.x, :] = 1
-                    source[slice.x + offset, :] = np.exp(
-                        -1j * 2 * np.pi / wl_cen * grid_step - 1j * np.pi
-                    )
+                    source[slice.x, :] = 1 if custom_source is None else custom_source
+                    if lib == torch:
+                        source[slice.x + offset, :] = lib.exp(
+                            torch.tensor([-1j * 2 * lib.pi / wl_cen * grid_step - 1j * lib.pi,], device=source.device)
+                        ) * (1 if custom_source is None else custom_source)
+                    else:
+                        source[slice.x + offset, :] = lib.exp(
+                            -1j * 2 * lib.pi / wl_cen * grid_step - 1j * lib.pi
+                        ) * (1 if custom_source is None else custom_source)
 
                 ht_m = et_m = source.reshape(-1)
                 if power_scales is not None:
@@ -962,7 +982,8 @@ class N_Ports(BaseDevice):
                     source = source * power_scale
                 else:
                     power_scale = 1
-
+                if isinstance(wl, torch.Tensor):
+                    wl = round(wl.item(), 2)
                 source_profiles[(wl, source_mode)] = [source, ht_m, et_m, power_scale]
         return source_profiles
 

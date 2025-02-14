@@ -216,7 +216,7 @@ def etching(xs, sharpness, eta, binary_projection):
     return outs
 
 
-def _blur(x, mfs, res, dim="xy"):
+def _blur(x, mfs, res, entire_eps, dr_mask, dim="xy"):
     """
     Apply MFS-based blur to a 2D tensor along specified dimension(s).
 
@@ -229,7 +229,7 @@ def _blur(x, mfs, res, dim="xy"):
     Returns:
     - Blurred 2D tensor.
     """
-    mfs_px = int(mfs * res) + 1  # Convert mfs to pixels and round up
+    mfs_px = int(2 * mfs * res) + 1  # Convert mfs to pixels and round up
     if mfs_px % 2 == 0:
         mfs_px += 1  # Ensure kernel size is odd
 
@@ -238,18 +238,20 @@ def _blur(x, mfs, res, dim="xy"):
     mfs_kernel_1d = torch.ones(mfs_px, device=x.device)
     mfs_kernel_1d = mfs_kernel_1d / mfs_kernel_1d.sum()  # Normalize the kernel
 
+    entire_eps[dr_mask] = x
+
     if dim == "x":
         # Blur along the "x" (columns)
-        x = F.conv1d(
-            x.unsqueeze(1),  # Add a channel dimension for conv1d
+        entire_eps = F.conv1d(
+            entire_eps.unsqueeze(1),  # Add a channel dimension for conv1d
             mfs_kernel_1d.unsqueeze(0).unsqueeze(0),  # Shape (1, 1, kernel_size)
             padding=mfs_px // 2,
         ).squeeze(1)  # Remove the channel dimension
     elif dim == "y":
         # Blur along the "y" (rows)
-        x = (
+        entire_eps = (
             F.conv1d(
-                x.t().unsqueeze(1),  # Transpose to blur rows as columns
+                entire_eps.t().unsqueeze(1),  # Transpose to blur rows as columns
                 mfs_kernel_1d.unsqueeze(0).unsqueeze(0),  # Shape (1, 1, kernel_size)
                 padding=mfs_px // 2,
             )
@@ -262,9 +264,9 @@ def _blur(x, mfs, res, dim="xy"):
         mfs_kernel_2d = mfs_kernel_2d / mfs_kernel_2d.sum()  # Normalize the 2D kernel
 
         # Blur using 2D convolution
-        x = (
+        entire_eps = (
             F.conv2d(
-                x.unsqueeze(0).unsqueeze(0),  # Add batch and channel dimensions
+                entire_eps.unsqueeze(0).unsqueeze(0),  # Add batch and channel dimensions
                 mfs_kernel_2d.unsqueeze(0).unsqueeze(
                     0
                 ),  # Shape (1, 1, kernel_size, kernel_size)
@@ -276,10 +278,11 @@ def _blur(x, mfs, res, dim="xy"):
     else:
         raise ValueError(f"Invalid dim argument: {dim}. Must be 'x', 'y', or 'xy'.")
 
+    x = entire_eps[dr_mask]
     return x
 
 
-def blur(xs, mfs, resolutions, dim="xy"):
+def blur(xs, mfs, resolutions, entire_eps, dr_mask, dim="xy"):
     """
     Apply MFS-based blur to a list of 2D tensors along specified dimension(s).
 
@@ -292,7 +295,7 @@ def blur(xs, mfs, resolutions, dim="xy"):
     Returns:
     - List of blurred 2D tensors.
     """
-    xs = [_blur(x, mfs, res, dim) for x, res in zip(xs, resolutions)]
+    xs = [_blur(x, mfs, res, entire_eps, dr_mask, dim) for x, res in zip(xs, resolutions)]
     return xs
 
 
@@ -400,6 +403,9 @@ class BaseParametrization(nn.Module):
             if "litho" in transform_type:
                 cfg["device"] = self.operation_device
                 # hr_res, res should be contained in the cfgs
+                cfg["entire_eps"] = (hr_entire_eps - hr_entire_eps.min()) / (hr_entire_eps.max() - hr_entire_eps.min()) # normalize the eps
+                cfg["dr_mask"] = hr_dr_mask
+            if "blur" in transform_type:
                 cfg["entire_eps"] = (hr_entire_eps - hr_entire_eps.min()) / (hr_entire_eps.max() - hr_entire_eps.min()) # normalize the eps
                 cfg["dr_mask"] = hr_dr_mask
             hr_permittivity, permittivity = permittivity_transform_collections[

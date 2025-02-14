@@ -194,7 +194,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                     #     direction="x+",
                     # ),
 
-                    near_field_phase_record=dict(
+                    near_field_response_record=dict(
                         weight=0,
                         #### objective is evaluated at this port
                         in_slice_name="in_slice_1",
@@ -204,7 +204,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         wl=[0.85],
                         in_mode="Hz1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=("Hz1",),
-                        type="phase_recorder",
+                        type="response_record",
                         direction="x+",
                     )
                 ),
@@ -223,23 +223,40 @@ class MetaLensOptimization(BaseOptimization):
         operation_device=torch.device("cuda:0"),
         initialization_file=None,
     ):
+            # design_region_param_cfgs[region_name] = dict(
+            #     method="levelset",
+            #     rho_resolution=[0, 1/0.25],
+            #     interpolation="bilinear",
+            #     # transform=[dict(type="mirror_symmetry", dims=[1])],
+            #     transform=[],
+            #     # init_method="grating_1d_random",
+            #     # init_method="grating_1d_minmax",
+            #     # init_method="grating_0.2",
+            #     init_method="grating_1d_random",
+            #     # init_method="random",
+            #     binary_projection=dict(
+            #         fw_threshold=100,
+            #         bw_threshold=100,
+            #         mode="regular",
+            #     ),
+            #     initialization_file=initialization_file,
+            # )
+        design_region_param_cfgs_copy = design_region_param_cfgs.copy()
         design_region_param_cfgs = dict()
         for region_name in device.design_region_cfgs.keys():
             design_region_param_cfgs[region_name] = dict(
-                method="levelset",
-                rho_resolution=[0, 1/0.15],
-                interpolation="bilinear",
-                # transform=[dict(type="mirror_symmetry", dims=[1])],
-                transform=[],
-                # init_method="grating_1d_random",
-                # init_method="grating_1d_minmax",
-                # init_method="grating_0.2",
-                init_method="grating_1d_random",
-                # init_method="random",
-                binary_projection=dict(
-                    fw_threshold=100,
-                    bw_threshold=100,
-                    mode="regular",
+                method=design_region_param_cfgs_copy.get("method", "levelset"),
+                rho_resolution=design_region_param_cfgs_copy.get("rho_resolution", [0, 1/0.15]),
+                interpolation=design_region_param_cfgs_copy.get("interpolation", "bilinear"),
+                transform=design_region_param_cfgs_copy.get("transform", []),
+                init_method=design_region_param_cfgs_copy.get("init_method", "grating_1d_random"),
+                binary_projection=design_region_param_cfgs_copy.get(
+                    "binary_projection",
+                    dict(
+                        fw_threshold=100,
+                        bw_threshold=100,
+                        mode="regular",
+                    ),
                 ),
                 initialization_file=initialization_file,
             )
@@ -253,6 +270,7 @@ class MetaLensOptimization(BaseOptimization):
                 obj_cfgs=obj_cfgs,
             )
         )
+        print("this is the cfgs", cfgs)
 
         super().__init__(
             device=device,

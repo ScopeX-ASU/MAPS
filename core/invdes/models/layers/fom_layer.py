@@ -24,10 +24,11 @@ class SimulatedFoM(nn.Module):
         self.adjoint_mode = adjoint_mode
 
     def forward(
-        self, permittivity_list: List[Tensor], resolution: int | None = None
+        self, permittivity_list: List[Tensor], resolution: int | None = None, custom_source: Tensor | None = None
     ) -> Tensor:
         if self.adjoint_mode == "ceviche":
             ## we need to use autograd, jacobian to calculate gradients
+            raise NotImplementedError("ceviche adjoint mode is not supported")
             fom = AdjointGradient.apply(
                 self.cal_obj_and_grad_fn,
                 self.adjoint_mode,
@@ -41,6 +42,7 @@ class SimulatedFoM(nn.Module):
                 need_item="need_value",
                 resolution=resolution,
                 permittivity_list=permittivity_list,
+                custom_source=custom_source,
             )
         return fom
 

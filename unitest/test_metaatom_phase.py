@@ -23,8 +23,8 @@ import math
 
 sys.path.pop(0)
 
-def get_mid_weight(l, w):
-    return (w*l)/(0.3-w)
+def get_mid_weight(l, w, period=0.3):
+    return (w*l)/(period-w)
 
 if __name__ == "__main__":
     gpu_id = 0

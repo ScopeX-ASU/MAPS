@@ -306,6 +306,7 @@ class BaseOptimization(nn.Module):
         need_item: str = "need_value",
         resolution: int = None,
         permittivity_list: List[Tensor] = None,
+        custom_source: dict = None,
         *args,
     ):
         ## here permittivity_list is a list of tensors (no grad required, since it is from autograd.Function)
@@ -315,7 +316,7 @@ class BaseOptimization(nn.Module):
             )
         elif adjoint_mode == "ceviche_torch":
             total_value = self._cal_obj_grad_ceviche(
-                need_item, permittivity_list, *args
+                need_item, permittivity_list, custom_source, *args
             )
         else:
             raise ValueError(f"Unsupported adjoint mode: {adjoint_mode}")
@@ -323,15 +324,16 @@ class BaseOptimization(nn.Module):
         return total_value
 
     def _cal_obj_grad_ceviche(
-        self, need_item, permittivity_list: List[np.ndarray | Tensor], *args
+        self, need_item, permittivity_list: List[np.ndarray | Tensor], custom_source, *args
     ):
         ## here permittivity_list is a list of tensors (no grad required, since it is from autograd.Function)
         permittivity = permittivity_list[0]
 
         if need_item == "need_value":
-            total_value = self.objective(permittivity, mode="forward")
+            total_value = self.objective(permittivity, custom_source=custom_source, mode="forward")
         elif need_item == "need_gradient":
             ### this is explicitly called for autograd, not needed for torch autodiff
+            raise NotImplementedError("ceviche adjoint mode is deprecated, please use ceviche_torch")
             total_value = self.objective(
                 permittivity,
                 self.device.epsilon_map.shape,
@@ -690,6 +692,7 @@ class BaseOptimization(nn.Module):
         self,
         sharpness: float = 1,
         ls_knots: dict = None,
+        custom_source: dict = None,
     ):
         # eps_map, design_region_eps_dict = self.build_device(sharpness)
         self.current_sharpness = sharpness
@@ -703,7 +706,7 @@ class BaseOptimization(nn.Module):
         if self._eps_map.requires_grad:
             self._eps_map.retain_grad()
         self._hr_eps_map = hr_eps_map
-        obj = self.objective_layer([eps_map]) # loss = loss_function(output, target)
+        obj = self.objective_layer([eps_map], custom_source=custom_source) # loss = loss_function(output, target)
         self._obj = obj
         results = {"obj": obj, "breakdown": self.objective.breakdown}
         ## return design region epsilons and the final epsilon map for other penalty loss calculation

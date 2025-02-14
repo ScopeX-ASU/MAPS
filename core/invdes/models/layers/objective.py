@@ -497,21 +497,21 @@ class FluxObjective(object):
         else:
             return npa.mean(npa.array(s_list))  # we only need absolute flux
 
-class PhaseRecorderObjective(object):
+class ResponseRecorderObjective(object):
     def __init__(
         self,
         sims: dict,  # {wl: Simulation}
-        phase_shift: dict,
+        response: dict,
         port_slices: dict,
         in_slice_name: str,
         out_slice_name: str,
         in_mode: int,
         target_wls: Tuple[float],
         target_temps: Tuple[float],
-        obj_type: str = "phase_recorder",
+        obj_type: str = "response_record",
     ):
         self.sims = sims
-        self.phase_shift = phase_shift
+        self.response = response
         self.port_slices = port_slices
         self.in_slice_name = in_slice_name
         self.out_slice_name = out_slice_name
@@ -553,9 +553,12 @@ class PhaseRecorderObjective(object):
                 phase = torch.angle(fz)
                 phase_std = torch.std(phase)
                 phase_mean = torch.mean(phase)
+                mag = torch.abs(fz)
                 # phase_mean = torch.remainder(phase_mean, 2 * torch.pi)
-                self.phase_shift[(in_slice_name, out_slice_name, wl, in_mode, temp)] = {
+                self.response[(in_slice_name, out_slice_name, wl, in_mode, temp)] = {
                     # "phase": torch.remainder(phase, 2 * torch.pi),
+                    "fz": fz,
+                    "mag": mag,
                     "phase": phase,
                     "phase_std": phase_std,
                     "phase_mean": phase_mean,
@@ -867,7 +870,7 @@ class ObjectiveFunc(object):
         ),
     ):
         self.s_params = {}
-        self.phase_shift = {}
+        self.response = {}
         self._obj_fusion_func = cfgs["_fusion_func"]
         cfgs = deepcopy(cfgs)
         del cfgs["_fusion_func"]
@@ -957,10 +960,10 @@ class ObjectiveFunc(object):
                     energy=False,
                     obj_type=obj_type,
                 )
-            elif obj_type == "phase_recorder":
-                objfn = PhaseRecorderObjective(
+            elif obj_type == "response_record":
+                objfn = ResponseRecorderObjective(
                     sims=self.sims,
-                    phase_shift=self.phase_shift,
+                    response=self.response,
                     port_slices=self.port_slices,
                     in_slice_name=in_slice_name,
                     out_slice_name=out_slice_name,
@@ -1069,7 +1072,7 @@ class ObjectiveFunc(object):
         return gradients
 
     def obtain_objective(
-        self, permittivity: np.ndarray | Tensor
+        self, permittivity: np.ndarray | Tensor, custom_source: dict = None
     ) -> Tuple[dict, Tensor]:
         self.solutions = {}
         self.As = {}
@@ -1077,67 +1080,118 @@ class ObjectiveFunc(object):
         for _, cfg in self.obj_cfgs.items():
             temperatures = temperatures + cfg["temp"]
         temperatures = set(temperatures)
-        for slice_name, port_profile in self.port_profiles.items():
-            for (wl, mode), (source, _, _, norm_power, require_sim) in port_profile.items():
-                if not require_sim:
-                    continue
-                ## here the source is already normalized during norm_run to make sure it has target power
-                ## here is the key part that build the common "eps to field" autograd graph
-                ## later on, multiple "field to fom" autograd graph(s) will be built inside of multiple obj_fn's
-                pol = mode[:2]
-                ## temperature is effective only when there is active region defined
-                for temp in temperatures:
-                    if getattr(self.device, "active_region_masks", None) is not None:
-                        control_cfgs = {
-                            name: {"T": temp}
-                            for name in self.device.active_region_masks.keys()
-                        }
-                        modulated_eps = self.device.apply_active_modulation(
-                            permittivity, control_cfgs
-                        )
-                        self.sims[
-                            (wl, pol)
-                        ].eps_r = modulated_eps
-                    else:
-                        self.sims[(wl, pol)].eps_r = permittivity
-                    ## eps_r: permittivity tensor, denormalized
-
-                    # self.sims[wl].eps_r = get_temp_related_eps(
-                    #     eps=permittivity,
-                    #     temp=temp,
-                    #     temp_0=300,
-                    #     eps_r_0=Si_eps(wl),
-                    #     dn_dT=1.8e-4,
-                    # )
-                    # plt.figure()
-                    # plt.imshow(source.real.detach().cpu().numpy(), cmap="hot")
-                    # plt.colorbar()
-                    # plt.savefig(f"source_{wl}_{pol}_{slice_name}_{mode}_{temp}.png")
-                    # plt.close()
-                    # quit()
-                    Fx, Fy, Fz = self.sims[(wl, pol)].solve(
-                        source, slice_name=slice_name, mode=mode, temp=temp
-                    )
+        if custom_source is None:
+            for slice_name, port_profile in self.port_profiles.items():
+                for (wl, mode), (source, _, _, norm_power, require_sim) in port_profile.items():
+                    if not require_sim:
+                        continue
+                    ## here the source is already normalized during norm_run to make sure it has target power
+                    ## here is the key part that build the common "eps to field" autograd graph
+                    ## later on, multiple "field to fom" autograd graph(s) will be built inside of multiple obj_fn's
                     pol = mode[:2]
-                    # print("this is the stats of the Fz")
-                    # print_stat(Fz.real)
-                    # print("this is the dtype of the Fz", Fz.dtype, flush=True)
-                    # quit()
-                    if pol == "Ez":
-                        self.solutions[(slice_name, wl, mode, temp)] = {
-                            "Hx": Fx,
-                            "Hy": Fy,
-                            "Ez": Fz,
-                        }
-                    elif pol == "Hz":
-                        self.solutions[(slice_name, wl, mode, temp)] = {
-                            "Ex": Fx,
-                            "Ey": Fy,
-                            "Hz": Fz,
-                        }
+                    ## temperature is effective only when there is active region defined
+                    for temp in temperatures:
+                        if getattr(self.device, "active_region_masks", None) is not None:
+                            control_cfgs = {
+                                name: {"T": temp}
+                                for name in self.device.active_region_masks.keys()
+                            }
+                            modulated_eps = self.device.apply_active_modulation(
+                                permittivity, control_cfgs
+                            )
+                            self.sims[
+                                (wl, pol)
+                            ].eps_r = modulated_eps
+                        else:
+                            self.sims[(wl, pol)].eps_r = permittivity
+                        ## eps_r: permittivity tensor, denormalized
 
-                    self.As[(wl, temp)] = self.sims[(wl, pol)].A
+                        # self.sims[wl].eps_r = get_temp_related_eps(
+                        #     eps=permittivity,
+                        #     temp=temp,
+                        #     temp_0=300,
+                        #     eps_r_0=Si_eps(wl),
+                        #     dn_dT=1.8e-4,
+                        # )
+                        # plt.figure()
+                        # plt.imshow(source.real.detach().cpu().numpy(), cmap="hot")
+                        # plt.colorbar()
+                        # plt.savefig(f"source_{wl}_{pol}_{slice_name}_{mode}_{temp}.png")
+                        # plt.close()
+                        # quit()
+                        Fx, Fy, Fz = self.sims[(wl, pol)].solve(
+                            source, slice_name=slice_name, mode=mode, temp=temp
+                        )
+                        # print("this is the stats of the Fz")
+                        # print_stat(Fz.real)
+                        # print("this is the dtype of the Fz", Fz.dtype, flush=True)
+                        # quit()
+                        if pol == "Ez":
+                            self.solutions[(slice_name, wl, mode, temp)] = {
+                                "Hx": Fx,
+                                "Hy": Fy,
+                                "Ez": Fz,
+                            }
+                        elif pol == "Hz":
+                            self.solutions[(slice_name, wl, mode, temp)] = {
+                                "Ex": Fx,
+                                "Ey": Fy,
+                                "Hz": Fz,
+                            }
 
+                        self.As[(wl, temp)] = self.sims[(wl, pol)].A
+        else: # we have a custom source to simulate
+            slice_name = custom_source["slice_name"]
+            src = custom_source["source"]
+            mode = custom_source["mode"]
+            wl = custom_source["wl"]
+            direction = custom_source["direction"]
+            pol = mode[:2]
+
+            #build source from slice_name and source vector:
+            source_profile = self.device.insert_plane_wave(
+                eps=self.device.epsilon_map,
+                slice=self.device.port_monitor_slices[slice_name],
+                wl_cen=wl,
+                source_modes=(mode,),
+                direction=direction,
+                custom_source=src,
+            )
+            source = source_profile[(wl, mode)][0]
+            ## temperature is effective only when there is active region defined
+            for temp in temperatures:
+                if getattr(self.device, "active_region_masks", None) is not None:
+                    control_cfgs = {
+                        name: {"T": temp}
+                        for name in self.device.active_region_masks.keys()
+                    }
+                    modulated_eps = self.device.apply_active_modulation(
+                        permittivity, control_cfgs
+                    )
+                    self.sims[
+                        (wl, pol)
+                    ].eps_r = modulated_eps
+                else:
+                    self.sims[(wl, pol)].eps_r = permittivity
+
+                Fx, Fy, Fz = self.sims[(wl, pol)].solve(
+                    source, slice_name=slice_name, mode=mode, temp=temp
+                )
+
+                if pol == "Ez":
+                    self.solutions[(slice_name, wl, mode, temp)] = {
+                        "Hx": Fx,
+                        "Hy": Fy,
+                        "Ez": Fz,
+                    }
+                elif pol == "Hz":
+                    self.solutions[(slice_name, wl, mode, temp)] = {
+                        "Ex": Fx,
+                        "Ey": Fy,
+                        "Hz": Fz,
+                    }
+
+                self.As[(wl, temp)] = self.sims[(wl, pol)].A
         self.breakdown = {}
         for name, obj in self.Js.items():
             weight, value = obj["weight"], obj["fn"](fields=self.solutions)
@@ -1170,10 +1224,11 @@ class ObjectiveFunc(object):
         self,
         permittivity: np.ndarray | Tensor,
         eps_shape: Tuple[int] = None,
+        custom_source: dict = None,
         mode: str = "forward",
     ):
         if mode == "forward":
-            objective = self.obtain_objective(permittivity)
+            objective = self.obtain_objective(permittivity, custom_source=custom_source)
             return objective
         elif mode == "backward":
             return self.obtain_gradient(permittivity, eps_shape)

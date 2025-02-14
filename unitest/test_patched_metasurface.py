@@ -30,6 +30,7 @@ from pyutils.general import ensure_dir
 
 import torch
 import torch.nn.functional as F
+import h5py
 
 def interpolate_1d(input_tensor, x0, x1, method="linear"):
     """
@@ -57,7 +58,7 @@ def interpolate_1d(input_tensor, x0, x1, method="linear"):
     else:
         raise ValueError(f"Unsupported interpolation method: {method}")
     
-def phase_matching_loss(total_phase, target_variants):
+def response_matching_loss(total_response, target_response, target_phase_variants):
     """
     Computes the MSE loss between total_phase and the closest value
     in the three versions of target_phase_shift: original, +2π, and -2π.
@@ -70,18 +71,28 @@ def phase_matching_loss(total_phase, target_variants):
         torch.Tensor: Scalar loss value.
     """
     # Compute absolute differences (3, N)
-    abs_diffs = torch.abs(target_variants - total_phase.unsqueeze(0))  # Broadcasting
+    target_phase = torch.angle(target_response) % (2 * torch.pi)
+    target_mag = torch.abs(target_response)
+
+    total_phase = torch.angle(total_response) % (2 * torch.pi)
+    total_mag = torch.abs(total_response)
+    # begin calculate the phase loss
+    abs_diffs = torch.abs(target_phase_variants - total_phase.unsqueeze(0))  # Broadcasting
 
     # Find the index of the closest match at each point
     closest_indices = torch.argmin(abs_diffs, dim=0)  # Shape (N,)
 
     # Gather the closest matching values
-    closest_values = target_variants[closest_indices, torch.arange(target_phase_shift.shape[0])]
+    closest_values = target_phase_variants[closest_indices, torch.arange(total_phase.shape[0])]
 
     # Compute mean squared error loss
-    loss = torch.nn.functional.mse_loss(closest_values, total_phase)
+    phase_loss = torch.nn.functional.mse_loss(closest_values, total_phase)
 
-    return loss
+    # begin calculate the magnitude loss
+
+    mag_loss = torch.nn.functional.mse_loss(target_mag, total_mag)
+    print(f"this is the mag_loss {mag_loss.item()} and phase_loss {phase_loss.item()}", flush=True)
+    return mag_loss + phase_loss
 
 def find_closest_width(lut, target_phase):
     """
@@ -213,8 +224,13 @@ class PatchMetalens(nn.Module):
             operation_device=self.device,
         )
 
-    def set_ref_phase(self, ref_phase):
+    def set_ref_response(
+            self, 
+            ref_mag: torch.Tensor, 
+            ref_phase: torch.Tensor,
+        ):
         self.ref_phase = ref_phase
+        self.ref_mag = ref_mag
 
     def forward(self, sharpness):
         # set the level set knots to the self.opt parameters and 
@@ -222,6 +238,7 @@ class PatchMetalens(nn.Module):
         # then stich the trust worthy region to the phase shift mask
         # design_region_param_dict.design_region_0.weights.ls_knots
         trust_worthy_phase_list = []
+        trust_worthy_mag_list = []
         total_ls_knot = -0.05 * torch.ones(2 * (self.num_atom + self.num_dummy_atom) + 1, device=self.device)
         for i in range(self.num_atom):
             center_knot_idx = 2 * i + 1 + self.num_dummy_atom
@@ -232,27 +249,31 @@ class PatchMetalens(nn.Module):
                 center_knot_idx - 2 * (self.patch_size // 2) - 1 : center_knot_idx + 2 * (self.patch_size // 2 + 1)
             ].unsqueeze(0)}
             _ = self.opt(sharpness=sharpness, ls_knots=knots_value)
-            trust_worthy_phase = (self.ref_phase - self.opt.objective.phase_shift[('in_slice_1', 'nearfield_1', 0.85, "Hz1", 300)]["phase"]) % (2 * torch.pi)
-            self.opt.plot(
-                plot_filename=f"patched_metalens_sharp-{sharpness}_{i}.png",
-                eps_map=None,
-                obj=None,
-                field_key=("in_slice_1", 0.85, "Hz1", 300),
-                field_component="Hz",
-                in_slice_name="in_slice_1",
-                exclude_slice_names=[],
-            )
+            trust_worthy_phase = (self.ref_phase - self.opt.objective.response[('in_slice_1', 'nearfield_1', 0.85, "Hz1", 300)]["phase"]) % (2 * torch.pi)
+            trust_worthy_mag = self.opt.objective.response[('in_slice_1', 'nearfield_1', 0.85, "Hz1", 300)]["mag"] / self.ref_mag
+            # self.opt.plot(
+            #     plot_filename=f"patched_metalens_sharp-{sharpness}_{i}.png",
+            #     eps_map=None,
+            #     obj=None,
+            #     field_key=("in_slice_1", 0.85, "Hz1", 300),
+            #     field_component="Hz",
+            #     in_slice_name="in_slice_1",
+            #     exclude_slice_names=[],
+            # )
             # print_stat(trust_worthy_phase)
             # trust_worthy_phase_list.append(trust_worthy_phase)
             # print("this is the shape of the trust_worthy_phase", trust_worthy_phase.shape, flush=True)
             trust_worthy_phase_list.append(trust_worthy_phase[:, :-1])
+            trust_worthy_mag_list.append(trust_worthy_mag[:, :-1])
         total_phase = torch.cat(trust_worthy_phase_list, dim=1).squeeze().to(torch.float32)
+        total_mag = torch.cat(trust_worthy_mag_list, dim=1).squeeze().to(torch.float32)
+        total_response = total_mag * torch.exp(1j * total_phase)
         # plot the total_phase (1 D tensor)
         # plt.figure()
         # plt.plot(total_phase.detach().cpu().numpy())
         # plt.savefig("./figs/stiched_phase.png")
         # plt.close()
-        return total_phase
+        return total_response
 
 
 if __name__ == "__main__":
@@ -272,17 +293,27 @@ if __name__ == "__main__":
     # print(LUT)
     # quit()
     # read ONN weights from pt file
-    checkpoint_file_name = "/home/pingchua/projects/MetaONN/checkpoint/fmnist/meta_cnn/train/Meta_CNNETE_init_train_lr-0.0010_wb-16_ib-16_rotm-fixed_c-two_atom_wise_no_smooth_acc-92.07_epoch-80.pt"
+    checkpoint_file_name = "/home/pingchua/projects/MetaONN/checkpoint/fmnist/meta_cnn/train/Meta_CNNETE_init_train_lr-0.0010_wb-16_ib-16_rotm-fixed_c-two_atom_wise_no_smooth_cweight_acc-92.38_epoch-55.pt"
     checkpoint = torch.load(checkpoint_file_name)
     model_comment = checkpoint_file_name.split("_c-")[-1].split("_acc-")[0]
     state_dict = checkpoint["state_dict"]
 
-    target_phase_shift = state_dict["features.conv1.conv._conv_pos.weight"].squeeze()[0].to(device)
-    target_phase_shift = target_phase_shift % (2 * torch.pi)
+    target_response = state_dict["features.conv1.conv._conv_pos.weight"].squeeze()[0].to(device)
+    if target_response.dtype == torch.float32:
+        target_phase_shift = target_response
+        target_mag = torch.ones_like(target_response)
+    elif target_response.dtype == torch.complex64:
+        target_phase_shift = torch.angle(target_response) % (2 * torch.pi)
+        target_mag = torch.abs(target_response)
+        target_mag = (torch.tanh(target_mag) + 1) / 2
+    else:
+        raise ValueError("Unsupported data type for target_response")
     target_phase_shift = interpolate_1d(target_phase_shift, torch.linspace(0, 32*0.3, target_phase_shift.shape[0]), torch.linspace(0, 32*0.3, 480), method="gaussian")
+    target_mag = interpolate_1d(target_mag, torch.linspace(0, 32*0.3, target_mag.shape[0]), torch.linspace(0, 32*0.3, 480), method="gaussian")
+    target_response = target_mag * torch.exp(1j * target_phase_shift)
     # plt.figure()
-    # plt.plot(target_phase_shift.detach().cpu().numpy())
-    # plt.savefig("./figs/target_phase_shift.png")
+    # plt.plot(target_mag.detach().cpu().numpy())
+    # plt.savefig("./figs/target_mag.png")
     # plt.close()
     # quit()
 
@@ -310,7 +341,7 @@ if __name__ == "__main__":
     num_atom = 32
 
     # Create 3 variants of the target phase shift
-    target_variants = torch.stack([
+    target_phase_variants = torch.stack([
         target_phase_shift,         # Original
         target_phase_shift + 2 * torch.pi,  # Shifted +2π
         target_phase_shift - 2 * torch.pi   # Shifted -2π
@@ -337,16 +368,17 @@ if __name__ == "__main__":
     ref_level_set_knots = -0.05 * torch.ones(2 * (patch_metalens.num_atom + patch_metalens.num_dummy_atom) + 1, device=device)
     ref_level_set_knots = ref_level_set_knots + 0.001 * torch.randn_like(ref_level_set_knots)
     _ = patch_metalens.total_opt(sharpness=256, ls_knots={"design_region_0": ref_level_set_knots[16:-16].unsqueeze(0)})
-    ref_phase = patch_metalens.total_opt.objective.phase_shift[('in_slice_1', 'nearfield_1', 0.85, "Hz1", 300)]["phase"].squeeze().mean().to(torch.float32)
-    patch_metalens.set_ref_phase(ref_phase)
+    ref_phase = patch_metalens.total_opt.objective.response[('in_slice_1', 'nearfield_1', 0.85, "Hz1", 300)]["phase"].squeeze().mean().to(torch.float32)
+    ref_mag = patch_metalens.total_opt.objective.response[('in_slice_1', 'nearfield_1', 0.85, "Hz1", 300)]["mag"].squeeze().mean().to(torch.float32)
+    patch_metalens.set_ref_response(ref_mag, ref_phase)
     plot_root = f"./figs/ONN_{model_comment}/"
     ensure_dir(plot_root)
     for epoch in range(num_epoch):
         optimizer.zero_grad()
-        total_phase = patch_metalens(sharpness=epoch + 120)
+        total_response = patch_metalens(sharpness=epoch + 120)
         # total_phase = patch_metalens(sharpness=256)
         # loss = torch.nn.functional.mse_loss(total_phase, target_phase_shift)
-        loss = phase_matching_loss(total_phase, target_variants)
+        loss = response_matching_loss(total_response, target_response, target_phase_variants)
         loss.backward()
         # for name, param in patch_metalens.named_parameters():
         #     if param.grad is not None:
@@ -357,14 +389,25 @@ if __name__ == "__main__":
         if epoch > num_epoch - 110:
             with torch.no_grad():
                 _ = patch_metalens.total_opt(sharpness=256, ls_knots={"design_region_0": patch_metalens.level_set_knots[16:-16].unsqueeze(0)})
-                full_phase = (ref_phase - patch_metalens.total_opt.objective.phase_shift[('in_slice_1', 'nearfield_1', 0.85, "Hz1", 300)]["phase"].squeeze().to(torch.float32)) % (2 * torch.pi)
+                full_phase = (ref_phase - patch_metalens.total_opt.objective.response[('in_slice_1', 'nearfield_1', 0.85, "Hz1", 300)]["phase"].squeeze().to(torch.float32)) % (2 * torch.pi)
+                full_mag = patch_metalens.total_opt.objective.response[('in_slice_1', 'nearfield_1', 0.85, "Hz1", 300)]["mag"].squeeze().to(torch.float32) / ref_mag
         else:
             full_phase = None
+            full_mag = None
         plt.figure()
         plt.plot(target_phase_shift.detach().cpu().numpy(), label="target_phase")
-        plt.plot(total_phase.detach().cpu().numpy(), label="stiched_phase")
+        plt.plot((torch.angle(total_response) % (2*torch.pi)).detach().cpu().numpy(), label="stiched_phase")
         if full_phase is not None:
             plt.plot(full_phase.detach().cpu().numpy(), label="full_phase")
         plt.legend()
-        plt.savefig(plot_root + f"stich_metasurfact_epoch_{epoch}.png")
+        plt.savefig(plot_root + f"stich_metasurfact_epoch_{epoch}_phase.png")
+        plt.close()
+
+        plt.figure()
+        plt.plot(target_mag.detach().cpu().numpy(), label="target_mag")
+        plt.plot(torch.abs(total_response).detach().cpu().numpy(), label="stiched_mag")
+        if full_mag is not None:
+            plt.plot(full_mag.detach().cpu().numpy(), label="full_mag")
+        plt.legend()
+        plt.savefig(plot_root + f"stich_metasurfact_epoch_{epoch}_mag.png")
         plt.close()
