@@ -1,7 +1,7 @@
 """
 Date: 2024-10-05 02:02:33
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-02-12 17:07:18
+LastEditTime: 2025-02-15 14:09:10
 FilePath: /MAPS/core/invdes/models/layers/parametrization/levelset.py
 """
 
@@ -370,9 +370,9 @@ class LeveSetParameterization(BaseParametrization):
     ):
         init_file_path = param_cfg.get("initialization_file", None)
         if init_file_path is not None:
-            assert (
-                init_method == "grating_1d"
-            ), "Only grating_1d init method is supported with given initialization file"
+            assert init_method == "grating_1d", (
+                "Only grating_1d init method is supported with given initialization file"
+            )
             with h5py.File(init_file_path, "r") as f:
                 level_set_knots = f["Si_width"][:]
                 level_set_knots = (
@@ -383,9 +383,15 @@ class LeveSetParameterization(BaseParametrization):
         if init_method == "random":
             nn.init.normal_(weight_dict["ls_knots"], mean=0, std=0.01)
         elif init_method == "ones":
-            nn.init.normal_(weight_dict["ls_knots"], mean=0, std=0.01)
-            weight_dict["ls_knots"].data += 0.05
-        elif init_method == "ball": ## same as diamond_2
+            nn.init.normal_(weight_dict["ls_knots"], mean=0.05, std=0.01)
+        elif init_method == "checkerboard":
+            ## make a checkerboard pattern
+            weight_dict["ls_knots"].data.fill_(-0.05)
+            period = 16
+            for i in range(period // 2):
+                for j in range(period // 2):
+                    weight_dict["ls_knots"].data[i::period, j::period] = 0.05
+        elif init_method == "ball":  ## same as diamond_2
             nn.init.normal_(weight_dict["ls_knots"], mean=0, std=0.01)
             ### create a map with center high, edge low as a ball using mesh grid
             x, y = torch.meshgrid(
@@ -401,15 +407,29 @@ class LeveSetParameterization(BaseParametrization):
                 p = float(p[-1])
             else:
                 p = 1
-            nn.init.normal_(weight_dict["ls_knots"], mean=0, std=0.01)
+            # nn.init.normal_(weight_dict["ls_knots"], mean=-0.1, std=0.0001)
+            nn.init.normal_(weight_dict["ls_knots"], mean=-0.05, std=0.01)
             ### create a map with center high, edge low as a ball using mesh grid
             x, y = torch.meshgrid(
-                torch.linspace(-1, 1, weight_dict["ls_knots"].shape[0]),
-                torch.linspace(-1, 1, weight_dict["ls_knots"].shape[1]),
+                torch.linspace(
+                    -1,
+                    1,
+                    weight_dict["ls_knots"].shape[0],
+                    device=self.operation_device,
+                ),
+                torch.linspace(
+                    -1,
+                    1,
+                    weight_dict["ls_knots"].shape[1],
+                    device=self.operation_device,
+                ),
             )
-            mask = (x.abs()**p + y.abs()**p) < 1.3
-            weight_dict["ls_knots"].data += -0.05
-            weight_dict["ls_knots"].data[mask] += 0.1
+            mask = (x.abs() ** p + y.abs() ** p) < 1.1
+            # weight_dict["ls_knots"].data[mask] = nn.init.normal_(weight_dict["ls_knots"].data[mask], mean=0.05, std=0.01)
+            weight_dict["ls_knots"].data[mask] = nn.init.normal_(
+                weight_dict["ls_knots"].data[mask], mean=0.05, std=0.01
+            )
+            # weight_dict["ls_knots"].data[mask] = (1-(x.abs()**p + y.abs()**p)[mask]) * 0.1
         elif init_method == "zeros":
             nn.init.normal_(weight_dict["ls_knots"], mean=0, std=0.01)
             weight_dict["ls_knots"].data -= 0.05
@@ -507,30 +527,32 @@ class LeveSetParameterization(BaseParametrization):
             weight.data[quater_ring_mask] = 0.05
         elif init_method == "crossing":
             rho_res = self.cfgs["rho_resolution"]
-            half_wg_width_x = int((
-                0.48 / 2
-            )  * rho_res[0])
-            half_wg_width_y = int((
-                0.48 / 2
-            )  * rho_res[1])
+            half_wg_width_x = int((0.48 / 2) * rho_res[0])
+            half_wg_width_y = int((0.48 / 2) * rho_res[1])
 
             weight = weight_dict["ls_knots"]
             weight.data.fill_(-0.2)
             weight.data[
-                weight.shape[0] // 2 - half_wg_width_x: weight.shape[0] // 2 + half_wg_width_x, 
-                :
+                weight.shape[0] // 2 - half_wg_width_x : weight.shape[0] // 2
+                + half_wg_width_x,
+                :,
             ] = 0.05
             weight.data[
                 :,
-                weight.shape[1] // 2 - half_wg_width_y: weight.shape[1] // 2 + half_wg_width_y
+                weight.shape[1] // 2 - half_wg_width_y : weight.shape[1] // 2
+                + half_wg_width_y,
             ] = 0.05
             weight.data += torch.randn_like(weight) * 0.01
         else:
             raise ValueError(f"Unsupported initialization method: {init_method}")
 
-    def _build_permittivity(self, weights, rho, phi, n_phi, sharpness: float, ls_knots=None):
+    def _build_permittivity(
+        self, weights, rho, phi, n_phi, sharpness: float, ls_knots=None
+    ):
         if ls_knots is not None:
-            assert ls_knots.shape == weights["ls_knots"].shape, f"the shape of ls_knots {ls_knots.shape} should be the same as the shape of ls_knots in weights {weights['ls_knots'].shape}"
+            assert ls_knots.shape == weights["ls_knots"].shape, (
+                f"the shape of ls_knots {ls_knots.shape} should be the same as the shape of ls_knots in weights {weights['ls_knots'].shape}"
+            )
         sigma = getattr(self.cfgs, "sigma", 1 / max(self.cfgs["rho_resolution"]))
         interpolation = getattr(self.cfgs, "interpolation", "gaussian")
         design_param = weights["ls_knots"] if ls_knots is None else ls_knots
