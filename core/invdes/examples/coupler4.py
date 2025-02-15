@@ -6,10 +6,12 @@ basically, this should be like the training logic like in train_NN.py
 
 import os
 import sys
+from copy import deepcopy
 
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 )
+import numpy as np
 import torch
 
 from core.invdes.invdesign import InvDesign
@@ -36,6 +38,11 @@ if __name__ == "__main__":
     input_port_width = 0.48
     output_port_width = 0.48
 
+    wl_cen = 1.55
+    wl_width = 0.01
+    n_wl = 3
+    wls = np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl)
+
     sim_cfg.update(
         dict(
             solver="ceviche_torch",
@@ -47,6 +54,9 @@ if __name__ == "__main__":
             neural_solver=None,
             numerical_solver="solve_direct",
             use_autodiff=False,
+            wl_cen=wl_cen,
+            wl_width=wl_width,
+            n_wl=n_wl,
         )
     )
 
@@ -59,7 +69,7 @@ if __name__ == "__main__":
     )
 
     hr_device = device.copy(resolution=310)
-    print(device)
+    # print(device)
 
     def fom_func(breakdown):
         ## maximization fom
@@ -71,13 +81,35 @@ if __name__ == "__main__":
                 fom = fom + obj["weight"] * obj["value"]
         ## add extra contrast ratio
         target = 0.25
-        balance = (breakdown["fwd_trans"]["value"] - target)**2 + (breakdown["refl_trans"]["value"] - target)**2 + (breakdown["top_cross_talk"]["value"] - target)**2 + (breakdown["bot_cross_talk"]["value"] - target)**2
+        balance = 0
+        for wl in wls:
+            balance += (
+                (breakdown[f"fwd_trans_{wl}"]["value"] - target) ** 2
+                + (breakdown[f"refl_trans_{wl}"]["value"] - target) ** 2
+                + (breakdown[f"top_cross_talk_{wl}"]["value"] - target) ** 2
+                + (breakdown[f"bot_cross_talk_{wl}"]["value"] - target) ** 2
+            )
+        fom = fom - 1 * balance
+        # balance = (breakdown["refl_trans"]["value"]/breakdown["fwd_trans"]["value"].data - 1)**2 + (breakdown["top_cross_talk"]["value"]/breakdown["fwd_trans"]["value"].data - 1)**2 + (breakdown["bot_cross_talk"]["value"]/breakdown["fwd_trans"]["value"].data - 1)**2
+        # balance = torch.stack(
+        #     [
+        #         breakdown["fwd_trans"]["value"],
+        #         breakdown["refl_trans"]["value"],
+        #         breakdown["top_cross_talk"]["value"],
+        #         breakdown["bot_cross_talk"]["value"],
+        #     ]
+        # )
+        # balance = torch.nn.functional.kl_div(
+        #     torch.tensor([0.25, 0.25, 0.25, 0.25], device=balance.device),
+        #     torch.softmax(balance, dim=-1),
+        #     reduction="sum",
+        # )
         # balance = (breakdown["fwd_trans"]["value"] - 0.33)**2 + (breakdown["top_cross_talk"]["value"] - 0.33)**2 + (breakdown["bot_cross_talk"]["value"] - 0.33)**2 + (breakdown["refl_trans"]["value"])**2
-        fom = fom - balance
+        # fom = fom - 1 * balance
         return fom, {"balance": {"weight": -1, "value": balance}}
 
-
-    obj_cfgs = dict(
+    # wls = [1.55]
+    obj_cfgs_base = dict(
         fwd_trans=dict(
             weight=1,
             #### objective is evaluated at this port
@@ -85,7 +117,7 @@ if __name__ == "__main__":
             out_slice_name="out_slice_1",
             #### objective is evaluated at all points by sweeping the wavelength and modes
             in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-            wl=[1.55],
+            wl=wls,
             temp=[300],
             out_modes=(
                 "Ez1",
@@ -100,7 +132,7 @@ if __name__ == "__main__":
             out_slice_name="refl_slice_1",
             #### objective is evaluated at all points by sweeping the wavelength and modes
             in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-            wl=[1.55],
+            wl=wls,
             temp=[300],
             out_modes=(
                 "Ez1",
@@ -114,7 +146,7 @@ if __name__ == "__main__":
             in_slice_name="in_slice_1",
             out_slice_name="top_slice",
             in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-            wl=[1.55],
+            wl=wls,
             temp=[300],
             out_modes=(
                 "Ez1",
@@ -128,7 +160,7 @@ if __name__ == "__main__":
             in_slice_name="in_slice_1",
             out_slice_name="bot_slice",
             in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-            wl=[1.55],
+            wl=wls,
             temp=[300],
             out_modes=(
                 "Ez1",
@@ -142,7 +174,7 @@ if __name__ == "__main__":
             in_slice_name="in_slice_1",
             out_slice_name="rad_slice_xp",
             #### objective is evaluated at all points by sweeping the wavelength and modes
-            wl=[1.55],
+            wl=wls,
             temp=[300],
             in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
             out_modes=(
@@ -157,7 +189,7 @@ if __name__ == "__main__":
             in_slice_name="in_slice_1",
             out_slice_name="rad_slice_xm",
             #### objective is evaluated at all points by sweeping the wavelength and modes
-            wl=[1.55],
+            wl=wls,
             temp=[300],
             in_mode="Ez1",  # only one source mode is supsliceed, cannot input multiple modes at the same time
             out_modes=(
@@ -172,7 +204,7 @@ if __name__ == "__main__":
             in_slice_name="in_slice_1",
             out_slice_name="rad_slice_yp",
             #### objective is evaluated at all points by sweeping the wavelength and modes
-            wl=[1.55],
+            wl=wls,
             temp=[300],
             in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
             out_modes=(
@@ -187,7 +219,7 @@ if __name__ == "__main__":
             in_slice_name="in_slice_1",
             out_slice_name="rad_slice_ym",
             #### objective is evaluated at all points by sweeping the wavelength and modes
-            wl=[1.55],
+            wl=wls,
             temp=[300],
             in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
             out_modes=(
@@ -198,6 +230,13 @@ if __name__ == "__main__":
         ),
         _fusion_func=fom_func,
     )
+
+    obj_cfgs = {"_fusion_func": obj_cfgs_base.pop("_fusion_func")}
+    for wl in wls:
+        for name, obj in obj_cfgs_base.items():
+            obj_cfgs[f"{name}_{wl}"] = deepcopy(obj)
+            obj_cfgs[f"{name}_{wl}"]["wl"] = [wl]
+    print(obj_cfgs)
 
     opt = CrossingOptimization(
         device=device,
@@ -211,8 +250,8 @@ if __name__ == "__main__":
         plot=True,
         # plot_filename=f"coupler4_{'port3'}",
         plot_filename=f"coupler4_{'port4'}_s{crossing_region_size[0]}x{crossing_region_size[1]}",
-        objs=["fwd_trans"],
-        field_keys=[("in_slice_1", 1.55, "Ez1", 300)],
+        objs=[f"fwd_trans_{wl_cen}"],
+        field_keys=[("in_slice_1", wl_cen, "Ez1", 300)],
         in_slice_names=["in_slice_1"],
         exclude_slice_names=[],
         dump_gds=True,
