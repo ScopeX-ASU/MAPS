@@ -1392,9 +1392,9 @@ class SharpnessScheduler:
         if self.current_step > self.total_steps:
             self.current_step = self.total_steps
         cos_inner = (math.pi * self.current_step) / self.total_steps
-        cos_out = math.cos(cos_inner) + 1
+        cos_out = -math.cos(cos_inner) + 1
         self.current_sharp = (
-            self.final_sharp + 0.5 * (self.initial_sharp - self.final_sharp) * cos_out
+            self.initial_sharp + (self.final_sharp - self.initial_sharp) * (cos_out / 2)**1
         )
         return self.current_sharp
 
