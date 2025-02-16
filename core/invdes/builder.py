@@ -4,7 +4,7 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 from pyutils.lr_scheduler.warmup_cosine_restart import CosineAnnealingWarmupRestarts
-from pyutils.optimizer.sam import SAM
+from pyutils.optimizer import SAM, NesterovAcceleratedGradientOptimizer
 from pyutils.typing import Optimizer, Scheduler
 from torch.types import Device
 
@@ -176,6 +176,12 @@ def make_optimizer(params, total_config=None) -> Optimizer:
             max_iter=getattr(config, "max_iter", 4),
             history_size=getattr(config, "history_size", 100),
         )
+    elif name == "nesterov":
+        optimizer = NesterovAcceleratedGradientOptimizer(
+            params,
+            lr=config.lr,
+            use_bb=getattr(config, "use_bb", True),
+        )
     else:
         raise NotImplementedError(name)
 
@@ -206,6 +212,7 @@ def make_scheduler(
             initial_sharp=float(config.sharp_scheduler.init_sharp),
             final_sharp=float(config.sharp_scheduler.final_sharp),
             total_steps=int(config.run.n_epochs),
+            mode=getattr(config.sharp_scheduler, "mode", "cosine"),
         )
     elif name == "constant":
         scheduler = torch.optim.lr_scheduler.LambdaLR(
