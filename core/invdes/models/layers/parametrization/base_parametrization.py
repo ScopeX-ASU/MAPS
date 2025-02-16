@@ -1,7 +1,7 @@
 """
 Date: 2024-10-04 23:22:57
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-02-12 14:09:44
+LastEditTime: 2025-02-16 16:55:16
 FilePath: /MAPS/core/invdes/models/layers/parametrization/base_parametrization.py
 """
 
@@ -14,9 +14,8 @@ from torch import nn
 from torch.types import Device
 
 from core.inv_litho.photonic_model import *
-from core.utils import padding_to_tiles, rip_padding, print_stat
-import numpy as np
-import matplotlib.pyplot as plt
+from core.utils import padding_to_tiles, rip_padding
+
 
 def cvt_res(
     x,
@@ -47,6 +46,7 @@ def cvt_res(
         x = F.interpolate(x.unsqueeze(0), size=target_size, mode=intplt_mode).squeeze(0)
 
     return x
+
 
 def _mirror_symmetry(x, dims):
     for dim in dims:
@@ -92,7 +92,8 @@ def _convert_resolution(
 ):
     if target_size is None:
         target_nx, target_ny = [
-            int(round(i * target_resolution / source_resolution)) for i in x.shape[-2:]
+            max(1, int(round(i * target_resolution / source_resolution)))
+            for i in x.shape[-2:]
         ]
         target_size = (target_nx, target_ny)
     if x.shape[-2:] == tuple(target_size):
@@ -105,7 +106,9 @@ def _convert_resolution(
     ):
         assert (
             x.shape[-2] % target_size[0] == 0 and x.shape[-1] % target_size[1] == 0
-        ), f"source size should be multiples of target size, got {x.shape[-2:]} and {target_size}"
+        ), (
+            f"source size should be multiples of target size, got {x.shape[-2:]} and {target_size}"
+        )
         x = eps_bg + (eps_r - eps_bg) * x
         # x = 1 / x
         # avg_pool_stride = [int(round(s / r)) for s, r in zip(x.shape[-2:], target_size)]
@@ -174,10 +177,10 @@ def _litho(x_310, res, entire_eps, dr_mask, device):
     entire_eps, pady_0, pady_1, padx_0, padx_1 = padding_to_tiles(entire_eps, 620)
     # remember to set the resist_steepness to a smaller value so that the output three mask is not strictly binarized for later etching
     litho = litho_model(  # reimplement from arixv https://arxiv.org/abs/2411.07311
-            target_img_shape=entire_eps.shape,
-            avepool_kernel=5,
-            device=device,
-        )
+        target_img_shape=entire_eps.shape,
+        avepool_kernel=5,
+        device=device,
+    )
     x_out, _, _ = litho.forward_batch(batch_size=1, target_img=entire_eps)
     x_out = rip_padding(x_out.squeeze(), pady_0, pady_1, padx_0, padx_1)
     x_out = cvt_res(x_out, target_size=origion_shape)[dr_mask]
@@ -229,7 +232,9 @@ def _blur(x, mfs, res, entire_eps, dr_mask, dim="xy"):
     Returns:
     - Blurred 2D tensor.
     """
-    mfs_px = int(2 * mfs * res) + 1  # Convert mfs to pixels and round up, 1.2 here is a margin coefficient
+    mfs_px = (
+        int(2 * mfs * res) + 1
+    )  # Convert mfs to pixels and round up, 1.2 here is a margin coefficient
     if mfs_px % 2 == 0:
         mfs_px += 1  # Ensure kernel size is odd
 
@@ -268,7 +273,11 @@ def _blur(x, mfs, res, entire_eps, dr_mask, dim="xy"):
         #             mfs_kernel_2d[i, j] = 0
         # mfs_kernel_2d = mfs_kernel_2d / mfs_kernel_2d.sum()  # Normalize the 2D kernel
         # Build a circular averaging kernel directly with PyTorch
-        y, x = torch.meshgrid(torch.arange(mfs_px, device=x.device), torch.arange(mfs_px, device=x.device), indexing='ij')
+        y, x = torch.meshgrid(
+            torch.arange(mfs_px, device=x.device),
+            torch.arange(mfs_px, device=x.device),
+            indexing="ij",
+        )
         center = mfs_px // 2
         distance = (y - center) ** 2 + (x - center) ** 2
         radius = (mfs_px // 2) ** 2
@@ -281,7 +290,9 @@ def _blur(x, mfs, res, entire_eps, dr_mask, dim="xy"):
         # Blur using 2D convolution
         entire_eps = (
             F.conv2d(
-                entire_eps.unsqueeze(0).unsqueeze(0),  # Add batch and channel dimensions
+                entire_eps.unsqueeze(0).unsqueeze(
+                    0
+                ),  # Add batch and channel dimensions
                 mfs_kernel_2d.unsqueeze(0).unsqueeze(
                     0
                 ),  # Shape (1, 1, kernel_size, kernel_size)
@@ -310,8 +321,11 @@ def blur(xs, mfs, resolutions, entire_eps, dr_mask, dim="xy"):
     Returns:
     - List of blurred 2D tensors.
     """
-    xs = [_blur(x, mfs, res, entire_eps, dr_mask, dim) for x, res in zip(xs, resolutions)]
+    xs = [
+        _blur(x, mfs, res, entire_eps, dr_mask, dim) for x, res in zip(xs, resolutions)
+    ]
     return xs
+
 
 def _fft(x, mfs, res, entire_eps, dr_mask, dim="xy"):
     entire_eps[dr_mask] = x
@@ -343,11 +357,15 @@ def _fft(x, mfs, res, entire_eps, dr_mask, dim="xy"):
 
 
 def fft(xs, mfs, resolutions, entire_eps, dr_mask, dim="xy"):
-    '''
+    """
     apply fft to filter out the high frequency components for minimum feature size control
-    '''
-    xs = [_fft(x, mfs, res, entire_eps, dr_mask, dim) for x, res in zip(xs, resolutions)]
+    """
+    xs = [
+        _fft(x, mfs, res, entire_eps, dr_mask, dim) for x, res in zip(xs, resolutions)
+    ]
     return xs
+
+
 permittivity_transform_collections = dict(
     mirror_symmetry=mirror_symmetry,
     transpose_symmetry=transpose_symmetry,
@@ -368,7 +386,7 @@ class BaseParametrization(nn.Module):
         region_name: str = "design_region_1",
         cfgs: dict = dict(
             method="levelset",
-            rho_resolution=[50, 0],  #  50 knots per um, 0 means reduced dimention
+            rho_resolution=[50, 0],  #  50 knots per um, 0 means reduced dimension
             transform=dict(),
             init_method="random",
         ),
@@ -424,8 +442,11 @@ class BaseParametrization(nn.Module):
         ### return: permittivity that you would like to dumpout as final solution, typically should be high resolution
         raise NotImplementedError
 
-    def permittivity_transform(self, hr_permittivity, permittivity, cfgs, sharpness, hr_entire_eps, hr_dr_mask):
+    def permittivity_transform(
+        self, hr_permittivity, permittivity, cfgs, sharpness, hr_entire_eps, hr_dr_mask
+    ):
         transform_cfg_list = cfgs["transform"]
+        # print(permittivity)
         # print("this is the transform cfg list", transform_cfg_list, flush=True)
         # plt.figure()
         # plt.imshow(1 - np.rot90(hr_permittivity.cpu().numpy()), cmap="gray")
@@ -453,10 +474,14 @@ class BaseParametrization(nn.Module):
             if "litho" in transform_type:
                 cfg["device"] = self.operation_device
                 # hr_res, res should be contained in the cfgs
-                cfg["entire_eps"] = (hr_entire_eps - hr_entire_eps.min()) / (hr_entire_eps.max() - hr_entire_eps.min()) # normalize the eps
+                cfg["entire_eps"] = (hr_entire_eps - hr_entire_eps.min()) / (
+                    hr_entire_eps.max() - hr_entire_eps.min()
+                )  # normalize the eps
                 cfg["dr_mask"] = hr_dr_mask
             if "blur" in transform_type or "fft" in transform_type:
-                cfg["entire_eps"] = (hr_entire_eps - hr_entire_eps.min()) / (hr_entire_eps.max() - hr_entire_eps.min()) # normalize the eps
+                cfg["entire_eps"] = (hr_entire_eps - hr_entire_eps.min()) / (
+                    hr_entire_eps.max() - hr_entire_eps.min()
+                )  # normalize the eps
                 cfg["dr_mask"] = hr_dr_mask
             hr_permittivity, permittivity = permittivity_transform_collections[
                 transform_type
@@ -471,6 +496,7 @@ class BaseParametrization(nn.Module):
         # plt.close()
         # quit()
         ### we have to match the design region size to be able to be placed in the design region with subpixel smoothing
+
         target_size = [(m.stop - m.start) for m in self.design_region_mask]
 
         ## first we upsample to ~1nm resolution with nearest interpolation to maintain the geometry
@@ -478,8 +504,11 @@ class BaseParametrization(nn.Module):
         src_res = self.hr_device.sim_cfg["resolution"]  # e.g., 310
         tar_res = int(round(1000 / src_res)) * src_res
         ## it also needs to be multiples of the sim resolution to enable subpixel smoothing
+
         hr_size = [int(round(i * tar_res / src_res)) for i in permittivity.shape[-2:]]
+
         hr_size = [int(round(i / j) * j) for i, j in zip(hr_size, target_size)]
+
         # print(permittivity.shape)
         permittivity = _convert_resolution(
             permittivity,
@@ -509,6 +538,7 @@ class BaseParametrization(nn.Module):
         # plt.imshow(1 - np.rot90(hr_permittivity.cpu().numpy()), cmap="gray")
         # plt.savefig(f"./figs/smoothing_lr.png")
         # plt.close()
+        # print(permittivity)
         return hr_permittivity, permittivity
 
     def denormalize_permittivity(self, permittivity):
@@ -518,7 +548,13 @@ class BaseParametrization(nn.Module):
         permittivity = permittivity * (eps_r - eps_bg) + eps_bg
         return permittivity
 
-    def forward(self, sharpness: float, hr_entire_eps: torch.Tensor, hr_dr_mask: torch.Tensor, ls_knots=None):
+    def forward(
+        self,
+        sharpness: float,
+        hr_entire_eps: torch.Tensor,
+        hr_dr_mask: torch.Tensor,
+        ls_knots=None,
+    ):
         ## first build the normalized device permittivity using weights
         ## the built one is the high resolution permittivity for evaluation
         permittivity = self.build_permittivity(self.weights, sharpness, ls_knots)
@@ -534,7 +570,12 @@ class BaseParametrization(nn.Module):
         ## after this, permittivity will be downsampled to match the sim_cfg resolution, e.g., res=50 or 100
         ## hr_permittivity will maintain the high resolution
         hr_permittivity, permittivity = self.permittivity_transform(
-            hr_permittivity, permittivity, self.cfgs, sharpness, hr_entire_eps, hr_dr_mask
+            hr_permittivity,
+            permittivity,
+            self.cfgs,
+            sharpness,
+            hr_entire_eps,
+            hr_dr_mask,
         )
 
         ## we need to denormalize the permittivity to the real permittivity values
