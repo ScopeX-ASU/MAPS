@@ -1,7 +1,7 @@
 """
 Date: 2025-01-04 20:49:15
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-09 18:31:40
+LastEditTime: 2025-02-16 14:31:07
 FilePath: /MAPS/core/invdes/examples/bending.py
 """
 
@@ -18,6 +18,10 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 )
 import torch
+from pyutils.config import Config
+from pyutils.torch_train import (
+    load_model,
+)
 
 from core.invdes.invdesign import InvDesign
 from core.invdes.models import (
@@ -26,9 +30,6 @@ from core.invdes.models import (
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import Bending
 from core.utils import set_torch_deterministic
-from pyutils.torch_train import (
-    load_model,
-)
 
 sys.path.pop(0)
 
@@ -92,6 +93,11 @@ if __name__ == "__main__":
         #     line_search_fn="strong_wolfe",
         #     weight_decay=0,
         # ),
+        optimizer=Config(
+            name="nesterov",
+            lr=1e-2,
+            use_bb=False,
+        ),
     )
     invdesign.optimize(
         plot=True,
