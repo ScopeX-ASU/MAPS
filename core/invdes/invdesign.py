@@ -36,7 +36,7 @@ class InvDesign:
             lr=1e-2,
             # name="lbfgs",
             # line_search_fn="strong_wolfe",
-            # lr=3e-3,
+            # lr=1e-2,
             weight_decay=0,
         ),
         lr_scheduler=Config(
@@ -44,6 +44,7 @@ class InvDesign:
             lr_min=2e-4,
         ),
         sharp_scheduler=Config(
+            mode="cosine",
             name="sharpness",
             init_sharp=1,
             final_sharp=256,
