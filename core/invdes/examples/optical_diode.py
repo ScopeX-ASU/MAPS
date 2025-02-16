@@ -1,7 +1,7 @@
 """
 Date: 1969-12-31 17:00:00
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-12-13 03:06:19
+LastEditTime: 2025-02-16 16:51:36
 FilePath: /MAPS/core/invdes/examples/optical_diode.py
 """
 
@@ -20,14 +20,13 @@ sys.path.insert(
 import torch
 from pyutils.config import Config
 
-from core.invdes import builder
+from core.invdes.invdesign import InvDesign
 from core.invdes.models import (
     OpticalDiodeOptimization,
 )
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import OpticalDiode
 from core.utils import set_torch_deterministic
-from core.invdes.invdesign import InvDesign
 
 sys.path.pop(0)
 if __name__ == "__main__":
@@ -44,6 +43,8 @@ if __name__ == "__main__":
 
     input_port_width = 0.48
     output_port_width = 0.8
+    # exp_name = "nesterov"
+    exp_name = "adam"
 
     sim_cfg.update(
         dict(
@@ -51,7 +52,7 @@ if __name__ == "__main__":
             # border_width=[port_len, port_len, 2, 2],
             border_width=[0, 0, 2, 2],
             resolution=50,
-            plot_root=f"./figs/optical_diode_{'init_try'}",
+            plot_root=f"./figs/optical_diode_{exp_name}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -89,12 +90,23 @@ if __name__ == "__main__":
         operation_device=operation_device,
         obj_cfgs=obj_cfgs,
     ).to(operation_device)
-    invdesign = InvDesign(devOptimization=opt)
+    invdesign = InvDesign(
+        devOptimization=opt,
+        optimizer=Config(
+            # name="adam",
+            name="nesterov",
+            lr=1e-2,
+            use_bb=False,
+        ),
+    )
     invdesign.optimize(
         plot=True,
-        plot_filename=f"optical_diode_{'init_try'}",
+        plot_filename=f"optical_diode_{exp_name}",
         objs=["fwd_trans", "bwd_trans"],
-        field_keys=[("in_slice_1", 1.55, 1, 300), ("out_slice_1", 1.55, 1, 300)],
+        field_keys=[
+            ("in_slice_1", 1.55, "Ez1", 300),
+            ("out_slice_1", 1.55, "Ez1", 300),
+        ],
         in_slice_names=["in_slice_1", "out_slice_1"],
         exclude_slice_names=[],
     )
