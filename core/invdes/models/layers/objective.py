@@ -6,19 +6,18 @@ import numpy as np
 import torch
 from autograd import numpy as npa
 from torch import Tensor
-import matplotlib.pyplot as plt
+
 from core.fdfd.near2far import (
     get_farfields_GreenFunction,
 )
 from core.utils import (
-    Si_eps,
     get_eigenmode_coefficients,
     get_flux,
     get_shape_similarity,
 )
 from thirdparty.ceviche import jacobian
 from thirdparty.ceviche.constants import MU_0
-from core.utils import print_stat
+
 
 class EigenmodeObjective(object):
     def __init__(
@@ -87,11 +86,12 @@ class EigenmodeObjective(object):
                 continue
             for out_mode in out_modes:
                 for temp in target_temps:
-                    src, ht_m, et_m, norm_p, require_sim = self.port_profiles[out_slice_name][
-                        (wl, out_mode)
-                    ]
+                    src, ht_m, et_m, norm_p, require_sim = self.port_profiles[
+                        out_slice_name
+                    ][(wl, out_mode)]
                     norm_power = self.port_profiles[in_slice_name][(wl, in_mode)][3]
                     monitor_slice = self.port_slices[out_slice_name]
+
                     field = fields[(in_slice_name, wl, in_mode, temp)]
                     pol = in_mode[:2]
                     if pol == "Ez":
@@ -143,7 +143,9 @@ class EigenmodeObjective(object):
                     if self.obj_type == "eigenmode":
                         # only record the s parameters for eigenmode
                         # we don't need to record the s parameters if we calculate the phase
-                        self.s_params[(in_slice_name, out_slice_name, out_mode, wl, in_mode, temp)] = {
+                        self.s_params[
+                            (in_slice_name, out_slice_name, out_mode, wl, in_mode, temp)
+                        ] = {
                             "s_p": s_p / norm_power
                             if self.energy
                             else s_p / norm_power**0.5,  # normalized by input power
@@ -243,21 +245,31 @@ class FluxNear2FarObjective(object):
                     xs = extended_farfield_slice_info["xs"]
                     if not xs.shape:
                         extended_farfield_slice_info["xs"] = np.array(
-                            [xs - grid_step, xs] if pol == "Ez" else [xs, xs + grid_step]
+                            [xs - grid_step, xs]
+                            if pol == "Ez"
+                            else [xs, xs + grid_step]
                         )
                     else:
                         extended_farfield_slice_info["xs"] = np.concatenate(
-                            [xs[0:1] - grid_step, xs] if pol == "Ez" else [xs, xs[-1:] + grid_step], axis=0
+                            [xs[0:1] - grid_step, xs]
+                            if pol == "Ez"
+                            else [xs, xs[-1:] + grid_step],
+                            axis=0,
                         )
                 elif direction[0] == "y":
                     ys = extended_farfield_slice_info["ys"]
                     if not ys.shape:
                         extended_farfield_slice_info["ys"] = np.array(
-                            [ys - grid_step, ys] if pol == "Ez" else [ys, ys + grid_step]
+                            [ys - grid_step, ys]
+                            if pol == "Ez"
+                            else [ys, ys + grid_step]
                         )
                     else:
                         extended_farfield_slice_info["ys"] = np.concatenate(
-                            [ys[0:1] - grid_step, ys] if pol == "Ez" else [ys, ys[-1:] + grid_step], axis=0
+                            [ys[0:1] - grid_step, ys]
+                            if pol == "Ez"
+                            else [ys, ys[-1:] + grid_step],
+                            axis=0,
                         )
                 if out_slice_name == "total_farfield_region":
                     with torch.inference_mode():
@@ -382,7 +394,9 @@ class FluxNear2FarObjective(object):
                 s = s / (fz.shape[0] if direction[0] == "x" else fz.shape[1])
 
                 s_list.append(s)
-                self.s_params[(in_slice_name, out_slice_name, self.obj_type, wl, in_mode, temp)] = {
+                self.s_params[
+                    (in_slice_name, out_slice_name, self.obj_type, wl, in_mode, temp)
+                ] = {
                     "s": s,
                 }
         if isinstance(s_list[0], Tensor):
@@ -484,18 +498,37 @@ class FluxObjective(object):
 
                 s_list.append(s)
                 if self.minus_src:  # which means that we are calculating the reflection
-                    self.s_params[(in_slice_name, out_slice_name, self.obj_type, wl, in_mode, temp)] = {
+                    self.s_params[
+                        (
+                            in_slice_name,
+                            out_slice_name,
+                            self.obj_type,
+                            wl,
+                            in_mode,
+                            temp,
+                        )
+                    ] = {
                         "s_m": s,
                         "s_p": 1 - s,
                     }
                 else:
-                    self.s_params[(in_slice_name, out_slice_name, self.obj_type, wl, in_mode, temp)] = {
+                    self.s_params[
+                        (
+                            in_slice_name,
+                            out_slice_name,
+                            self.obj_type,
+                            wl,
+                            in_mode,
+                            temp,
+                        )
+                    ] = {
                         "s": s,
                     }
         if isinstance(s_list[0], Tensor):
             return torch.mean(torch.stack(s_list))
         else:
             return npa.mean(npa.array(s_list))  # we only need absolute flux
+
 
 class ResponseRecorderObjective(object):
     def __init__(
@@ -545,8 +578,7 @@ class ResponseRecorderObjective(object):
                 fz = fields[(in_slice_name, wl, in_mode, temp)][pol]
                 fz = fz[monitor_slice]
                 assert (
-                    len(monitor_slice.x.shape) <= 1
-                    or len(monitor_slice.y.shape) <= 1
+                    len(monitor_slice.x.shape) <= 1 or len(monitor_slice.y.shape) <= 1
                 ), "Only 1D slice is supported for phase recorder"
                 fz = fz.reshape(1, -1)
                 # calculate the phase of fz
@@ -569,6 +601,7 @@ class ResponseRecorderObjective(object):
             return torch.mean(torch.stack(mean_phase_list))
         else:
             return npa.mean(npa.array(mean_phase_list))
+
 
 class ShapeSimilarityObjective(object):
     def __init__(
@@ -782,7 +815,7 @@ class ShapeSimilarityNear2FarObjective(object):
                         component=pol,
                         decimation_factor=4,
                     )
-                    
+
                     fz = farfield[pol][0, ..., 0]
                     # ez = ez[monitor_slice]
                     if (
@@ -1059,12 +1092,14 @@ class ObjectiveFunc(object):
                         "Ex": fx_adj[(slice_name, mode, temp)],
                         "Ey": fy_adj[(slice_name, mode, temp)],
                     }
-                # convert the b_adj --> J_adj since I want uniform here, in forward, we store the J source 
+                # convert the b_adj --> J_adj since I want uniform here, in forward, we store the J source
                 # and this adj_src is normalized so that the power is 1e-8 matches the ez_adj
-                adj_sources[key][(slice_name, mode, temp)] = sim.solver.adj_src[(slice_name, mode, temp)] / 1j / sim.omega 
+                adj_sources[key][(slice_name, mode, temp)] = (
+                    sim.solver.adj_src[(slice_name, mode, temp)] / 1j / sim.omega
+                )
             field_adj_normalizer[key] = flux
         return adj_sources, field_adj, field_adj_normalizer
-    
+
     def read_gradient(self):
         gradients = {}
         for wl, sim in self.sims.items():
@@ -1082,7 +1117,13 @@ class ObjectiveFunc(object):
         temperatures = set(temperatures)
         if custom_source is None:
             for slice_name, port_profile in self.port_profiles.items():
-                for (wl, mode), (source, _, _, norm_power, require_sim) in port_profile.items():
+                for (wl, mode), (
+                    source,
+                    _,
+                    _,
+                    norm_power,
+                    require_sim,
+                ) in port_profile.items():
                     if not require_sim:
                         continue
                     ## here the source is already normalized during norm_run to make sure it has target power
@@ -1091,7 +1132,10 @@ class ObjectiveFunc(object):
                     pol = mode[:2]
                     ## temperature is effective only when there is active region defined
                     for temp in temperatures:
-                        if getattr(self.device, "active_region_masks", None) is not None:
+                        if (
+                            getattr(self.device, "active_region_masks", None)
+                            is not None
+                        ):
                             control_cfgs = {
                                 name: {"T": temp}
                                 for name in self.device.active_region_masks.keys()
@@ -1099,9 +1143,7 @@ class ObjectiveFunc(object):
                             modulated_eps = self.device.apply_active_modulation(
                                 permittivity, control_cfgs
                             )
-                            self.sims[
-                                (wl, pol)
-                            ].eps_r = modulated_eps
+                            self.sims[(wl, pol)].eps_r = modulated_eps
                         else:
                             self.sims[(wl, pol)].eps_r = permittivity
                         ## eps_r: permittivity tensor, denormalized
@@ -1138,9 +1180,11 @@ class ObjectiveFunc(object):
                                 "Ey": Fy,
                                 "Hz": Fz,
                             }
+                        else:
+                            raise ValueError("Invalid polarization")
 
                         self.As[(wl, temp)] = self.sims[(wl, pol)].A
-        else: # we have a custom source to simulate
+        else:  # we have a custom source to simulate
             slice_name = custom_source["slice_name"]
             src = custom_source["source"]
             mode = custom_source["mode"]
@@ -1148,7 +1192,7 @@ class ObjectiveFunc(object):
             direction = custom_source["direction"]
             pol = mode[:2]
 
-            #build source from slice_name and source vector:
+            # build source from slice_name and source vector:
             source_profile = self.device.insert_plane_wave(
                 eps=self.device.epsilon_map,
                 slice=self.device.port_monitor_slices[slice_name],
@@ -1168,9 +1212,7 @@ class ObjectiveFunc(object):
                     modulated_eps = self.device.apply_active_modulation(
                         permittivity, control_cfgs
                     )
-                    self.sims[
-                        (wl, pol)
-                    ].eps_r = modulated_eps
+                    self.sims[(wl, pol)].eps_r = modulated_eps
                 else:
                     self.sims[(wl, pol)].eps_r = permittivity
 
