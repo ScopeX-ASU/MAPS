@@ -1,7 +1,7 @@
 """
 Date: 2024-10-05 02:02:33
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-02-15 14:09:10
+LastEditTime: 2025-02-16 16:54:26
 FilePath: /MAPS/core/invdes/models/layers/parametrization/levelset.py
 """
 
@@ -144,8 +144,9 @@ class LevelSetInterp(object):
             z_interpolated = F.interpolate(
                 z_values, size=(len(x1),), mode="linear", align_corners=True
             )
-            z_const = z_interpolated.squeeze(0).repeat(
-                1, len(y1)
+
+            z_const = (
+                z_interpolated.squeeze(0).repeat(len(y1), 1).t()
             )  # Repeat along y-axis
 
         else:
@@ -391,6 +392,9 @@ class LeveSetParameterization(BaseParametrization):
             for i in range(period // 2):
                 for j in range(period // 2):
                     weight_dict["ls_knots"].data[i::period, j::period] = 0.05
+            for i in range(period // 2, period):
+                for j in range(period // 2, period):
+                    weight_dict["ls_knots"].data[i::period, j::period] = 0.05
         elif init_method == "ball":  ## same as diamond_2
             nn.init.normal_(weight_dict["ls_knots"], mean=0, std=0.01)
             ### create a map with center high, edge low as a ball using mesh grid
@@ -424,10 +428,13 @@ class LeveSetParameterization(BaseParametrization):
                     device=self.operation_device,
                 ),
             )
-            mask = (x.abs() ** p + y.abs() ** p) < 1.1
+            # P=1, 1.2, p=0.5, 1.3, P=0.3, 1.5
+            mask = (x.abs() ** p + y.abs() ** p) < 1.5
+            # mask_ring = ((x.abs() ** 2 + y.abs() ** 2) < 0.6) & ((x.abs() ** 2 + y.abs() ** 2) > 0.3)
+            # mask = mask | mask_ring
             # weight_dict["ls_knots"].data[mask] = nn.init.normal_(weight_dict["ls_knots"].data[mask], mean=0.05, std=0.01)
             weight_dict["ls_knots"].data[mask] = nn.init.normal_(
-                weight_dict["ls_knots"].data[mask], mean=0.05, std=0.01
+                weight_dict["ls_knots"].data[mask], mean=0.06, std=0.01
             )
             # weight_dict["ls_knots"].data[mask] = (1-(x.abs()**p + y.abs()**p)[mask]) * 0.1
         elif init_method == "zeros":
@@ -567,7 +574,6 @@ class LeveSetParameterization(BaseParametrization):
             interpolation=interpolation,
             device=design_param.device,
         )
-
         phi = phi_model.get_ls(x1=phi[0], y1=phi[1], shape=n_phi)  # [76, 2001]
 
         ## This is used to constrain the value to be [0, 1] for heaviside input
