@@ -1,8 +1,8 @@
 """
 Date: 2024-10-04 18:47:39
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-10-07 04:18:59
-FilePath: /Metasurface-Opt/core/models/metamirror.py
+LastEditTime: 2025-02-16 16:43:56
+FilePath: /MAPS/core/invdes/models/metamirror.py
 """
 
 import torch
@@ -19,6 +19,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                     design_region_1=dict(
                         method="levelset",
                         rho_resolution=[50, 0],
+                        interpolation="bilinear",
                         transform=[],
                         init_method="random",
                         binary_projection=dict(
@@ -48,12 +49,14 @@ class DefaultConfig(DefaultOptimizationConfig):
                     fwd_trans=dict(
                         weight=1,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="out_port_1",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="out_slice_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
-                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        wl=[1.55],
+                        temp=[300],
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            1,
+                            "Ez1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="eigenmode",
                         direction="y-",
@@ -63,12 +66,14 @@ class DefaultConfig(DefaultOptimizationConfig):
                     refl_trans=dict(
                         weight=0,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="refl_port_1",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="refl_slice_1",
+                        wl=[1.55],
+                        temp=[300],
                         #### objective is evaluated at all points by sweeping the wavelength and modes
-                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            1,
+                            "Ez1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux_minus_src",
                         direction="x",
@@ -76,12 +81,14 @@ class DefaultConfig(DefaultOptimizationConfig):
                     rad_trans_xp=dict(
                         weight=0,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="rad_monitor_xp",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_monitor_xp",
+                        wl=[1.55],
+                        temp=[300],
                         #### objective is evaluated at all points by sweeping the wavelength and modes
-                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            1,
+                            "Ez1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux",
                         direction="x",
@@ -89,12 +96,14 @@ class DefaultConfig(DefaultOptimizationConfig):
                     rad_trans_xm=dict(
                         weight=0,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="rad_monitor_xm",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_monitor_xm",
+                        wl=[1.55],
+                        temp=[300],
                         #### objective is evaluated at all points by sweeping the wavelength and modes
-                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            1,
+                            "Ez1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux",
                         direction="x",
@@ -102,12 +111,14 @@ class DefaultConfig(DefaultOptimizationConfig):
                     rad_trans_yp=dict(
                         weight=0,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="rad_monitor_yp",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_monitor_yp",
+                        wl=[1.55],
+                        temp=[300],
                         #### objective is evaluated at all points by sweeping the wavelength and modes
-                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            1,
+                            "Ez1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux",
                         direction="y",
@@ -115,12 +126,14 @@ class DefaultConfig(DefaultOptimizationConfig):
                     rad_trans_ym=dict(
                         weight=0,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="rad_monitor_ym",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_monitor_ym",
+                        wl=[1.55],
+                        temp=[300],
                         #### objective is evaluated at all points by sweeping the wavelength and modes
-                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            1,
+                            "Ez1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux",
                         direction="y",
@@ -139,7 +152,26 @@ class MetaMirrorOptimization(BaseOptimization):
         sim_cfg: dict = dict(),
         obj_cfgs=dict(),
         operation_device=torch.device("cuda:0"),
-    ):
+    ):  
+        design_region_param_cfgs_copy = design_region_param_cfgs.copy()
+        design_region_param_cfgs = dict()
+        for region_name in device.design_region_cfgs.keys():
+            design_region_param_cfgs[region_name] = dict(
+                method=design_region_param_cfgs_copy.get("method", "levelset"),
+                rho_resolution=design_region_param_cfgs_copy.get("rho_resolution", [50, 0]),
+                interpolation=design_region_param_cfgs_copy.get("interpolation", "bilinear"),
+                transform=design_region_param_cfgs_copy.get("transform", []),
+                init_method=design_region_param_cfgs_copy.get("init_method", "random"),
+                binary_projection=design_region_param_cfgs_copy.get(
+                    "binary_projection",
+                    dict(
+                        fw_threshold=100,
+                        bw_threshold=100,
+                        mode="regular",
+                    ),
+                ),
+            )
+            
         cfgs = DefaultConfig()  ## this is default configurations
         ## here we accept new configurations and update the default configurations
         cfgs.update(
