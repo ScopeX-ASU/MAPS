@@ -1,8 +1,8 @@
 """
 Date: 2024-10-04 15:10:35
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-10-04 15:42:04
-FilePath: /Metasurface-Opt/core/models/layers/metamirror.py
+LastEditTime: 2025-02-16 16:02:02
+FilePath: /MAPS/core/invdes/models/layers/metamirror.py
 """
 
 from typing import Tuple
@@ -102,13 +102,13 @@ class MetaMirror(N_Ports):
         if verbose:
             logger.info("Start generating sources and monitors ...")
         src_slice = self.build_port_monitor_slice(
-            port_name="in_port_1", slice_name="in_port_1", rel_loc=0.4, rel_width=rel_width
+            port_name="in_port_1", slice_name="in_slice_1", rel_loc=0.4, rel_width=rel_width
         )
         refl_slice = self.build_port_monitor_slice(
-            port_name="in_port_1", slice_name="refl_port_1", rel_loc=0.41, rel_width=rel_width
+            port_name="in_port_1", slice_name="refl_slice_1", rel_loc=0.41, rel_width=rel_width
         )
         out_slice = self.build_port_monitor_slice(
-            port_name="out_port_1", slice_name="out_port_1", rel_loc=0.6, rel_width=rel_width
+            port_name="out_port_1", slice_name="out_slice_1", rel_loc=0.6, rel_width=rel_width
         )
         self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=rel_width)
         radiation_monitor = self.build_radiation_monitor(monitor_name="rad_monitor")
@@ -118,32 +118,35 @@ class MetaMirror(N_Ports):
         if verbose:
             logger.info("Start normalization run ...")
         norm_source_profiles = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Ez1",),
             input_port_name="in_port_1",
-            input_slice_name="in_port_1",
+            input_slice_name="in_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             plot=True,
+            require_sim=True,
         )
 
         norm_refl_profiles = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Ez1",),
             input_port_name="in_port_1",
-            input_slice_name="refl_port_1",
+            input_slice_name="refl_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             plot=True,
+            require_sim=False,
         )
 
         norm_monitor_profiles = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Ez1",),
             input_port_name="out_port_1",
-            input_slice_name="out_port_1",
+            input_slice_name="out_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             plot=True,
+            require_sim=False,
         )
         return norm_source_profiles, norm_refl_profiles, norm_monitor_profiles
