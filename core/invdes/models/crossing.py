@@ -174,8 +174,9 @@ class CrossingOptimization(BaseOptimization):
                     # dict(type="transpose_symmetry", flag=True),
                 ],
                 # init_method="ones",
+                # init_method="checkerboard",
                 # init_method="ball",
-                init_method="diamond_0.5",
+                init_method="diamond_0.3",
                 binary_projection=dict(
                     fw_threshold=100,
                     bw_threshold=100,
