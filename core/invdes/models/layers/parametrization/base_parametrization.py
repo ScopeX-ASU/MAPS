@@ -1,7 +1,7 @@
 """
 Date: 2024-10-04 23:22:57
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-02-16 16:55:16
+LastEditTime: 2025-02-23 10:33:07
 FilePath: /MAPS/core/invdes/models/layers/parametrization/base_parametrization.py
 """
 
@@ -389,6 +389,7 @@ class BaseParametrization(nn.Module):
             rho_resolution=[50, 0],  #  50 knots per um, 0 means reduced dimension
             transform=dict(),
             init_method="random",
+            denorm_mode="linear_eps",  # linear_eps, inverse_eps, linear_index
         ),
         operation_device: Device = torch.device("cuda:0"),
     ) -> None:
@@ -474,13 +475,15 @@ class BaseParametrization(nn.Module):
             if "litho" in transform_type:
                 cfg["device"] = self.operation_device
                 # hr_res, res should be contained in the cfgs
-                cfg["entire_eps"] = (hr_entire_eps - hr_entire_eps.min()) / (
-                    hr_entire_eps.max() - hr_entire_eps.min()
+                eps_max, eps_min = hr_entire_eps.data.max(), hr_entire_eps.data.min()
+                cfg["entire_eps"] = (hr_entire_eps - eps_min) / (
+                    eps_max - eps_min
                 )  # normalize the eps
                 cfg["dr_mask"] = hr_dr_mask
             if "blur" in transform_type or "fft" in transform_type:
-                cfg["entire_eps"] = (hr_entire_eps - hr_entire_eps.min()) / (
-                    hr_entire_eps.max() - hr_entire_eps.min()
+                eps_max, eps_min = hr_entire_eps.data.max(), hr_entire_eps.data.min()
+                cfg["entire_eps"] = (hr_entire_eps - eps_min) / (
+                    eps_max - eps_min
                 )  # normalize the eps
                 cfg["dr_mask"] = hr_dr_mask
             hr_permittivity, permittivity = permittivity_transform_collections[
@@ -541,11 +544,34 @@ class BaseParametrization(nn.Module):
         # print(permittivity)
         return hr_permittivity, permittivity
 
-    def denormalize_permittivity(self, permittivity):
+    def denormalize_permittivity(self, permittivity, mode: str | None = None):
+        ## input normalized permittivity is from [0,1]
+        ## this is called interpolation process, linear interpolation is one common method
+        ## however, we can also use other methods such as nonlinear interpolation, e.g., create absorption (imag part of eps) for intermediate permittivity density
         eps_r = self.design_region_cfg["eps"]
         eps_bg = self.design_region_cfg["eps_bg"]
+        mode = mode or self.cfgs["denorm_mode"]
 
-        permittivity = permittivity * (eps_r - eps_bg) + eps_bg
+        alg, exp = mode.split("_")
+
+        if exp == "eps":
+            exp = 1
+        elif exp == "index":
+            exp = 0.5
+        else:
+            exp = float(exp)
+
+        if alg == "linear":
+            pass
+        elif alg == "inverse":
+            exp = -exp
+        else:
+            raise ValueError(f"Unsupported permittivity denormalization mode: {mode}")
+
+        permittivity = (permittivity * (eps_r**exp - eps_bg**exp) + eps_bg**exp) ** (
+            1 / exp
+        )
+
         return permittivity
 
     def forward(
