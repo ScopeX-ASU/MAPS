@@ -1,7 +1,7 @@
 """
 Date: 2024-10-05 02:02:33
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-02-16 16:54:26
+LastEditTime: 2025-02-23 10:34:04
 FilePath: /MAPS/core/invdes/models/layers/parametrization/levelset.py
 """
 
@@ -279,6 +279,7 @@ class LeveSetParameterization(BaseParametrization):
                 dict(type="transpose_symmetry", flag=False),  # Transpose symmetry
             ],
             init_method="random",
+            denorm_mode="linear_eps",
         ),
         **kwargs,
     ):

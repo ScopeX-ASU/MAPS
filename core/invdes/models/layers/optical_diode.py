@@ -12,8 +12,11 @@ __all__ = ["OpticalDiode"]
 class OpticalDiode(N_Ports):
     def __init__(
         self,
-        material_r: str = "Si",  # waveguide material
+        material_r1: str = "Si",  # waveguide material
+        material_r2: str = "SiO2",  # waveguide material
         material_bg: str = "SiO2",  # background material
+        material_in_port: str = "Si",  # input port material
+        material_out_port: str = "Si",  # output port material
         sim_cfg: dict = {
             "border_width": [
                 0,
@@ -34,8 +37,28 @@ class OpticalDiode(N_Ports):
         device: torch.device = torch.device("cuda:0"),
     ):
         wl_cen = sim_cfg["wl_cen"]
-        eps_r_fn = material_fn_dict[material_r]
+        if isinstance(material_r1, str):
+            eps_r1_fn = material_fn_dict[material_r1]
+        else:
+            eps_r1_fn = lambda wl: material_r1
+        
+        if isinstance(material_r2, str):
+            eps_r2_fn = material_fn_dict[material_r2]
+        else:
+            eps_r2_fn = lambda wl: material_r2
+        
+        if isinstance(material_in_port, str):
+            eps_in_port_fn = material_fn_dict[material_in_port]
+        else:
+            eps_in_port_fn = lambda wl: material_in_port
+        
+        if isinstance(material_out_port, str):
+            eps_out_port_fn = material_fn_dict[material_out_port]
+        else:
+            eps_out_port_fn = lambda wl: material_out_port
+
         eps_bg_fn = material_fn_dict[material_bg]
+
         port_cfgs = dict(
             in_port_1=dict(
                 type="box",
@@ -84,31 +107,31 @@ class OpticalDiode(N_Ports):
         )
 
     def init_monitors(self, verbose: bool = True):
-        rel_width = 2
+        rel_width = 3
         if verbose:
             logger.info("Start generating sources and monitors ...")
         src_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="in_slice_1",
-            rel_loc=0.25,
+            rel_loc=0.7 / self.port_cfgs["in_port_1"]["size"][0],
             rel_width=rel_width,
         )
         refl_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="refl_slice_1",
-            rel_loc=0.26,
+            rel_loc=0.75 / self.port_cfgs["in_port_1"]["size"][0],
             rel_width=rel_width,
         )
         out_slice = self.build_port_monitor_slice(
             port_name="out_port_1",
             slice_name="out_slice_1",
-            rel_loc=0.75,
+            rel_loc=1 - 0.7 / self.port_cfgs["out_port_1"]["size"][0],
             rel_width=rel_width,
         )
         out_refl_slice = self.build_port_monitor_slice(
             port_name="out_port_1",
             slice_name="refl_slice_2",
-            rel_loc=0.74,
+            rel_loc=1 - 0.75 / self.port_cfgs["out_port_1"]["size"][0],
             rel_width=rel_width,
         )
         self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=rel_width)
