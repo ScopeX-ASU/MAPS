@@ -42,14 +42,16 @@ class OpticalDiode(N_Ports):
                 direction="x",
                 center=[-(port_len[0] + box_size[0] / 2) / 2, 0],
                 size=[port_len[0] + box_size[0] / 2, port_width[0]],
-                eps=eps_r_fn(wl_cen),
+                # eps=eps_r_fn(wl_cen),
+                eps=2.411707**2, # neff from Lumerical
             ),
             out_port_1=dict(
                 type="box",
                 direction="x",
                 center=[(port_len[1] + box_size[0] / 2) / 2, 0],
                 size=[port_len[1] + box_size[0] / 2, port_width[1]],
-                eps=eps_r_fn(wl_cen),
+                # eps=eps_r_fn(wl_cen),
+                eps=2.688673**2, # neff from Lumerical
             ),
         )
 
@@ -62,8 +64,13 @@ class OpticalDiode(N_Ports):
                     0,
                 ],
                 size=box_size,
-                eps=eps_r_fn(wl_cen),
-                eps_bg=eps_bg_fn(wl_cen),
+                # eps=eps_r_fn(wl_cen),
+                # eps_bg=eps_bg_fn(wl_cen),
+                eps = 2.848152**2,
+                # eps_bg = 2.539683**2, # 150
+                # eps_bg = 2.594905**2, # 160
+                # eps_bg = 2.645874**2, # 170
+                eps_bg = 2.692927**2, # 180
             )
         )
 

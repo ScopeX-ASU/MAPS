@@ -17,8 +17,8 @@ from core.utils import (
 )
 from thirdparty.ceviche import jacobian
 from thirdparty.ceviche.constants import MU_0
-
-
+from core.utils import print_stat
+import math
 class EigenmodeObjective(object):
     def __init__(
         self,
@@ -80,7 +80,7 @@ class EigenmodeObjective(object):
         ## for each wavelength, we evaluate the objective
         for (wl, pol), sim in self.sims.items():
             ## we calculate the average eigen energy for all output modes
-            if wl not in target_wls:
+            if not any(math.isclose(wl, target_wl, rel_tol=0, abs_tol=1e-4) for target_wl in target_wls):
                 continue
             if pol != in_mode[:2]:
                 continue
@@ -571,7 +571,7 @@ class ResponseRecorderObjective(object):
         ## for each wavelength, we evaluate the objective
         for (wl, pol), sim in self.sims.items():
             ## we calculate the average eigen energy for all output modes
-            if wl not in target_wls:
+            if not any(math.isclose(wl, target_wl, rel_tol=0, abs_tol=1e-4) for target_wl in target_wls):
                 continue
             for temp in target_temps:
                 monitor_slice = self.port_slices[out_slice_name]
@@ -665,7 +665,7 @@ class ShapeSimilarityObjective(object):
         ## for each wavelength, we evaluate the objective
         for (wl, pol), sim in self.sims.items():
             ## we calculate the average eigen energy for all output modes
-            if wl not in target_wls:
+            if not any(math.isclose(wl, target_wl, rel_tol=0, abs_tol=1e-4) for target_wl in target_wls):
                 continue
             if pol != in_mode[:2]:
                 continue
@@ -766,7 +766,7 @@ class ShapeSimilarityNear2FarObjective(object):
         ## for each wavelength, we evaluate the objective
         for (wl, pol), sim in self.sims.items():
             ## we calculate the average eigen energy for all output modes
-            if wl not in target_wls:
+            if not any(math.isclose(wl, target_wl, rel_tol=0, abs_tol=1e-4) for target_wl in target_wls):
                 continue
             if pol != in_mode[:2]:
                 continue

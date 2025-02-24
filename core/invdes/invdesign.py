@@ -106,6 +106,7 @@ class InvDesign:
         dump_gds=False,
         save_model=False,
         field_component=None,
+        ckpt_name=None,
     ):
         if plot:
             assert plot_filename is not None, "plot_filename must be provided"
@@ -160,7 +161,9 @@ class InvDesign:
             if i == self._cfg.run.n_epochs - 1 and save_model:
                 if plot_filename.endswith(".png"):
                     plot_filename = plot_filename[:-4]
-                self.save_model(results["obj"].item(), f"./checkpoint/{plot_filename}.pt")
+                if ckpt_name is not None:
+                    ckpt_name = plot_filename
+                self.save_model(results["obj"].item(), f"./checkpoint/{ckpt_name}.pt")
             
             logger.info(log)
             # update the learning rate

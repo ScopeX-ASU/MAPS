@@ -30,7 +30,7 @@ from core.utils import set_torch_deterministic
 
 sys.path.pop(0)
 if __name__ == "__main__":
-    gpu_id = 0
+    gpu_id = 3
     torch.cuda.set_device(gpu_id)
     operation_device = torch.device("cuda:" + str(gpu_id))
     torch.backends.cudnn.benchmark = True
@@ -38,13 +38,13 @@ if __name__ == "__main__":
     # first we need to instantiate the a optimization object
     sim_cfg = DefaultSimulationConfig()
 
-    opticaldiode_region_size = (3, 3)
+    opticaldiode_region_size = (7, 6)
     port_len = 1.8
 
     input_port_width = 0.48
     output_port_width = 0.8
-    # exp_name = "nesterov"
-    exp_name = "adam"
+    exp_name = "180_220"
+    # exp_name = "adam"
 
     sim_cfg.update(
         dict(
@@ -52,7 +52,7 @@ if __name__ == "__main__":
             # border_width=[port_len, port_len, 2, 2],
             border_width=[0, 0, 2, 2],
             resolution=50,
-            plot_root=f"./figs/optical_diode_{exp_name}",
+            plot_root=f"./figs/optical_diode_{opticaldiode_region_size[0]}_{opticaldiode_region_size[1]}_{exp_name}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -109,4 +109,5 @@ if __name__ == "__main__":
         ],
         in_slice_names=["in_slice_1", "out_slice_1"],
         exclude_slice_names=[],
+        dump_gds=True,
     )

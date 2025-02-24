@@ -191,6 +191,7 @@ class BaseOptimization(nn.Module):
             hr_device=self.hr_device,
             sim_cfg=self.sim_cfg,
             parametrization_cfgs=self.design_region_param_cfgs,
+            operation_device=self.operation_device,
         )  ## nn.ModuleDict = {region_name: nn.Module, ...}
 
         self.objective_layer = SimulatedFoM(self.cal_obj_grad, self.sim_cfg["solver"])
@@ -420,12 +421,17 @@ class BaseOptimization(nn.Module):
         )
 
     def dump_gds_files(self, filename):
+        design_region_mask_list = []
+        for design_region_name, design_region_mask in self.device.design_region_masks.items():
+            design_region_mask_list.append(design_region_mask)
+        assert len(design_region_mask_list) == 1, "Only support one design region for now"
+        design_region_mask = design_region_mask_list[0]
         if isinstance(self._eps_map, Tensor) or isinstance(self._eps_map, np.ndarray):
-            max_permittivity = self._eps_map.max().item()
-            min_permittivity = self._eps_map.min().item()
+            max_permittivity = self._eps_map[design_region_mask].max().item()
+            min_permittivity = self._eps_map[design_region_mask].min().item()
         elif isinstance(self._eps_map, ArrayBox):
-            max_permittivity = self._eps_map._value.max()
-            min_permittivity = self._eps_map._value.min()
+            max_permittivity = self._eps_map[design_region_mask]._value.max()
+            min_permittivity = self._eps_map[design_region_mask]._value.min()
         else:
             raise ValueError(f"Unknown type of eps_map: {type(self._eps_map)}")
         final_design_eps = self._eps_map.detach().cpu().numpy()

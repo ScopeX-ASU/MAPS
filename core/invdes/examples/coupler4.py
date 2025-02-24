@@ -35,7 +35,7 @@ if __name__ == "__main__":
     sim_cfg = DefaultSimulationConfig()
     test_sim_cfg = DefaultSimulationConfig()
 
-    crossing_region_size = (5, 5)
+    crossing_region_size = (8, 8)
     port_len = 2
 
     input_port_width = 0.48
@@ -47,8 +47,8 @@ if __name__ == "__main__":
     n_wl_test = 11
     wls = np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl)
     test_wls = np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl_test)
-    # exp_comment = "org_eps_tgt_25_MFS_100"
-    exp_comment = "test"
+    exp_comment = "eff_eps_tgt_24_MFS_100_adam"
+    # exp_comment = "test"
     sim_cfg.update(
         dict(
             solver="ceviche_torch",
@@ -109,7 +109,7 @@ if __name__ == "__main__":
             if "rad" in name:
                 fom = fom + obj["weight"] * obj["value"]
         ## add extra contrast ratio
-        target = 0.25
+        target = 0.24
         balance = 0
         for wl in wls:
             balance += (
@@ -398,10 +398,9 @@ if __name__ == "__main__":
     invdesign = InvDesign(
         devOptimization=opt,
         optimizer=Config(
-            # name="Adam",
-            # lr=1e-2,
-            name="lbfgs",
-            line_search_fn="strong_wolfe",
+            # name="lbfgs",
+            # line_search_fn="strong_wolfe",
+            name="Adam",
             lr=1e-2,
             weight_decay=0,
         ),
@@ -418,6 +417,8 @@ if __name__ == "__main__":
         in_slice_names=["in_slice_1"],
         exclude_slice_names=[],
         dump_gds=True,
+        save_model=True,
+        ckpt_name=f"coupler4_{'port4'}_s{crossing_region_size[0]}x{crossing_region_size[1]}_c-{exp_comment}",
     )
     test_opt = CrossingOptimization(
         device=test_device,
@@ -452,7 +453,7 @@ if __name__ == "__main__":
     with open(csv_filename, mode='w', newline='') as csv_file:
         csv_writer = csv.writer(csv_file)
         # Write the header
-        csv_writer.writerow(['Wavelength', 'Forward Transmission', 'Reflection Transmission', 'Top Cross Talk', 'Bottom Cross Talk'])
+        csv_writer.writerow(['Wavelength', 'S31', 'S11', 'S21', 'S41'])
         # Write the data row by row
         for i, wl in enumerate(wl_list):
             csv_writer.writerow([wl, fwd_trans_list[i], refl_trans_list[i], top_cross_talk_list[i], bot_cross_talk_list[i]])
