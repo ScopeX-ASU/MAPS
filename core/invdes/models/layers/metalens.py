@@ -36,6 +36,7 @@ class MetaLens(N_Ports):
         port_len: Tuple[float] = (1, 1),
         port_width: Tuple[float] = (3, 2),
         nearfield_dx: float = 0.5,  # distance from metalens surface to nearfield monitor, e.g., 500 nm
+        nearfield_offset: float = 0, 
         nearfield_size: float = 4,  # monitor size of nearfield monitor, e.g., 1um
         farfield_dxs: Tuple[float] = (
             (10, 30),
@@ -43,6 +44,7 @@ class MetaLens(N_Ports):
         farfield_sizes: Tuple[float] = (
             2,
         ),  # monitor size of multiple farfield monitors, e.g., (1um) (dim-x, dim-y)
+        farfield_offset: float = 0, # only support y direction offset for now
         device: torch.device = torch.device("cuda:0"),
     ):
         wl_cen = sim_cfg["wl_cen"]
@@ -53,9 +55,11 @@ class MetaLens(N_Ports):
         size_x = box_size[0] + port_len[0] + port_len[1] + substrate_depth
         size_y = aperture
         self.nearfield_dx = nearfield_dx
+        self.nearfield_offset = nearfield_offset
         self.nearfield_size = nearfield_size
         self.farfield_dxs = farfield_dxs
         self.farfield_sizes = farfield_sizes
+        self.farfield_offset = farfield_offset
         self.box_size = box_size
         self.aperture = aperture
         self.substrate_depth = substrate_depth
@@ -147,7 +151,7 @@ class MetaLens(N_Ports):
                 self.nearfield_dx
                 + self.port_cfgs["out_port_1"]["center"][0]
                 - self.port_cfgs["out_port_1"]["size"][0] / 2,
-                0,
+                self.nearfield_offset,
             ),
             size=(0, self.nearfield_size),
             direction="x+",
@@ -214,7 +218,7 @@ class MetaLens(N_Ports):
                 direction="x+",
                 center=(
                     surface_x + (farfield_dx[0] + farfield_dx[1]) / 2,
-                    0,
+                    self.farfield_offset,
                 ),
                 size=(farfield_dx[1] - farfield_dx[0], farfield_size),
             )

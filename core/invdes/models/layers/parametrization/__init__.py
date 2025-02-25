@@ -14,7 +14,7 @@ _param_registry = {"levelset": LeveSetParameterization}
 __all__ = ["parametrization_builder"]
 
 def parametrization_builder(
-    device, hr_device, sim_cfg, parametrization_cfgs, **kwargs
+    device, hr_device, sim_cfg, parametrization_cfgs, operation_device, **kwargs
 ):     
     ### build multiple design regions as a dictionary of nn.Module
     param_dict = nn.ModuleDict()
@@ -28,6 +28,7 @@ def parametrization_builder(
             sim_cfg=sim_cfg,
             region_name=region_name,
             cfgs=param_cfg,
+            operation_device=operation_device,
             **kwargs,
         )
     return param_dict

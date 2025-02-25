@@ -21,3 +21,4 @@ from .optical_diode import *
 from .tdm import *
 from .utils import *
 from .wdm import *
+from .mode_mux import *

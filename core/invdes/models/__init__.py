@@ -17,3 +17,4 @@ from .mmi import MMIOptimization
 from .optical_diode import OpticalDiodeOptimization
 from .tdm import TDMOptimization
 from .wdm import WDMOptimization
+from .mode_mux import ModeMuxOptimization

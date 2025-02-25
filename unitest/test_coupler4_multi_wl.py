@@ -44,8 +44,8 @@ if __name__ == "__main__":
     n_wl_test = 11
     wls = np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl)
     test_wls = np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl_test)
-    # exp_comment = "org_eps_tgt_25_MFS_100"
-    exp_comment = "test"
+    exp_comment = "eff_eps_tgt_24_MFS_100_LBFGS"
+    # exp_comment = "test"
     test_sim_cfg.update(
         dict(
             solver="ceviche_torch",

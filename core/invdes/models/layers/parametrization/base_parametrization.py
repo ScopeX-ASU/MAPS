@@ -278,12 +278,14 @@ def _blur(x, mfs, res, entire_eps, dr_mask, dim="xy"):
             torch.arange(mfs_px, device=x.device),
             indexing="ij",
         )
+        x = x.to(entire_eps.device)
+        y = y.to(entire_eps.device)
         center = mfs_px // 2
         distance = (y - center) ** 2 + (x - center) ** 2
         radius = (mfs_px // 2) ** 2
 
         # Generate circular kernel mask
-        mfs_kernel_2d = (distance <= radius).float()
+        mfs_kernel_2d = (distance <= radius).float().to(x.device)
 
         # Normalize the kernel to ensure it sums to 1
         mfs_kernel_2d /= mfs_kernel_2d.sum()
