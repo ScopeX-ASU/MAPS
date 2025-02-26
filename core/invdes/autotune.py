@@ -68,10 +68,7 @@ class AutoTune(object):
         self.distributions = self.define_distribution(self._cfg.params_cfgs)
 
     def define_distribution(self, params_cfgs):
-        distributions = {
-            # "C": optuna.distributions.FloatDistribution(1e-7, 10.0, log=True),
-            # "solver": optuna.distributions.CategoricalDistribution(("lbfgs", "saga")),
-        }
+        distributions = {}
         for key, param_cfg in params_cfgs.items():
             param_cfg = deepcopy(param_cfg)
             p_type = param_cfg.pop("type")
