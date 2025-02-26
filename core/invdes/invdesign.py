@@ -77,7 +77,7 @@ class InvDesign:
             scheduler_type="sharp_scheduler",
             config_total=self._cfg,
         )
-        self.plot_thread = ThreadPoolExecutor(2)
+        # self.plot_thread = ThreadPoolExecutor(2)
         self.saver = BestKModelSaver(
             k=1,
             descend=False,
