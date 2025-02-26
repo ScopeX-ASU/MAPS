@@ -33,6 +33,7 @@ class Bending(N_Ports):
         port_len: Tuple[float] = (1.8, 1.8),
         port_width: Tuple[float] = (0.48, 0.48),
         device: torch.device = torch.device("cuda:0"),
+        verbose: bool = True,  # whether to print the device information
     ):
         # ----------------------------------
         # |                                |
@@ -86,6 +87,7 @@ class Bending(N_Ports):
             geometry_cfgs=geometry_cfgs,
             design_region_cfgs=design_region_cfgs,
             device=device,
+            verbose=verbose,
         )
 
     def init_monitors(self, verbose: bool = True):

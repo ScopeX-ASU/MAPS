@@ -1,7 +1,7 @@
 """
 Date: 2024-10-02 20:59:04
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-09 02:57:17
+LastEditTime: 2025-02-25 23:16:17
 FilePath: /MAPS/core/invdes/models/layers/device_base.py
 """
 
@@ -182,6 +182,7 @@ class N_Ports(BaseDevice):
             "plot_root": "./figs",
         },
         device="cuda:0",
+        verbose: bool = True,
     ):
         super().__init__()
         self.eps_bg = eps_bg
@@ -202,6 +203,7 @@ class N_Ports(BaseDevice):
             grid_step=self.grid_step,
         )
         self.device = device
+        self.verbose = verbose
         super().__init__(**device_cfg)
         self.update_device_config(self.__class__.__name__, device_cfg)
         self.update_simulation_config(sim_cfg)

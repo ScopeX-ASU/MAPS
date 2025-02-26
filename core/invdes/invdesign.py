@@ -107,6 +107,7 @@ class InvDesign:
         save_model=False,
         field_component=None,
         ckpt_name=None,
+        verbose: bool=True,
     ):
         if plot:
             assert plot_filename is not None, "plot_filename must be provided"
@@ -153,6 +154,7 @@ class InvDesign:
 
             self.optimizer.step(closure)
             results = closure.results
+            self.results = results # record this result
 
             log = f"Step {i:3d} (sharp: {sharpness:.1f}) "
             log += ", ".join(
@@ -165,7 +167,8 @@ class InvDesign:
                     ckpt_name = plot_filename
                 self.save_model(results["obj"].item(), f"./checkpoint/{ckpt_name}.pt")
             
-            logger.info(log)
+            if verbose:
+                logger.info(log)
             # update the learning rate
             self.lr_scheduler.step()
             # update the sharpness

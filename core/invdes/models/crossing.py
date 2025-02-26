@@ -158,6 +158,7 @@ class CrossingOptimization(BaseOptimization):
         sim_cfg: dict = dict(),
         obj_cfgs=dict(),
         operation_device=torch.device("cuda:0"),
+        verbose: bool = True,
     ):
         design_region_param_cfgs = dict()
         for region_name in device.design_region_cfgs.keys():
@@ -177,6 +178,8 @@ class CrossingOptimization(BaseOptimization):
                 # init_method="checkerboard",
                 # init_method="ball",
                 init_method="diamond_0.3",
+                # denorm_mode="linear_index",
+                denorm_mode="linear_1",
                 binary_projection=dict(
                     fw_threshold=100,
                     bw_threshold=100,
@@ -201,4 +204,5 @@ class CrossingOptimization(BaseOptimization):
             sim_cfg=cfgs.sim_cfg,
             obj_cfgs=cfgs.obj_cfgs,
             operation_device=operation_device,
+            verbose=verbose,
         )

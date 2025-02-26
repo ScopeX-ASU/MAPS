@@ -1,7 +1,7 @@
 """
 Date: 2024-10-04 18:49:06
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-02-12 19:32:27
+LastEditTime: 2025-02-25 23:20:21
 FilePath: /MAPS/core/invdes/models/base_optimization.py
 """
 
@@ -129,9 +129,9 @@ class BaseOptimization(nn.Module):
         sim_cfg: dict = dict(),
         obj_cfgs=dict(),
         operation_device: Device = torch.device("cuda:0"),
+        verbose: bool = True,
     ) -> None:
         super().__init__()
-
         self.device = device
         self.hr_device = hr_device
         self.operation_device = operation_device
@@ -154,14 +154,15 @@ class BaseOptimization(nn.Module):
             self.operation_device
         )
         self.design_region_masks = device.design_region_masks
+        self.verbose = verbose
 
         self.build_parameters()
 
         ### need to generate source/monitors
-        device.init_monitors()
+        device.init_monitors(verbose=verbose)
 
         ### need to run normalization run
-        device.norm_run()
+        device.norm_run(verbose=verbose)
         self.norm_run_profiles = (
             device.port_sources_dict
         )  # {input_slice_name: source_profiles 2d array, ...}
@@ -185,7 +186,8 @@ class BaseOptimization(nn.Module):
         ## each design region has a name, and it is an nn.Module.
         ## its self.weights is a nn.ParameterDict which contains all its learnable parameters
         ## during initialization, it will build all parameters and run reset_parameters
-        logger.info("Start building design region parametrizations ...")
+        if self.verbose:
+            logger.info("Start building design region parametrizations ...")
         self.design_region_param_dict = parametrization_builder(
             device=self.device,
             hr_device=self.hr_device,
