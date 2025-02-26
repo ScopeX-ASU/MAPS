@@ -3,7 +3,7 @@ import logging
 import math
 import random
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Tuple
 
 import autograd.numpy as npa
 import matplotlib.pyplot as plt
@@ -369,6 +369,7 @@ def _load_opt_cfgs(opt_cfg_file_path):
         del opt_cfgs["_fusion_func"]
     return opt_cfgs, resolution
 
+
 def cal_fom_from_fwd_field(
     Ez4adj,
     Ez4fullfield,
@@ -400,7 +401,9 @@ def cal_fom_from_fwd_field(
             Hx4fullfield_i = Hx4adj_i
             Hy4fullfield_i = Hy4adj_i
         else:
-            Hx4fullfield_vec, Hy4fullfield_vec = sim[wl[i].item()]._Ez_to_Hx_Hy(Ez4fullfield_i.flatten())
+            Hx4fullfield_vec, Hy4fullfield_vec = sim[wl[i].item()]._Ez_to_Hx_Hy(
+                Ez4fullfield_i.flatten()
+            )
             Hx4fullfield_i = Hx4fullfield_vec.reshape(Ez4fullfield_i.shape)
             Hy4fullfield_i = Hy4fullfield_vec.reshape(Ez4fullfield_i.shape)
 
@@ -414,11 +417,15 @@ def cal_fom_from_fwd_field(
             in_mode = opt_cfg["in_mode"]
             out_modes = opt_cfg.get("out_modes", [])
             out_modes = [int(mode) for mode in out_modes]
-            assert len(out_modes) == 1, f"The code can handle multiple modes, but I have not check if it is correct"
+            assert len(out_modes) == 1, (
+                f"The code can handle multiple modes, but I have not check if it is correct"
+            )
             temperture = opt_cfg["temp"]
             temperture = [float(temp) for temp in temperture]
             wavelength = opt_cfg["wl"]
-            assert len(wavelength) == 1, f"only support one wavelength for now but the wavelength is: {wavelength}"
+            assert len(wavelength) == 1, (
+                f"only support one wavelength for now but the wavelength is: {wavelength}"
+            )
             wavelength = wavelength[0]
             input_slice_name = opt_cfg["in_slice_name"]
             obj_type = opt_cfg["type"]
@@ -436,7 +443,9 @@ def cal_fom_from_fwd_field(
                 or wavelength != float(wl[i].item())
             ):
                 continue
-            monitor_slice_list.append(monitor) # add the monitor to the list so that we can later calculate the incident light field
+            monitor_slice_list.append(
+                monitor
+            )  # add the monitor to the list so that we can later calculate the incident light field
             if obj_type == "eigenmode":
                 fom = torch.tensor(0.0, device=Ez4fullfield_i.device)
                 for output_mode in out_modes:
@@ -444,18 +453,20 @@ def cal_fom_from_fwd_field(
                         hx=Hx4adj_i,
                         hy=Hy4adj_i,
                         ez=Ez4adj_i,
-                        ht_m=ht_ms[f"ht_m-wl-{float(wl[i].item())}-slice-{out_slice_name}-mode-{output_mode}"][
-                            i
-                        ],
-                        et_m=et_ms[f"et_m-wl-{float(wl[i].item())}-slice-{out_slice_name}-mode-{output_mode}"][
-                            i
-                        ],
+                        ht_m=ht_ms[
+                            f"ht_m-wl-{float(wl[i].item())}-slice-{out_slice_name}-mode-{output_mode}"
+                        ][i],
+                        et_m=et_ms[
+                            f"et_m-wl-{float(wl[i].item())}-slice-{out_slice_name}-mode-{output_mode}"
+                        ][i],
                         monitor=monitor,
                         grid_step=1 / resolution,
                         direction=direction,
                         energy=True,
                     )
-                    fom_inner = weight * fom_inner / 1e-8  # normalize with the input power
+                    fom_inner = (
+                        weight * fom_inner / 1e-8
+                    )  # normalize with the input power
                     fom = fom + fom_inner
             elif "flux" in obj_type:  # flux or flux_minus_src
                 fom = get_flux(
@@ -532,7 +543,9 @@ def cal_total_field_adj_src_from_fwd_field(
                 Hx4fullfield_i = Hx4adj_i
                 Hy4fullfield_i = Hy4adj_i
             else:
-                Hx4fullfield_vec, Hy4fullfield_vec = sim[wl[i].item()]._Ez_to_Hx_Hy(Ez4fullfield_i.flatten())
+                Hx4fullfield_vec, Hy4fullfield_vec = sim[wl[i].item()]._Ez_to_Hx_Hy(
+                    Ez4fullfield_i.flatten()
+                )
                 Hx4fullfield_i = Hx4fullfield_vec.reshape(Ez4fullfield_i.shape)
                 Hy4fullfield_i = Hy4fullfield_vec.reshape(Ez4fullfield_i.shape)
 
@@ -552,11 +565,15 @@ def cal_total_field_adj_src_from_fwd_field(
                 in_mode = opt_cfg["in_mode"]
                 out_modes = opt_cfg.get("out_modes", [])
                 out_modes = [int(mode) for mode in out_modes]
-                assert len(out_modes) == 1, f"The code can handle multiple modes, but I have not check if it is correct"
+                assert len(out_modes) == 1, (
+                    f"The code can handle multiple modes, but I have not check if it is correct"
+                )
                 temperture = opt_cfg["temp"]
                 temperture = [float(temp) for temp in temperture]
                 wavelength = opt_cfg["wl"]
-                assert len(wavelength) == 1, f"only support one wavelength for now but the wavelength is: {wavelength}"
+                assert len(wavelength) == 1, (
+                    f"only support one wavelength for now but the wavelength is: {wavelength}"
+                )
                 wavelength = wavelength[0]
                 input_slice_name = opt_cfg["in_slice_name"]
                 obj_type = opt_cfg["type"]
@@ -574,7 +591,9 @@ def cal_total_field_adj_src_from_fwd_field(
                     or wavelength != float(wl[i].item())
                 ):
                     continue
-                monitor_slice_list.append(monitor) # add the monitor to the list so that we can later calculate the incident light field
+                monitor_slice_list.append(
+                    monitor
+                )  # add the monitor to the list so that we can later calculate the incident light field
                 if obj_type == "eigenmode":
                     fom = torch.tensor(0.0, device=Ez4fullfield_i.device)
                     for output_mode in out_modes:
@@ -582,18 +601,20 @@ def cal_total_field_adj_src_from_fwd_field(
                             hx=Hx4adj_i,
                             hy=Hy4adj_i,
                             ez=Ez4adj_i,
-                            ht_m=ht_ms[f"ht_m-wl-{float(wl[i].item())}-slice-{out_slice_name}-mode-{output_mode}"][
-                                i
-                            ],
-                            et_m=et_ms[f"et_m-wl-{float(wl[i].item())}-slice-{out_slice_name}-mode-{output_mode}"][
-                                i
-                            ],
+                            ht_m=ht_ms[
+                                f"ht_m-wl-{float(wl[i].item())}-slice-{out_slice_name}-mode-{output_mode}"
+                            ][i],
+                            et_m=et_ms[
+                                f"et_m-wl-{float(wl[i].item())}-slice-{out_slice_name}-mode-{output_mode}"
+                            ][i],
                             monitor=monitor,
                             grid_step=1 / resolution,
                             direction=direction,
                             energy=True,
                         )
-                        fom_inner = weight * fom_inner / 1e-8  # normalize with the input power
+                        fom_inner = (
+                            weight * fom_inner / 1e-8
+                        )  # normalize with the input power
                         fom = fom + fom_inner
                 elif "flux" in obj_type:  # flux or flux_minus_src
                     fom = get_flux(
@@ -617,7 +638,9 @@ def cal_total_field_adj_src_from_fwd_field(
             gradient_list.append(gradient)
         Hx = torch.stack(Hx_list, dim=0)
         Hy = torch.stack(Hy_list, dim=0)
-        assert Ez4fullfield_copy.dim() == 4, f"Ez_copy should be 4D, Bs, 2, H, W but now {Ez4fullfield_copy.shape}"
+        assert Ez4fullfield_copy.dim() == 4, (
+            f"Ez_copy should be 4D, Bs, 2, H, W but now {Ez4fullfield_copy.shape}"
+        )
         total_field = torch.cat((Hx, Hy, Ez4fullfield_copy), dim=1)
         total_field = pml_mask.unsqueeze(0).unsqueeze(0) * total_field
         adj_src = torch.conj(torch.stack(gradient_list, dim=0))
@@ -1270,9 +1293,9 @@ class maskedNMSELoss(torch.nn.modules.loss._Loss):
                     :,
                     :,
                 ] = 3
-        assert (
-            (frame_mask is not None) or self.if_spatial_mask
-        ), "if mask NMSE, either frame_mask or spatial_mask should be True"
+        assert (frame_mask is not None) or self.if_spatial_mask, (
+            "if mask NMSE, either frame_mask or spatial_mask should be True"
+        )
         if self.if_spatial_mask:
             error_energy = torch.norm((x - y) * mask, p=2, dim=(-1, -2))
             field_energy = torch.norm(y * mask, p=2, dim=(-1, -2))
@@ -1312,9 +1335,9 @@ class maskedNL2NormLoss(torch.nn.modules.loss._Loss):
                     :,
                     :,
                 ] = 3
-        assert (
-            (frame_mask is not None) or self.if_spatial_mask
-        ), "if mask nl2norm, either frame_mask or spatial_mask should be True"
+        assert (frame_mask is not None) or self.if_spatial_mask, (
+            "if mask nl2norm, either frame_mask or spatial_mask should be True"
+        )
         if self.if_spatial_mask:
             error_energy = torch.norm((x - y) * mask, p=2, dim=(-1, -2))
             field_energy = torch.norm(y * mask, p=2, dim=(-1, -2))
@@ -1381,7 +1404,14 @@ class TemperatureScheduler:
 
 class SharpnessScheduler(object):
     __mode_list__ = {"cosine", "quadratic"}
-    def __init__(self, initial_sharp: float, final_sharp: float, total_steps: int, mode:str="cosine"):
+
+    def __init__(
+        self,
+        initial_sharp: float,
+        final_sharp: float,
+        total_steps: int,
+        mode: str = "cosine",
+    ):
         super().__init__()
         self.initial_sharp = initial_sharp
         self.final_sharp = final_sharp
@@ -1389,7 +1419,10 @@ class SharpnessScheduler(object):
         self.current_step = 0
         self.current_sharp = initial_sharp
         self.mode = mode
-        assert mode in self.__mode_list__, f"mode should be one of {self.__mode_list__}, but got {mode}"
+        assert mode in self.__mode_list__, (
+            f"mode should be one of {self.__mode_list__}, but got {mode}"
+        )
+
     def _step_cosine(self):
         self.current_step += 1
         if self.current_step > self.total_steps:
@@ -1397,26 +1430,31 @@ class SharpnessScheduler(object):
         cos_inner = (math.pi * self.current_step) / self.total_steps
         cos_out = -math.cos(cos_inner) + 1
         self.current_sharp = (
-            self.initial_sharp + (self.final_sharp - self.initial_sharp) * (cos_out / 2)**1
+            self.initial_sharp
+            + (self.final_sharp - self.initial_sharp) * (cos_out / 2) ** 1
         )
         return self.current_sharp
-    
+
     def _step_quadratic(self):
         self.current_step += 1
         if self.current_step > self.total_steps:
             self.current_step = self.total_steps
         self.current_sharp = (
-            self.initial_sharp + (self.final_sharp - self.initial_sharp) * (self.current_step / self.total_steps)**2
+            self.initial_sharp
+            + (self.final_sharp - self.initial_sharp)
+            * (self.current_step / self.total_steps) ** 2
         )
         return self.current_sharp
-    
+
     def step(self):
         if self.mode == "cosine":
             return self._step_cosine()
         elif self.mode == "quadratic":
             return self._step_quadratic()
         else:
-            raise ValueError(f"mode should be one of {self.__mode_list__}, but got {self.mode}")
+            raise ValueError(
+                f"mode should be one of {self.__mode_list__}, but got {self.mode}"
+            )
 
     def get_sharpness(self):
         return self.current_sharp
@@ -1976,6 +2014,32 @@ def Si_eps(wavelength):
 
 
 @lru_cache(maxsize=64)
+def Si_eff_eps(wavelength, width: float = 0.48, thickness: float = 0.22):
+    """Returns the effective permittivity of silicon at the given wavelength"""
+    if width > 1:  # very wide waveguidem we will treat it as infinite wide waveguide
+        assert 0.15 <= thickness <= 0.22, "thickness should be between 0.15 and 0.22"
+        # eps = 2.539683**2, # 150nm
+        # eps = 2.594905**2, # 160nm
+        # eps = 2.645874**2, # 170nm
+        # eps = 2.692927**2, # 180nm
+        permittivity = (
+            -1.7708307286e01 * thickness**2
+            + 1.0954869490e01 * thickness
+            + 1.2951253477e00
+        ) ** 2
+    else:
+        assert thickness == 0.22, f"only support thickness of 0.22 for narrow waveguide, but got {thickness}"
+        match width:
+            case 0.48:
+                permittivity = 2.411707**2  # from lumerical
+            case 0.8:
+                permittivity = 2.688673**2  # from lumerical
+            case _:
+                raise ValueError(f"Invalid width: {width}, only support 0.48 and 0.8")
+    return permittivity
+
+
+@lru_cache(maxsize=64)
 def SiO2_eps(wavelength):
     """Returns the permittivity of silicon at the given wavelength"""
     return 1.44**2
@@ -1994,6 +2058,7 @@ def SiN_eps(wavelength):
     return 2.45**2
     return SiO2.epsilon(1 / wavelength)[0, 0].real
 
+
 @lru_cache(maxsize=64)
 def TiO2_eps(wavelength):
     """Returns the permittivity of silicon at the given wavelength"""
@@ -2002,11 +2067,26 @@ def TiO2_eps(wavelength):
 
 material_fn_dict = {
     "Si": Si_eps,
+    "Si_eff": Si_eff_eps,
     "SiO2": SiO2_eps,
     "SiN": SiN_eps,
     "Air": Air_eps,
     "TiO2": TiO2_eps,
 }
+
+
+def get_material_fn(material: str | float) -> Callable:
+    """Returns the permittivity of the given material"""
+    if isinstance(material, float):  # permittivity
+
+        def _material_fn(*args, **kwargs):
+            return material
+
+        return _material_fn
+    if material not in material_fn_dict:
+        raise ValueError(f"Invalid material: {material}")
+    return material_fn_dict[material]
+
 
 train_configs = Config()
 inverse_configs = Config()
