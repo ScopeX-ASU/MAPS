@@ -5,6 +5,7 @@ basically, this should be like the training logic like in train_NN.py
 """
 
 import os
+import pprint
 import sys
 from copy import deepcopy
 from typing import Callable
@@ -15,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import optuna
 from pyutils.config import Config
-from pyutils.general import logger
+from pyutils.general import ensure_dir, get_logger
 from pyutils.torch_train import BestKModelSaver
 from tqdm import trange
 
@@ -49,11 +50,19 @@ class AutoTune(object):
         self,
         eval_obj_fn: Callable,  # given params, return objective
         *args,
+        log_path: str = "",
         **kwargs,
     ) -> None:
         super().__init__()
         self.load_cfgs(**kwargs)
         self.eval_obj_fn = eval_obj_fn
+        self.log_path = log_path
+        if log_path:
+            ensure_dir(os.path.dirname(log_path))
+            if os.path.exists(log_path):
+                with open(log_path, "w") as f:
+                    f.write("")
+        self.logger = get_logger(log_path=log_path, name="AutoTune")
 
         self.plot_thread = ThreadPoolExecutor(2)
         self.saver = BestKModelSaver(
@@ -109,7 +118,8 @@ class AutoTune(object):
         self,
         progress_bar: bool = True,
     ):
-        print(self.distributions)
+        self.logger.warning("Autotune is searching the following variables:")
+        pprint.pprint(self.distributions)
         for i in trange(
             self._cfg.run.n_epochs,
             desc="Autotune",
@@ -117,12 +127,14 @@ class AutoTune(object):
             colour="green",
         ):
             trial = self.study.ask(self.distributions)
+            log = f"Autotune Step {i:3d} trying params: {trial.params}....."
+            self.logger.info(log)
             obj, invdes = self.objective(i, trial)
             self.study.tell(trial, obj)
             log = f"{'#' * 50}\n"
             log += f"Autotune Step {i:3d} objective: {obj:.4f} best obj: {self.study.best_trial.value:.4f} best: {self.study.best_trial.params}"
             log += f"\n{'#' * 50}\n"
-            logger.warning(log)
+            self.logger.warning(log)
 
     def save_model(self, invdes, fom, path):
         self.saver.save_model(
