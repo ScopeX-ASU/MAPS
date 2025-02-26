@@ -151,12 +151,32 @@ if __name__ == "__main__":
                 type="float",
                 low=0.15,
                 high=0.18,
-                step=0.05,
+                step=0.005,
                 log=False,
             ),
         ),
         run=Config(
             n_epochs=100,
         ),
+    )
+    autotuner.add_init_guesses(
+        # [dict(design_region_size_x=6.4, design_region_size_y=4.0, etch_thickness=0.15)
+        [
+            {
+                "design_region_size_x": 6.4,
+                "design_region_size_y": 4.0,
+                "etch_thickness": 0.15,
+            },
+            {
+                "design_region_size_x": 6.6,
+                "design_region_size_y": 5.3,
+                "etch_thickness": 0.17,
+            },
+            {
+                "design_region_size_x": 5.1,
+                "design_region_size_y": 5.4,
+                "etch_thickness": 0.155,
+            },
+        ]
     )
     autotuner.search()
