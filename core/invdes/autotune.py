@@ -18,6 +18,7 @@ from pyutils.config import Config
 from pyutils.general import logger
 from pyutils.torch_train import BestKModelSaver
 from tqdm import trange
+
 __all__ = ["AutoTune"]
 
 
@@ -106,10 +107,15 @@ class AutoTune(object):
 
     def search(
         self,
-        progress_bar: bool=True,
+        progress_bar: bool = True,
     ):
         print(self.distributions)
-        for i in trange(self._cfg.run.n_epochs, desc="Autotune", disable=not progress_bar, colour='green'):
+        for i in trange(
+            self._cfg.run.n_epochs,
+            desc="Autotune",
+            disable=not progress_bar,
+            colour="green",
+        ):
             trial = self.study.ask(self.distributions)
             obj, invdes = self.objective(i, trial)
             self.study.tell(trial, obj)
