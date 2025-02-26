@@ -36,10 +36,11 @@ if __name__ == "__main__":
     mode_mux_region_size = (6, 5)
     port_len = 1.8
 
-    input_port_width = 0.8
+    input_port_width = 0.48
     output_port_width = 0.8
+    etch_thickness = 0.15
 
-    exp_comment = "180_220"
+    exp_comment = f"{etch_thickness}_0.22"
 
     sim_cfg.update(
         dict(
@@ -65,6 +66,7 @@ if __name__ == "__main__":
 
     obj_cfgs = dict(_fusion_func=fom_func)
     device = ModeMux(
+        etch_thickness=etch_thickness,
         sim_cfg=sim_cfg,
         box_size=mode_mux_region_size,
         port_len=(port_len, port_len),
@@ -94,7 +96,7 @@ if __name__ == "__main__":
         plot=True,
         plot_filename=f"mode_mux_{'init_try_test'}",
         objs=["mode1_trans", "mode2_trans"],
-        field_keys=[("in_slice_1", 1.55, "Ez1", 300), ("in_slice_2", 1.55, "Ez2", 300)],
+        field_keys=[("in_slice_1", 1.55, "Ez1", 300), ("in_slice_2", 1.55, "Ez1", 300)],
         in_slice_names=["in_slice_1", "in_slice_2"],
         exclude_slice_names=[],
     )

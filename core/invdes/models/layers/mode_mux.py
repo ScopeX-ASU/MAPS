@@ -3,7 +3,7 @@ from typing import Tuple
 import torch
 from .device_base import N_Ports
 
-from core.utils import material_fn_dict
+from core.utils import get_material_fn
 from pyutils.general import logger
 
 __all__ = ["ModeMux"]
@@ -12,8 +12,9 @@ __all__ = ["ModeMux"]
 class ModeMux(N_Ports):
     def __init__(
         self,
-        material_r: str = "Si",  # waveguide material
+        material_r: str = "Si_eff",  # waveguide material
         material_bg: str = "SiO2",  # background material
+        etch_thickness: float = 0.15,
         sim_cfg: dict = {
             "border_width": [
                 0,
@@ -34,29 +35,35 @@ class ModeMux(N_Ports):
         device: torch.device = torch.device("cuda:0"),
     ):
         wl_cen = sim_cfg["wl_cen"]
-        eps_r_fn = material_fn_dict[material_r]
-        eps_bg_fn = material_fn_dict[material_bg]
+        eps_r_fn = get_material_fn(material_r)
+        eps_bg_fn = get_material_fn(material_bg)
         port_cfgs = dict(
             in_port_1=dict(
                 type="box",
                 direction="x",
                 center=[-(port_len[0] + box_size[0] / 2) / 2, box_size[1] / 6],
                 size=[port_len[0] + box_size[0] / 2, port_width[0]],
-                eps=2.688673**2, # neff from Lumerical
+                eps=eps_r_fn(
+                    wl_cen, width=port_width[0], thickness=0.22
+                ),  # neff from Lumerical
             ),
             in_port_2=dict(
                 type="box",
                 direction="x",
                 center=[-(port_len[0] + box_size[0] / 2) / 2, -box_size[1] / 6],
                 size=[port_len[0] + box_size[0] / 2, port_width[0]],
-                eps=2.688673**2, # neff from Lumerical
+                eps=eps_r_fn(
+                    wl_cen, width=port_width[0], thickness=0.22
+                ),  # neff from Lumerical
             ),
             out_port_1=dict(
                 type="box",
                 direction="x",
                 center=[(port_len[1] + box_size[0] / 2) / 2, 0],
                 size=[port_len[1] + box_size[0] / 2, port_width[1]],
-                eps=2.688673**2, # neff from Lumerical
+                eps=eps_r_fn(
+                    wl_cen, width=port_width[1], thickness=0.22
+                ),  # neff from Lumerical
             ),
         )
 
@@ -69,11 +76,14 @@ class ModeMux(N_Ports):
                     0,
                 ],
                 size=box_size,
-                eps = 2.848152**2,
+                eps=eps_r_fn(wl_cen, width=box_size[1], thickness=0.22),
                 # eps_bg = 2.539683**2, # 150
                 # eps_bg = 2.594905**2, # 160
                 # eps_bg = 2.645874**2, # 170
-                eps_bg = 2.692927**2, # 180
+                eps_bg=eps_r_fn(
+                    wl_cen, width=box_size[1], thickness=etch_thickness
+                ),  # 180
+                # eps_bg = 2.692927**2, # 180
             )
         )
 
@@ -93,36 +103,43 @@ class ModeMux(N_Ports):
         src_slice_1 = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="in_slice_1",
-            rel_loc=0.25,
+            rel_loc=0.7 / self.port_cfgs["in_port_1"]["size"][0],
             rel_width=rel_width,
         )
         src_slice_2 = self.build_port_monitor_slice(
             port_name="in_port_2",
             slice_name="in_slice_2",
-            rel_loc=0.25,
+            rel_loc=0.7 / self.port_cfgs["in_port_1"]["size"][0],
             rel_width=rel_width,
         )
         refl_slice_1 = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="refl_slice_1",
-            rel_loc=0.26,
+            rel_loc=0.75 / self.port_cfgs["in_port_1"]["size"][0],
             rel_width=rel_width,
         )
         refl_slice_2 = self.build_port_monitor_slice(
             port_name="in_port_2",
             slice_name="refl_slice_2",
-            rel_loc=0.26,
+            rel_loc=0.75 / self.port_cfgs["in_port_1"]["size"][0],
             rel_width=rel_width,
         )
         out_slice = self.build_port_monitor_slice(
             port_name="out_port_1",
             slice_name="out_slice_1",
-            rel_loc=0.75,
+            rel_loc=1 - 0.7 / self.port_cfgs["out_port_1"]["size"][0],
             rel_width=rel_width,
         )
         self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=rel_width)
         radiation_monitor = self.build_radiation_monitor(monitor_name="rad_slice")
-        return src_slice_1, src_slice_2, refl_slice_1, refl_slice_2, out_slice, radiation_monitor
+        return (
+            src_slice_1,
+            src_slice_2,
+            refl_slice_1,
+            refl_slice_2,
+            out_slice,
+            radiation_monitor,
+        )
 
     def norm_run(self, verbose: bool = True):
         if verbose:
@@ -138,9 +155,9 @@ class ModeMux(N_Ports):
             plot=True,
             require_sim=True,
         )
-    
+
         norm_source_profiles_mode2 = self.build_norm_sources(
-            source_modes=("Ez2",),
+            source_modes=("Ez1",),
             input_port_name="in_port_2",
             input_slice_name="in_slice_2",
             wl_cen=self.sim_cfg["wl_cen"],
@@ -164,7 +181,7 @@ class ModeMux(N_Ports):
         )
 
         norm_refl_profiles_2 = self.build_norm_sources(
-            source_modes=("Ez2",),
+            source_modes=("Ez1",),
             input_port_name="in_port_2",
             input_slice_name="refl_slice_2",
             wl_cen=self.sim_cfg["wl_cen"],

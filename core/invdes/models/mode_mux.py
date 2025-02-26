@@ -1,6 +1,9 @@
 import torch
 
-from core.invdes.models.base_optimization import BaseOptimization, DefaultOptimizationConfig
+from core.invdes.models.base_optimization import (
+    BaseOptimization,
+    DefaultOptimizationConfig,
+)
 
 
 class DefaultConfig(DefaultOptimizationConfig):
@@ -16,8 +19,9 @@ class DefaultConfig(DefaultOptimizationConfig):
                         transform=[
                             dict(type="blur", mfs=0.1, resolutions=[50, 50], dim="xy"),
                             dict(type="binarize"),
-                        ], # there is no symmetry in this design region
+                        ],  # there is no symmetry in this design region
                         init_method="random",
+                        denorm_mode="linear_index",
                         binary_projection=dict(
                             fw_threshold=100,
                             bw_threshold=100,
@@ -65,7 +69,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
-                        in_mode="Ez2",  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             "Ez2",
                         ),  # can evaluate on multiple output modes and get average transmission
@@ -95,14 +99,13 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
-                        in_mode="Ez2",  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             "Ez2",
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux_minus_src",
                         direction="x",
                     ),
-                    
                     mode1_rad_trans_xp=dict(
                         weight=-0.2,
                         #### objective is evaluated at this port
@@ -171,7 +174,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
-                        in_mode="Ez2",  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             "Ez2",
                         ),  # can evaluate on multiple output modes and get average transmission
@@ -186,7 +189,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
-                        in_mode="Ez2",  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             "Ez2",
                         ),  # can evaluate on multiple output modes and get average transmission
@@ -201,7 +204,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
-                        in_mode="Ez2",  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             "Ez2",
                         ),  # can evaluate on multiple output modes and get average transmission
@@ -216,7 +219,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
-                        in_mode="Ez2",  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
                             "Ez2",
                         ),  # can evaluate on multiple output modes and get average transmission
@@ -244,10 +247,15 @@ class ModeMuxOptimization(BaseOptimization):
                 method="levelset",
                 rho_resolution=[20, 20],
                 transform=[
-                    dict(type="blur", mfs=0.1, resolutions=[hr_device.resolution, hr_device.resolution], dim="xy"),
+                    dict(
+                        type="blur",
+                        mfs=0.1,
+                        resolutions=[hr_device.resolution, hr_device.resolution],
+                        dim="xy",
+                    ),
                     dict(type="binarize"),
                 ],
-                init_method="ones",
+                init_method="random",
                 # init_method="ring",
                 interpolation="bilinear",
                 binary_projection=dict(
