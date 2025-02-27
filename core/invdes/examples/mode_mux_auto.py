@@ -33,8 +33,12 @@ if __name__ == "__main__":
     # first we need to instantiate the a optimization object
     sim_cfg = DefaultSimulationConfig()
     root = "mode_mux_autotune"
+    log_name = "mode_mux_autotune_2"
 
     def eval_obj_fn(iter: int, params):
+        ## this is important to make it deterministic
+        set_torch_deterministic(int(41 + 500))
+
         mode_mux_region_size = (
             params["design_region_size_x"],
             params["design_region_size_y"],
@@ -50,7 +54,6 @@ if __name__ == "__main__":
         sim_cfg.update(
             dict(
                 solver="ceviche_torch",
-                # border_width=[port_len, port_len, 2, 2],
                 border_width=[0, 0, 2, 2],
                 resolution=50,
                 plot_root=f"./figs/{root}",
@@ -90,6 +93,7 @@ if __name__ == "__main__":
             sim_cfg=sim_cfg,
             obj_cfgs=obj_cfgs,
             operation_device=operation_device,
+            verbose=False,
         ).to(operation_device)
         invdesign = InvDesign(
             devOptimization=opt,
@@ -123,26 +127,27 @@ if __name__ == "__main__":
             ],
             in_slice_names=["in_slice_1", "in_slice_2"],
             exclude_slice_names=[],
+            verbose=False,
         )
 
         obj = invdesign.results["obj"].item()
         return obj, invdesign
 
     autotuner = AutoTune(
-        log_path=f"./log/{root}/{root}.log",
+        log_path=f"./log/{root}/{log_name}.log",
         eval_obj_fn=eval_obj_fn,
         sampler="BoTorchSampler",
         params_cfgs=Config(
             design_region_size_x=dict(
                 type="float",
-                low=5,
-                high=7,
+                low=6,
+                high=8,
                 step=0.1,
                 log=False,
             ),
             design_region_size_y=dict(
                 type="float",
-                low=4,
+                low=3,
                 high=6,
                 step=0.1,
                 log=False,
@@ -151,7 +156,7 @@ if __name__ == "__main__":
                 type="float",
                 low=0.15,
                 high=0.18,
-                step=0.005,
+                step=0.05,
                 log=False,
             ),
         ),
@@ -163,19 +168,19 @@ if __name__ == "__main__":
         # [dict(design_region_size_x=6.4, design_region_size_y=4.0, etch_thickness=0.15)
         [
             {
+                "design_region_size_x": 7.0,
+                "design_region_size_y": 4.0,
+                "etch_thickness": 0.15,
+            },
+            {
                 "design_region_size_x": 6.4,
                 "design_region_size_y": 4.0,
                 "etch_thickness": 0.15,
             },
             {
                 "design_region_size_x": 6.6,
-                "design_region_size_y": 5.3,
-                "etch_thickness": 0.17,
-            },
-            {
-                "design_region_size_x": 5.1,
-                "design_region_size_y": 5.4,
-                "etch_thickness": 0.155,
+                "design_region_size_y": 5.6,
+                "etch_thickness": 0.15,
             },
         ]
     )

@@ -78,6 +78,7 @@ class AutoTune(object):
             direction=opt_direction, pruner=optuna.pruners.MedianPruner()
         )
         self.distributions = self.define_distribution(self._cfg.params_cfgs)
+        self.init_cache()
 
     def define_distribution(self, params_cfgs):
         distributions = {}
@@ -109,6 +110,33 @@ class AutoTune(object):
             )
             self.study.enqueue_trial(guess)
 
+    def init_cache(self):
+        # Initialize the cache for duplicate trials
+        self.trial_cache = {}  # params_tuple: value
+
+    def check_duplicate(self, trial):
+        # Check if the trial is a duplicate
+        params_tuple = tuple(trial.params.values())
+        # self.logger.info(f"{params_tuple}")
+        # self.logger.info(f"{self.trial_cache}")
+        return self.trial_cache.get(params_tuple, None)
+
+    def sample_unique_trial(self, iter: int, max_try: int = 3):
+        # Check if the trial is a duplicate
+        ### check if the trial is a duplicate
+        trial = self.study.ask(self.distributions)
+        for _ in range(max_try):
+            value = self.check_duplicate(trial)
+            if value is not None:
+                trial = self.study.ask(self.distributions)
+            else:
+                return trial, None
+        else:
+            self.logger.warning(
+                f"Trial {trial.number} at Step {iter} is a duplicate, use cached obj value {value:>4f}."
+            )
+            return trial, value
+
     def objective(self, iter: int, trial):
         ### Step 1: obtain the parameters from the trial
         params = {key: trial.params[key] for key in self._cfg.params_cfgs}
@@ -116,6 +144,9 @@ class AutoTune(object):
         ### Step 2: calculate the objective via inverse design
         # this one need to be customized, we need objective and invdes object
         obj, invdes = self.eval_obj_fn(iter, params)
+
+        ### Step 3: save the objective value in the cache
+        self.trial_cache[tuple(trial.params.values())] = obj
         return obj, invdes
 
     def load_cfgs(self, **cfgs):
@@ -130,7 +161,6 @@ class AutoTune(object):
     def report_topk(self, study=None, k: int = 3, iter: int = 0):
         study = study or self.study
         trials = study.trials
-        print(trials)
         trials = sorted(
             [t for t in trials if t.value is not None],
             key=lambda t: t.value,
@@ -145,6 +175,7 @@ class AutoTune(object):
         self,
         progress_bar: bool = True,
         report_topk: int = 3,
+        max_resample_try: int = 10,
     ):
         self.logger.warning("Autotune is searching the following variables:")
         pprint.pprint(self.distributions)
@@ -154,11 +185,15 @@ class AutoTune(object):
             disable=not progress_bar,
             colour="green",
         ):
-            trial = self.study.ask(self.distributions)
+            trial, cached_obj = self.sample_unique_trial(iter=i, max_try=max_resample_try)
             trial.set_user_attr("iter", i)
             log = f"Autotune Step {i:3d} trying params: {trial.params}....."
             self.logger.info(log)
-            obj, invdes = self.objective(i, trial)
+            if cached_obj is None:
+                obj, invdes = self.objective(i, trial)
+            else:
+                obj = cached_obj
+                invdes = None
             self.study.tell(trial, obj)
             best_trial = self.study.best_trial
             log = f"\n{'#' * 100}\n"

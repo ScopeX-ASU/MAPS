@@ -240,6 +240,7 @@ class ModeMuxOptimization(BaseOptimization):
         sim_cfg: dict = dict(),
         obj_cfgs=dict(),
         operation_device=torch.device("cuda:0"),
+        verbose: bool = True,
     ):
         design_region_param_cfgs = dict()
         for region_name in device.design_region_cfgs.keys():
@@ -282,4 +283,5 @@ class ModeMuxOptimization(BaseOptimization):
             sim_cfg=cfgs.sim_cfg,
             obj_cfgs=cfgs.obj_cfgs,
             operation_device=operation_device,
+            verbose=verbose,
         )
