@@ -1,7 +1,7 @@
 """
 Date: 2024-10-10 19:50:23
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-03-01 00:43:15
+LastEditTime: 2025-03-01 00:44:22
 FilePath: /MAPS/core/fdfd/solver.py
 """
 
@@ -13,9 +13,9 @@ from pyMKL import pardisoSolver
 from pyutils.general import logger
 from torch import Tensor
 
+from core.utils import print_stat
 from thirdparty.ceviche.constants import *
 from thirdparty.ceviche.utils import make_sparse
-from core.utils import print_stat
 
 try:
     from pyMKL import pardisoSolver
@@ -432,10 +432,8 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             if numerical_solver == "solve_direct":
                 # print(f"adjoint A_t", A_t)
                 if ctx.pSolve is None:  ## need to solve
-                    # print("no speedup")
                     adj, _ = solve_linear(A_t, adj_src, symmetry=symmetry)
                 else:
-                    # print("speedup")
                     adj = ctx.pSolve.solve(adj_src)
                     ctx.pSolve.clear()
                     ctx.pSolve = None
