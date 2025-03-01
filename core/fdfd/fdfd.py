@@ -278,7 +278,7 @@ class fdfd_ez(fdfd_ez_ceviche):
         neural_solver=None,
         numerical_solver="solve_direct",
         use_autodiff: bool = False,
-        sym_precond: bool = False,
+        sym_precond: bool = True,
     ):
         self.power = power
         self.A = None

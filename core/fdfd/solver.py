@@ -1,7 +1,7 @@
 """
 Date: 2024-10-10 19:50:23
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-01-06 19:07:59
+LastEditTime: 2025-03-01 00:43:15
 FilePath: /MAPS/core/fdfd/solver.py
 """
 
@@ -113,12 +113,13 @@ def solve_linear(
     eps=None,
     iterative_method=None,
     symmetry=False,
+    clear: bool = True,
     **kwargs,
 ):
     """Master function to call different solvers"""
 
     if solver_type == "direct":
-        return _solve_direct(A, b, symmetry=symmetry)
+        return _solve_direct(A, b, symmetry=symmetry, clear=clear)
     elif solver_type == "iterative":
         return _solve_iterative(A, b, iterative_method=iterative_method, **kwargs)
     elif solver_type == "iterative_nn":
@@ -143,7 +144,7 @@ def solve_linear(
 #         return _solve_direct(A, b, symmetry=symmetry)
 
 
-def _solve_direct(A, b, symmetry=False):
+def _solve_direct(A, b, symmetry=False, clear: bool = True):
     """Direct solver"""
 
     if HAS_MKL:
@@ -155,8 +156,11 @@ def _solve_direct(A, b, symmetry=False):
         pSolve = pardisoSolver(A, mtype=mtype)
         pSolve.factor()
         x = pSolve.solve(b)
-        pSolve.clear()
-        return x
+        if clear:
+            pSolve.clear()
+            return x, None
+        else:
+            return x, pSolve
     else:
         # scipy solver.
         return spl.spsolve(A, b)
@@ -278,9 +282,9 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         ### eps_diag: For Ez diagonal of A, e.g., -omega**2 * epr_0 * eps_r
         ctx.use_autodiff = use_autodiff
         if use_autodiff:
-            assert (
-                numerical_solver == "none"
-            ), f"numerical_solver {numerical_solver} is not supported when use_autodiff is True"
+            assert numerical_solver == "none", (
+                f"numerical_solver {numerical_solver} is not supported when use_autodiff is True"
+            )
         Jz = b / (1j * omega)
         if isinstance(Jz, np.ndarray) and neural_solver is not None:
             if neural_solver["fwd_solver"] is not None:
@@ -302,11 +306,15 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             A = Pl @ A @ Pr
             b = Pl @ b
             symmetry = True
+            ctx.precond_A = A
         else:
             symmetry = False
         # with TimerCtx() as t:
+        ctx.pSolve = None
         if numerical_solver == "solve_direct":
-            x = solve_linear(A, b, symmetry=symmetry)
+            x, pSolve = solve_linear(A, b, symmetry=symmetry, clear=not symmetry)
+            ctx.pSolve = pSolve
+
             # x = solve_linear(A, b, iterative_method="lgmres", symmetry=symmetry, rtol=1e-2)
         # print(f"my solve time (symmetry={symmetry}): {t.interval}")
         elif numerical_solver == "none":
@@ -370,7 +378,23 @@ class SparseSolveTorchFunction(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad):
         if ctx.use_autodiff:
-            return None, None, None, None, None, None, None, None, None, None, None, None, None, None, None
+            return (
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
         else:
             adj_solver = ctx.adj_solver
             numerical_solver = ctx.numerical_solver
@@ -385,8 +409,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             temp = ctx.temp
             N = np.prod(shape)
             Pl, Pr = ctx.Pl, ctx.Pr
-            omega = ctx.omega
-            A_t = make_sparse(entries_a, indices_a, (N, N))
+
             grad = grad.cpu().numpy().astype(np.complex128)
             adj_src = grad.conj()
             if (slice_name != "Norm" and mode != "Norm" and temp != "Norm") or (
@@ -399,13 +422,23 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             # print_stat(adj_src, "my adjoint source")
             # print(f"my adjoint A_t", A_t)
             if Pl is not None and Pr is not None:
-                A_t = Pr.T @ A_t @ Pl.T
+                # A_t = Pr.T @ A_t @ Pl.T
+                A_t = ctx.precond_A
                 adj_src = Pr.T @ adj_src
                 symmetry = True
             else:
+                A_t = make_sparse(entries_a, indices_a, (N, N))
                 symmetry = False
             if numerical_solver == "solve_direct":
-                adj = solve_linear(A_t, adj_src, symmetry=symmetry)
+                # print(f"adjoint A_t", A_t)
+                if ctx.pSolve is None:  ## need to solve
+                    # print("no speedup")
+                    adj, _ = solve_linear(A_t, adj_src, symmetry=symmetry)
+                else:
+                    # print("speedup")
+                    adj = ctx.pSolve.solve(adj_src)
+                    ctx.pSolve.clear()
+                    ctx.pSolve = None
             elif numerical_solver == "none":
                 assert adj_solver is not None
                 # print("we are now using pure neural solver for adjoint", flush=True)
@@ -469,9 +502,9 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             if (slice_name != "Norm" and mode != "Norm" and temp != "Norm") or (
                 slice_name != "adj" and mode != "adj" and temp != "adj"
             ):
-                solver_instance.gradient[(slice_name, mode, temp)] = (
-                    grad_epsilon.to(torch.float32).detach()
-                )
+                solver_instance.gradient[(slice_name, mode, temp)] = grad_epsilon.to(
+                    torch.float32
+                ).detach()
             grad_b = None
             return (
                 None,
@@ -532,7 +565,7 @@ class SparseSolveTorch(torch.nn.Module):
             self,
             slice_name,
             mode,
-            temp, 
+            temp,
             Pl,
             Pr,
             self.neural_solver,
