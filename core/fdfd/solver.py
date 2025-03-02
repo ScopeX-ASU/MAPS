@@ -1,7 +1,7 @@
 """
 Date: 2024-10-10 19:50:23
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-03-02 01:36:54
+LastEditTime: 2025-03-02 03:51:36
 FilePath: /MAPS/core/fdfd/solver.py
 """
 
@@ -10,7 +10,7 @@ import numpy as np
 import scipy.sparse.linalg as spl
 import torch
 from pyMKL import pardisoSolver
-from pyutils.general import logger
+from pyutils.general import logger, TimerCtx
 from torch import Tensor
 
 from core.utils import print_stat
@@ -25,6 +25,8 @@ try:
     # print('using MKL for direct solvers')
 except:
     HAS_MKL = False
+
+ENABLE_TIMER = False
 
 
 def coo_torch2cupy(A):
@@ -312,21 +314,22 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             ctx.precond_A = A
         else:
             symmetry = False
-        # with TimerCtx() as t:
-        ctx.pSolve = None
+
         if numerical_solver == "solve_direct":
-            if not double:
-                A = (A / 1e17).astype(np.complex64)
-                b = (b / 1e17).astype(np.complex64)
-                # print(A, b)
-            x, pSolve = solve_linear(
-                A, b, symmetry=symmetry, clear=not symmetry, double=double
-            )
+            with TimerCtx(enable=ENABLE_TIMER, desc="forward"):
+                ctx.pSolve = None
+                if not double:
+                    A = (A / 1e17).astype(np.complex64)
+                    b = (b / 1e17).astype(np.complex64)
+                    # print(A, b)
+                x, pSolve = solve_linear(
+                    A, b, symmetry=symmetry, clear=not symmetry, double=double
+                )
 
-            ctx.pSolve = pSolve
+                ctx.pSolve = pSolve
 
-            # x = solve_linear(A, b, iterative_method="lgmres", symmetry=symmetry, rtol=1e-2)
-        # print(f"my solve time (symmetry={symmetry}): {t.interval}")
+                # x = solve_linear(A, b, iterative_method="lgmres", symmetry=symmetry, rtol=1e-2)
+            # print(f"my solve time (symmetry={symmetry}): {t.interval}")
         elif numerical_solver == "none":
             assert neural_solver is not None
             # print("we are now using pure neural solver", flush=True)
@@ -442,17 +445,18 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                 symmetry = False
             if numerical_solver == "solve_direct":
                 # print(f"adjoint A_t", A_t)
-                if not ctx.double:
-                    A_t = (A_t / 1e17).astype(np.complex64)
-                    adj_src = (adj_src / 1e17).astype(np.complex64)
-                if ctx.pSolve is None:  ## need to solve
-                    adj, _ = solve_linear(
-                        A_t, adj_src, symmetry=symmetry, double=ctx.double
-                    )
-                else:
-                    adj = ctx.pSolve.solve(adj_src)
-                    ctx.pSolve.clear()
-                    ctx.pSolve = None
+                with TimerCtx(enable=ENABLE_TIMER, desc="adjoint"):
+                    if not ctx.double:
+                        A_t = (A_t / 1e17).astype(np.complex64)
+                        adj_src = (adj_src / 1e17).astype(np.complex64)
+                    if ctx.pSolve is None:  ## need to solve
+                        adj, _ = solve_linear(
+                            A_t, adj_src, symmetry=symmetry, double=ctx.double
+                        )
+                    else:
+                        adj = ctx.pSolve.solve(adj_src)
+                        ctx.pSolve.clear()
+                        ctx.pSolve = None
             elif numerical_solver == "none":
                 assert adj_solver is not None
                 # print("we are now using pure neural solver for adjoint", flush=True)
