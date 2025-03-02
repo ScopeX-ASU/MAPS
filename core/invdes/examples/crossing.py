@@ -16,6 +16,7 @@ from core.invdes.invdesign import InvDesign
 from core.invdes.models import (
     CrossingOptimization,
 )
+from pyutils.config import Config
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import Crossing
 from core.utils import set_torch_deterministic
@@ -31,17 +32,19 @@ if __name__ == "__main__":
     sim_cfg = DefaultSimulationConfig()
 
     crossing_region_size = (1.6, 1.6)
+    # crossing_region_size = (2.5, 2.5)
     port_len = 1.8
 
     input_port_width = 0.48
     output_port_width = 0.48
+    exp_name = "crossing_init_try"
 
     sim_cfg.update(
         dict(
             solver="ceviche_torch",
             border_width=[0, 0, 0, 0],
             resolution=50,
-            plot_root=f"./figs/crossing_{'init_try'}",
+            plot_root=f"./figs/{exp_name}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -188,13 +191,34 @@ if __name__ == "__main__":
         obj_cfgs=obj_cfgs,
         operation_device=operation_device,
     ).to(operation_device)
-    invdesign = InvDesign(devOptimization=opt)
-    invdesign.optimize(
-        plot=True,
-        plot_filename=f"crossing_{'init_try'}",
-        objs=["fwd_trans"],
-        field_keys=[("in_slice_1", 1.55, "Ez1", 300)],
-        in_slice_names=["in_slice_1"],
-        exclude_slice_names=[],
-        dump_gds=True,
+    invdesign = InvDesign(
+        devOptimization=opt,
+        run=Config(
+            n_epochs=100,
+        ),
+        plot_cfgs=Config(
+            plot=True,
+            interval=5,
+            plot_name=f"{exp_name}",
+            objs=["fwd_trans"],
+            field_keys=[("in_slice_1", 1.55, "Ez1", 300)],
+            in_slice_names=["in_slice_1"],
+            exclude_slice_names=[],
+        ),
+        checkpoint_cfgs=Config(
+            save_model=False,
+            ckpt_name=f"{exp_name}",
+            dump_gds=True,
+            gds_name=f"{exp_name}",
+        ),
     )
+
+    # import cProfile
+    # import pstats
+
+    # with cProfile.Profile() as profile:
+    invdesign.optimize()
+    # profile_result = pstats.Stats(profile)
+    # # profile_result.sort_stats(pstats.SortKey.TIME)
+    # profile_result.sort_stats(pstats.SortKey.CUMULATIVE)
+    # profile_result.print_stats(20)
