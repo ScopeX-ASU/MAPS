@@ -1,7 +1,7 @@
 """
 Date: 2024-10-10 19:50:23
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-03-01 00:44:22
+LastEditTime: 2025-03-02 01:36:54
 FilePath: /MAPS/core/fdfd/solver.py
 """
 
@@ -18,7 +18,8 @@ from thirdparty.ceviche.constants import *
 from thirdparty.ceviche.utils import make_sparse
 
 try:
-    from pyMKL import pardisoSolver
+    # from pyMKL import pardisoSolver
+    from .pardiso_solver import pardisoSolver
 
     HAS_MKL = True
     # print('using MKL for direct solvers')
@@ -114,12 +115,13 @@ def solve_linear(
     iterative_method=None,
     symmetry=False,
     clear: bool = True,
+    double: bool = True,
     **kwargs,
 ):
     """Master function to call different solvers"""
 
     if solver_type == "direct":
-        return _solve_direct(A, b, symmetry=symmetry, clear=clear)
+        return _solve_direct(A, b, symmetry=symmetry, clear=clear, double=double)
     elif solver_type == "iterative":
         return _solve_iterative(A, b, iterative_method=iterative_method, **kwargs)
     elif solver_type == "iterative_nn":
@@ -144,7 +146,7 @@ def solve_linear(
 #         return _solve_direct(A, b, symmetry=symmetry)
 
 
-def _solve_direct(A, b, symmetry=False, clear: bool = True):
+def _solve_direct(A, b, symmetry=False, clear: bool = True, double: bool = True):
     """Direct solver"""
 
     if HAS_MKL:
@@ -153,7 +155,7 @@ def _solve_direct(A, b, symmetry=False, clear: bool = True):
             mtype = 6
         else:
             mtype = 13
-        pSolve = pardisoSolver(A, mtype=mtype)
+        pSolve = pardisoSolver(A, mtype=mtype, double=double)
         pSolve.factor()
         x = pSolve.solve(b)
         if clear:
@@ -276,6 +278,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         use_autodiff=False,
         eps: Tensor | None = None,  # 2D array of eps_r, can be used in neural solver
         pol: str = "Ez",  # Ez or Hz
+        double: bool = False,
     ):
         ### entries_a: values of the sparse matrix A
         ### indices_a: row/column indices of the sparse matrix A
@@ -312,7 +315,14 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         # with TimerCtx() as t:
         ctx.pSolve = None
         if numerical_solver == "solve_direct":
-            x, pSolve = solve_linear(A, b, symmetry=symmetry, clear=not symmetry)
+            if not double:
+                A = (A / 1e17).astype(np.complex64)
+                b = (b / 1e17).astype(np.complex64)
+                # print(A, b)
+            x, pSolve = solve_linear(
+                A, b, symmetry=symmetry, clear=not symmetry, double=double
+            )
+
             ctx.pSolve = pSolve
 
             # x = solve_linear(A, b, iterative_method="lgmres", symmetry=symmetry, rtol=1e-2)
@@ -373,6 +383,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         ctx.numerical_solver = numerical_solver
         ctx.eps = eps
         ctx.omega = omega
+        ctx.double = double
         return x
 
     @staticmethod
@@ -431,8 +442,13 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                 symmetry = False
             if numerical_solver == "solve_direct":
                 # print(f"adjoint A_t", A_t)
+                if not ctx.double:
+                    A_t = (A_t / 1e17).astype(np.complex64)
+                    adj_src = (adj_src / 1e17).astype(np.complex64)
                 if ctx.pSolve is None:  ## need to solve
-                    adj, _ = solve_linear(A_t, adj_src, symmetry=symmetry)
+                    adj, _ = solve_linear(
+                        A_t, adj_src, symmetry=symmetry, double=ctx.double
+                    )
                 else:
                     adj = ctx.pSolve.solve(adj_src)
                     ctx.pSolve.clear()
