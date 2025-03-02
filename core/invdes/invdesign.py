@@ -6,6 +6,9 @@ basically, this should be like the training logic like in train_NN.py
 
 import os
 import sys
+import traceback
+from typing import Any, Dict
+
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../MAPS"))
 sys.path.insert(0, project_root)
 from concurrent.futures import ThreadPoolExecutor
@@ -13,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 import torch
 from pyutils.config import Config
 from pyutils.general import logger
+from pyutils.torch_train import BestKModelSaver
 
 from core.invdes import builder
 from core.invdes.models import (
@@ -21,7 +25,7 @@ from core.invdes.models import (
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import Bending
 from core.utils import set_torch_deterministic
-from pyutils.torch_train import BestKModelSaver
+
 
 class InvDesign:
     """
@@ -52,6 +56,22 @@ class InvDesign:
         run=Config(
             n_epochs=100,
         ),
+        plot_cfgs=Config(
+            plot=False,
+            interval=5,
+            plot_name=None,
+            objs=[],
+            field_keys=[],
+            in_slice_names=[],
+            exclude_slice_names=[],
+            field_component=None,
+        ),
+        checkpoint_cfgs=Config(
+            save_model=False,
+            ckpt_name=None,
+            dump_gds=False,
+            gds_name=None,
+        ),
     )
 
     def __init__(
@@ -77,7 +97,7 @@ class InvDesign:
             scheduler_type="sharp_scheduler",
             config_total=self._cfg,
         )
-        # self.plot_thread = ThreadPoolExecutor(2)
+        self.plot_thread = ThreadPoolExecutor(1)
         self.saver = BestKModelSaver(
             k=1,
             descend=False,
@@ -86,37 +106,7 @@ class InvDesign:
             format="{:.4f}",
         )
 
-    def load_cfgs(self, **cfgs):
-        # Start with default configurations
-        self.__dict__.update(self.default_cfgs)
-        # Update with provided configurations
-        self.__dict__.update(cfgs)
-        # Save the updated configurations
-        self.default_cfgs.update(cfgs)
-        self._cfg = self.default_cfgs
-
-    def optimize(
-        self,
-        plot=False,
-        plot_filename=None,
-        objs=[],
-        field_keys=[],
-        in_slice_names=[],
-        exclude_slice_names=[],
-        dump_gds=False,
-        save_model=False,
-        field_component=None,
-        ckpt_name=None,
-        verbose: bool=True,
-    ):
-        if plot:
-            assert plot_filename is not None, "plot_filename must be provided"
-            assert len(objs) > 0, "objs must be provided"
-            assert len(field_keys) > 0, "field_keys must be provided"
-            assert len(in_slice_names) > 0, "in_port_names must be provided"
-            if len(exclude_slice_names) == 0:
-                exclude_slice_names = [[]] * len(objs)
-
+        ## closure is a function that will be called by the optimizer
         class Closure(object):
             def __init__(
                 self,
@@ -143,71 +133,141 @@ class InvDesign:
                 ## return the loss for gradient descent
                 return -results["obj"]
 
-        closure = Closure(
+        self.closure = Closure(
             optimizer=self.optimizer,
             devOptimization=self.devOptimization,
         )
 
+        self.global_step = 0
+
+    def load_cfgs(self, **cfgs):
+        # Start with default configurations
+        self.__dict__.update(self.default_cfgs)
+        # Update with provided configurations
+        self.__dict__.update(cfgs)
+        # Save the updated configurations
+        self.default_cfgs.update(cfgs)
+        self._cfg = self.default_cfgs
+
+        ## check cfgs
+        plot_cfgs = self._cfg.plot_cfgs
+        if plot_cfgs.plot:
+            assert plot_cfgs.plot_name is not None, (
+                "plot_name (filename) must be provided if plot"
+            )
+            assert len(plot_cfgs.objs) > 0, "objs must be provided"
+            assert len(plot_cfgs.field_keys) > 0, "field_keys must be provided"
+            assert len(plot_cfgs.in_slice_names) > 0, "in_port_names must be provided"
+            if len(plot_cfgs.exclude_slice_names) == 0:
+                plot_cfgs.exclude_slice_names = [[]] * len(plot_cfgs.objs)
+
+        ckpt_cfgs = self._cfg.checkpoint_cfgs
+        if ckpt_cfgs.save_model:
+            assert ckpt_cfgs.ckpt_name is not None, (
+                "ckpt_name must be provided if save model"
+            )
+        if ckpt_cfgs.dump_gds:
+            assert ckpt_cfgs.gds_name is not None, (
+                "gds_name must be provided if dump gds"
+            )
+
+    def before_step(self) -> Dict[str, Any]:
+        sharpness = self.sharp_scheduler.get_sharpness()
+        feed_dict = dict(
+            sharpness=sharpness,
+        )
+        return feed_dict
+
+    def run_step(self, feed_dict: Dict[str, Any] = {}):
+        sharpness = feed_dict["sharpness"]
+        self.closure.sharpness = sharpness
+
+        self.optimizer.step(self.closure)
+        results = self.closure.results
+        self.results = results  # record this result
+        return results
+
+    def after_step(self, output_dict: Dict[str, Any] = {}) -> None:
+        # update the learning rate
+        self.lr_scheduler.step()
+        # update the sharpness
+        self.sharp_scheduler.step()
+
+        ## plot
+        i = self.global_step
+        plot_cfgs = self._cfg.plot_cfgs
+        if plot_cfgs.plot and (
+            i % plot_cfgs.interval == 0 or i == self._cfg.run.n_epochs - 1
+        ):
+            plot_filename = plot_cfgs.plot_name
+            if plot_filename.endswith(".png"):
+                plot_filename = plot_filename[:-4]
+            for j in range(len(plot_cfgs.objs)):
+                # (port_name, wl, mode, temp), extract pol from mode, e.g., Ez1 -> Ez
+                pol = plot_cfgs.field_keys[j][2][:2]
+                plot_kwargs = dict(
+                    ps_map=self.devOptimization._eps_map,
+                    obj=output_dict["breakdown"][plot_cfgs.objs[j]]["value"],
+                    plot_filename=plot_filename + f"_{i}" + f"_{plot_cfgs.objs[j]}.jpg",
+                    field_key=plot_cfgs.field_keys[j],
+                    # field_component=pol,
+                    field_component=plot_cfgs.field_component
+                    if plot_cfgs.field_component is not None
+                    else pol,
+                    in_slice_name=plot_cfgs.in_slice_names[j],
+                    exclude_slice_names=plot_cfgs.exclude_slice_names[j],
+                )
+                if not hasattr(self, "plot_thread") or self.plot_thread is None:
+                    self.devOptimization.plot(
+                        **plot_kwargs,
+                    )
+                else:
+                    self.plot_thread.submit(self.devOptimization.plot, **plot_kwargs)
+
+    def after_epoch(self, output_dict: Dict[str, Any] = {}) -> None:
+        ## save model
+        i = self.global_step
+        try:
+            if self._cfg.checkpoint_cfgs.save_model:
+                ckpt_name = self._cfg.checkpoint_cfgs.ckpt_name
+                if not ckpt_name.endswith(".pt"):
+                    ckpt_name += f"_epoch-{i}.pt"
+                else:
+                    ckpt_name = ckpt_name[:-3] + f"_epoch-{i}.pt"
+                path = os.path.join(self.devOptimization.sim_cfg.plot_root, ckpt_name)
+                self.save_model(output_dict["obj"].item(), path)
+                logger.info(f"save model to {path}")
+        except Exception as e:
+            logger.error("save model failed")
+            traceback.print_exc()
+
+        ## dump gds
+        try:
+            if self._cfg.checkpoint_cfgs.dump_gds:
+                self.devOptimization.dump_gds_files(
+                    self._cfg.checkpoint_cfgs.gds_name + ".gds"
+                )
+        except Exception as e:
+            logger.error("dump gds failed")
+            traceback.print_exc()
+
+    def optimize(
+        self,
+        verbose: bool = True,
+    ):
         for i in range(self._cfg.run.n_epochs):
-            sharpness = self.sharp_scheduler.get_sharpness()
-            closure.sharpness = sharpness
+            self.global_step = i
+            feed_dict = self.before_step()
+            results = self.run_step(feed_dict)
+            self.after_step(results)
 
-            self.optimizer.step(closure)
-            results = closure.results
-            self.results = results # record this result
-
-            log = f"Step {i:3d} (sharp: {sharpness:.1f}) "
+            log = f"Step {i:3d} (sharp: {feed_dict['sharpness']:.1f}) "
             log += ", ".join(
                 [f"{k}: {obj['value']:.3f}" for k, obj in results["breakdown"].items()]
             )
-            if i == self._cfg.run.n_epochs - 1 and save_model:
-                if plot_filename.endswith(".png"):
-                    plot_filename = plot_filename[:-4]
-                if ckpt_name is not None:
-                    ckpt_name = plot_filename
-                self.save_model(results["obj"].item(), f"./checkpoint/{ckpt_name}.pt")
-            
             if verbose:
                 logger.info(log)
-            # update the learning rate
-            self.lr_scheduler.step()
-            # update the sharpness
-            self.sharp_scheduler.step()
-
-            if plot:
-                if plot_filename.endswith(".png"):
-                    plot_filename = plot_filename[:-4]
-                for j in range(len(objs)):
-                    # (port_name, wl, mode, temp), extract pol from mode, e.g., Ez1 -> Ez
-                    pol = field_keys[j][2][:2]
-                    self.devOptimization.plot(
-                        eps_map=self.devOptimization._eps_map,
-                        obj=results["breakdown"][objs[j]]["value"],
-                        plot_filename=plot_filename + f"_{i}" + f"_{objs[j]}.jpg",
-                        field_key=field_keys[j],
-                        # field_component=pol,
-                        field_component=field_component if field_component is not None else pol,
-                        in_slice_name=in_slice_names[j],
-                        exclude_slice_names=exclude_slice_names[j],
-                    )
-                    # self.plot_thread.submit(
-                    #     self.devOptimization.plot,
-                    #     eps_map=self.devOptimization._eps_map,
-                    #     obj=results["breakdown"][objs[j]]["value"],
-                    #     plot_filename=plot_filename + f"_{i}" + f"_{objs[j]}.jpg",
-                    #     # field_key=("in_port_1", 1.55, 1),
-                    #     field_key=field_keys[j],
-                    #     field_component=pol,
-                    #     # in_port_name="in_port_1",
-                    #     in_slice_name=in_slice_names[j],
-                    #     # exclude_port_names=["refl_port_2"],
-                    #     exclude_slice_names=exclude_slice_names[j],
-                    # )
-
-        if dump_gds:
-            if plot_filename.endswith(".png"):
-                plot_filename = plot_filename[:-4]
-            self.devOptimization.dump_gds_files(plot_filename + ".gds")
+        self.after_epoch(results)
 
     def save_model(self, fom, path):
         self.saver.save_model(
