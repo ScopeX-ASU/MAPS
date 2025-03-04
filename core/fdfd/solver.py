@@ -1,7 +1,7 @@
 """
 Date: 2024-10-10 19:50:23
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-03-02 03:51:36
+LastEditTime: 2025-03-04 00:33:14
 FilePath: /MAPS/core/fdfd/solver.py
 """
 
@@ -10,7 +10,7 @@ import numpy as np
 import scipy.sparse.linalg as spl
 import torch
 from pyMKL import pardisoSolver
-from pyutils.general import logger, TimerCtx
+from pyutils.general import TimerCtx, logger
 from torch import Tensor
 
 from core.utils import print_stat
@@ -257,6 +257,7 @@ def _solve_cuda(A, b, **kwargs):
 
 
 # sparse_solve_cupy = SparseSolveCupy.apply
+SCALE = 1e15
 
 
 class SparseSolveTorchFunction(torch.autograd.Function):
@@ -281,6 +282,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         eps: Tensor | None = None,  # 2D array of eps_r, can be used in neural solver
         pol: str = "Ez",  # Ez or Hz
         double: bool = False,
+        _solver_cache: dict | None = None,
     ):
         ### entries_a: values of the sparse matrix A
         ### indices_a: row/column indices of the sparse matrix A
@@ -317,16 +319,37 @@ class SparseSolveTorchFunction(torch.autograd.Function):
 
         if numerical_solver == "solve_direct":
             with TimerCtx(enable=ENABLE_TIMER, desc="forward"):
+                pSolve = (
+                    _solver_cache.get("pSolve_fwd", None)
+                    if _solver_cache is not None
+                    else None
+                )
                 ctx.pSolve = None
                 if not double:
-                    A = (A / 1e17).astype(np.complex64)
-                    b = (b / 1e17).astype(np.complex64)
-                    # print(A, b)
-                x, pSolve = solve_linear(
-                    A, b, symmetry=symmetry, clear=not symmetry, double=double
-                )
+                    b = (b / SCALE).astype(np.complex64)
 
-                ctx.pSolve = pSolve
+                if pSolve is not None:
+                    # print("now we reuse the forward solver", flush=True)
+                    x = _solver_cache["pSolve_fwd"].solve(b)
+                else:
+                    if not double:
+                        A = (A / SCALE).astype(np.complex64)
+
+                        # print("max A and b", np.max(A), np.max(b))
+                    ### if not cache mode and not symmetric A, we cannot reuse anything, just clear it.
+                    x, pSolve = solve_linear(
+                        A,
+                        b,
+                        symmetry=symmetry,
+                        clear=not _solver_cache and not symmetry,
+                        double=double,
+                    )
+                    if _solver_cache is not None:
+                        _solver_cache["pSolve_fwd"] = pSolve
+                        # print("now we cache the forward solver", flush=True)
+                if symmetry:  # only when A is symmetric after precondiction, we can reuse pSolve for adjoint
+                    ctx.pSolve = pSolve
+                # print("forward x", np.max(x))
 
                 # x = solve_linear(A, b, iterative_method="lgmres", symmetry=symmetry, rtol=1e-2)
             # print(f"my solve time (symmetry={symmetry}): {t.interval}")
@@ -387,28 +410,13 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         ctx.eps = eps
         ctx.omega = omega
         ctx.double = double
+        ctx._solver_cache = _solver_cache
         return x
 
     @staticmethod
     def backward(ctx, grad):
         if ctx.use_autodiff:
-            return (
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
+            return tuple([None] * 20)
         else:
             adj_solver = ctx.adj_solver
             numerical_solver = ctx.numerical_solver
@@ -444,19 +452,39 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                 A_t = make_sparse(entries_a, indices_a, (N, N))
                 symmetry = False
             if numerical_solver == "solve_direct":
-                # print(f"adjoint A_t", A_t)
                 with TimerCtx(enable=ENABLE_TIMER, desc="adjoint"):
                     if not ctx.double:
-                        A_t = (A_t / 1e17).astype(np.complex64)
-                        adj_src = (adj_src / 1e17).astype(np.complex64)
-                    if ctx.pSolve is None:  ## need to solve
-                        adj, _ = solve_linear(
-                            A_t, adj_src, symmetry=symmetry, double=ctx.double
-                        )
+                        adj_src = (adj_src / SCALE).astype(np.complex64)
+
+                    if ctx.pSolve is None:
+                        ## no fwd solver to reuse, means A is not symmtric
+                        ## if we find cached adj solver, we reuse it
+                        if (
+                            ctx._solver_cache is not None
+                            and ctx._solver_cache["pSolve_adj"] is not None
+                        ):
+                            adj = ctx.pSolve.solve(adj_src)
+                        else:
+                            ## nothing to reuse, we need to solve it
+                            if not ctx.double:
+                                A_t = (A_t / SCALE).astype(np.complex64)
+                            adj, pSolve = solve_linear(
+                                A_t,
+                                adj_src,
+                                symmetry=symmetry,
+                                clear=not ctx._solver_cache,
+                                double=ctx.double,
+                            )
+                            # if cache mode, we need to cache this adj solver as well
+                            if ctx._solver_cache is not None:
+                                ctx._solver_cache["pSolve_adj"] = pSolve
                     else:
+                        ## we reuse fwd solver
+                        # print("now we reuse the forward solver for adjoint", flush=True)
                         adj = ctx.pSolve.solve(adj_src)
-                        ctx.pSolve.clear()
                         ctx.pSolve = None
+                    # print("backward adj", adj[100])
+
             elif numerical_solver == "none":
                 assert adj_solver is not None
                 # print("we are now using pure neural solver for adjoint", flush=True)
@@ -542,6 +570,9 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                 None,
                 None,
                 None,
+                None,
+                None,
+                None,
             )
 
 
@@ -555,9 +586,25 @@ class SparseSolveTorch(torch.nn.Module):
         self.neural_solver = neural_solver
         self.numerical_solver = numerical_solver
         self.use_autodiff = use_autodiff
+        self._solver_cache = {"pSolve_fwd": None, "pSolve_adj": None}
+
+        self.set_cache_mode(False)
 
     def set_shape(self, shape):
         self.shape = shape
+
+    def set_cache_mode(self, mode: bool):
+        self._cache_mode = mode
+        if not mode:
+            self.clear_solver_cache()
+
+    def clear_solver_cache(self):
+        if self._solver_cache["pSolve_fwd"] is not None:
+            self._solver_cache["pSolve_fwd"].clear()
+            self._solver_cache["pSolve_fwd"] = None
+        if self._solver_cache["pSolve_adj"] is not None:
+            self._solver_cache["pSolve_adj"].clear()
+            self._solver_cache["pSolve_adj"] = None
 
     def forward(
         self,
@@ -573,6 +620,7 @@ class SparseSolveTorch(torch.nn.Module):
         Pr=None,
         eps: Tensor | None = None,
         pol: str = "Ez",
+        double: bool = True,
     ):
         x = SparseSolveTorchFunction.apply(
             entries_a,
@@ -592,6 +640,8 @@ class SparseSolveTorch(torch.nn.Module):
             self.use_autodiff,
             eps,
             pol,
+            double,
+            self._solver_cache if self._cache_mode else None,
         )
         return x
 

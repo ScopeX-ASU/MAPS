@@ -1,4 +1,5 @@
 import autograd.numpy as npa
+import matplotlib.pyplot as plt
 import numpy as np
 import scipy.sparse as sp
 import torch
@@ -19,9 +20,10 @@ from thirdparty.ceviche.primitives import spsp_mult
 from .derivatives import compute_derivative_matrices
 from .preconditioner import create_symmetrizer
 from .solver import SparseSolveTorch, sparse_solve_torch
-import matplotlib.pyplot as plt
+
 # notataion is similar to that used in: http://www.jpier.org/PIERB/pierb36/11.11092006.pdf
 from .utils import sparse_mm, sparse_mv, torch_sparse_to_scipy_sparse
+
 __all__ = ["fdfd", "fdfd_ez", "fdfd_hz"]
 
 
@@ -285,9 +287,9 @@ class fdfd_ez(fdfd_ez_ceviche):
         self.neural_solver = neural_solver
         self.numerical_solver = numerical_solver
         if self.numerical_solver == "solve_direct":
-            assert (
-                self.neural_solver is None
-            ), "neural_solver is useless if numerical_solver is solve_direct"
+            assert self.neural_solver is None, (
+                "neural_solver is useless if numerical_solver is solve_direct"
+            )
         self.solver = SparseSolveTorch(
             shape=eps_r.shape,
             neural_solver=self.neural_solver,
@@ -302,6 +304,12 @@ class fdfd_ez(fdfd_ez_ceviche):
         # if run this function, will enable symmetric precondictioner
         if sym_precond:
             self._make_precond()
+
+    def clear_solver_cache(self):
+        self.solver.clear_solver_cache()
+
+    def set_cache_mode(self, mode: bool) -> None:
+        self.solver.set_cache_mode(mode)
 
     def _save_shape(self, grid):
         """
@@ -480,7 +488,9 @@ class fdfd_ez(fdfd_ez_ceviche):
                 # ----modified-----
                 # ez_adj_stored = self.solver.adj_field[key]
                 # ez_adj_stored = ez_adj_stored.reshape(self.shape)
-                hx_adj, hy_adj, ez_adj = self.solve(source_z=J_adj, slice_name="adj", mode="adj", temp="adj")
+                hx_adj, hy_adj, ez_adj = self.solve(
+                    source_z=J_adj, slice_name="adj", mode="adj", temp="adj"
+                )
                 ez_adj = ez_adj.reshape(self.shape)
                 hx_adj = hx_adj.reshape(self.shape)
                 hy_adj = hy_adj.reshape(self.shape)
@@ -510,14 +520,24 @@ class fdfd_ez(fdfd_ez_ceviche):
                     # print("this is the increment of the total flux: ", torch.abs(get_flux(hx_adj, hy_adj, ez_adj, frame_slice, self.dL/1e-6, "x")))
                     total_flux = total_flux + torch.abs(
                         get_flux(
-                            hx_adj, hy_adj, ez_adj, frame_slice, self.dL / MICRON_UNIT, "x"
+                            hx_adj,
+                            hy_adj,
+                            ez_adj,
+                            frame_slice,
+                            self.dL / MICRON_UNIT,
+                            "x",
                         )
                     )  # absolute to ensure positive flux
                 for frame_slice in y_slices:
                     # print("this is the increment of the total flux: ", torch.abs(get_flux(hx_adj, hy_adj, ez_adj, frame_slice, self.dL/1e-6, "y")))
                     total_flux = total_flux + torch.abs(
                         get_flux(
-                            hx_adj, hy_adj, ez_adj, frame_slice, self.dL / MICRON_UNIT, "y"
+                            hx_adj,
+                            hy_adj,
+                            ez_adj,
+                            frame_slice,
+                            self.dL / MICRON_UNIT,
+                            "y",
                         )
                     )  # in case that opposite direction cancel each other
                 total_flux = total_flux / 2  # 2 * total_flux --> total_flux
@@ -546,7 +566,14 @@ class fdfd_ez(fdfd_ez_ceviche):
         return ez_adj_dict, hx_adj_dict, hy_adj_dict, normalization_factor
 
     def _solve_fn(
-        self, eps_vec, entries_a, indices_a, Jz_vec, slice_name=None, mode=None, temp=None
+        self,
+        eps_vec,
+        entries_a,
+        indices_a,
+        Jz_vec,
+        slice_name=None,
+        mode=None,
+        temp=None,
     ):
         assert slice_name is not None, "slice_name must be provided"
         assert mode is not None, "mode must be provided"
@@ -615,9 +642,9 @@ class fdfd_hz(fdfd_hz_ceviche):
         self.neural_solver = neural_solver
         self.numerical_solver = numerical_solver
         if self.numerical_solver == "solve_direct":
-            assert (
-                self.neural_solver is None
-            ), "neural_solver is useless if numerical_solver is solve_direct"
+            assert self.neural_solver is None, (
+                "neural_solver is useless if numerical_solver is solve_direct"
+            )
         self.solver = SparseSolveTorch(
             shape=eps_r.shape,
             neural_solver=self.neural_solver,
@@ -1103,9 +1130,9 @@ class fdfd_hz(fdfd_hz_ceviche):
         self.neural_solver = neural_solver
         self.numerical_solver = numerical_solver
         if self.numerical_solver == "solve_direct":
-            assert (
-                self.neural_solver is None
-            ), "neural_solver is useless if numerical_solver is solve_direct"
+            assert self.neural_solver is None, (
+                "neural_solver is useless if numerical_solver is solve_direct"
+            )
         self.solver = SparseSolveTorch(
             shape=eps_r.shape,
             neural_solver=self.neural_solver,

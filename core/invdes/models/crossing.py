@@ -178,8 +178,9 @@ class CrossingOptimization(BaseOptimization):
                 # init_method="checkerboard",
                 # init_method="ball",
                 init_method="diamond_0.3",
+                # init_method="crossing",
                 # denorm_mode="linear_index",
-                denorm_mode="linear_1",
+                denorm_mode="linear_eps",
                 binary_projection=dict(
                     fw_threshold=100,
                     bw_threshold=100,

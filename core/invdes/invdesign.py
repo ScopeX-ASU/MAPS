@@ -206,7 +206,7 @@ class InvDesign:
                 # (port_name, wl, mode, temp), extract pol from mode, e.g., Ez1 -> Ez
                 pol = plot_cfgs.field_keys[j][2][:2]
                 plot_kwargs = dict(
-                    ps_map=self.devOptimization._eps_map,
+                    eps_map=self.devOptimization._eps_map,
                     obj=output_dict["breakdown"][plot_cfgs.objs[j]]["value"],
                     plot_filename=plot_filename + f"_{i}" + f"_{plot_cfgs.objs[j]}.jpg",
                     field_key=plot_cfgs.field_keys[j],
@@ -263,7 +263,7 @@ class InvDesign:
 
             log = f"Step {i:3d} (sharp: {feed_dict['sharpness']:.1f}) "
             log += ", ".join(
-                [f"{k}: {obj['value']:.3f}" for k, obj in results["breakdown"].items()]
+                [f"{k}: {obj['value']:.4f}" for k, obj in results["breakdown"].items()]
             )
             if verbose:
                 logger.info(log)

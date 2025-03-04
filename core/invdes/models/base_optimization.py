@@ -1,7 +1,7 @@
 """
 Date: 2024-10-04 18:49:06
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-02-25 23:20:21
+LastEditTime: 2025-03-03 23:08:53
 FilePath: /MAPS/core/invdes/models/base_optimization.py
 """
 
@@ -269,16 +269,29 @@ class BaseOptimization(nn.Module):
             epsilon_map if epsilon_map is not None else self.device.epsilon_map
         )
         ## this is input source wavelength range, each wl needs to build a fdfd simulation
+        ## IMPORTANT: when to create a new simulation instance?
+        ## Any change that can affect matrix A, we need to create new simulation, e.g., (wl, pol, temp)
+        ## why: because we need this sim instance to cache solver state to reuse the solver, requiring the shared matrix A.
         wl_cen, wl_width, n_wl = sim_cfg["wl_cen"], sim_cfg["wl_width"], sim_cfg["n_wl"]
         simulations = {}  # different polarization and wavelength requires different simulation instances
+
+        temperatures = []
+        for _, cfg in self.obj_cfgs.items():
+            if isinstance(cfg, dict) and "temp" in cfg:
+                temperatures = temperatures + cfg["temp"]
+            else:
+                continue
+        temperatures = set(temperatures)
+
         for wl in np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl):
             for pol in in_pols:  # {Ez}, {Hz}, {Ez, Hz}
                 omega = 2 * np.pi * C_0 / (wl * MICRON_UNIT)
                 dl = self.device.grid_step * MICRON_UNIT
-                sim = self.device.create_simulation(
-                    omega, dl, epsilon_map, self.device.NPML, solver, pol=pol
-                )
-                simulations[(wl, pol)] = sim
+                for temp in temperatures:
+                    sim = self.device.create_simulation(
+                        omega, dl, epsilon_map, self.device.NPML, solver, pol=pol
+                    )
+                    simulations[(wl, pol, temp)] = sim
 
         self.objective = ObjectiveFunc(
             simulations=simulations,

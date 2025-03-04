@@ -1,4 +1,5 @@
 import copy
+import math
 from copy import deepcopy
 from typing import Tuple
 
@@ -14,11 +15,12 @@ from core.utils import (
     get_eigenmode_coefficients,
     get_flux,
     get_shape_similarity,
+    print_stat,
 )
 from thirdparty.ceviche import jacobian
 from thirdparty.ceviche.constants import MU_0
-from core.utils import print_stat
-import math
+
+
 class EigenmodeObjective(object):
     def __init__(
         self,
@@ -77,15 +79,19 @@ class EigenmodeObjective(object):
             self.name,
             self.grid_step,
         )
+        target_temps = set(target_temps)
         ## for each wavelength, we evaluate the objective
-        for (wl, pol), sim in self.sims.items():
+        for (wl, pol, temp), sim in self.sims.items():
             ## we calculate the average eigen energy for all output modes
-            if not any(math.isclose(wl, target_wl, rel_tol=0, abs_tol=1e-4) for target_wl in target_wls):
+            if not any(
+                math.isclose(wl, target_wl, rel_tol=0, abs_tol=1e-4)
+                for target_wl in target_wls
+            ):
                 continue
             if pol != in_mode[:2]:
                 continue
             for out_mode in out_modes:
-                for temp in target_temps:
+                if temp in target_temps:
                     src, ht_m, et_m, norm_p, require_sim = self.port_profiles[
                         out_slice_name
                     ][(wl, out_mode)]
@@ -215,11 +221,12 @@ class FluxNear2FarObjective(object):
         )
 
         s_list = []
+        target_temps = set(target_temps)
         ## for each wavelength, we evaluate the objective
-        for (wl, pol), _ in self.sims.items():
+        for (wl, pol, temp), _ in self.sims.items():
             if pol != in_mode[:2]:
                 continue
-            for temp in target_temps:
+            if temp in target_temps:
                 # monitor_slice = self.port_slices[out_port_name]
                 norm_power = self.port_profiles[in_slice_name][(wl, in_mode)][3]
                 # this is how ez, hx and hy are calculated in regular simulation
@@ -457,9 +464,10 @@ class FluxObjective(object):
         )
 
         s_list = []
+        target_temps = set(target_temps)
         ## for each wavelength, we evaluate the objective
-        for (wl, pol), _ in self.sims.items():
-            for temp in target_temps:
+        for (wl, pol, temp), _ in self.sims.items():
+            if temp in target_temps:
                 monitor_slice = self.port_slices[out_slice_name]
                 norm_power = self.port_profiles[in_slice_name][(wl, in_mode)][3]
                 field = fields[(in_slice_name, wl, in_mode, temp)]
@@ -568,12 +576,16 @@ class ResponseRecorderObjective(object):
             self.in_mode,
         )
         mean_phase_list = []
+        target_temps = set(target_temps)
         ## for each wavelength, we evaluate the objective
-        for (wl, pol), sim in self.sims.items():
+        for (wl, pol, temp), sim in self.sims.items():
             ## we calculate the average eigen energy for all output modes
-            if not any(math.isclose(wl, target_wl, rel_tol=0, abs_tol=1e-4) for target_wl in target_wls):
+            if not any(
+                math.isclose(wl, target_wl, rel_tol=0, abs_tol=1e-4)
+                for target_wl in target_wls
+            ):
                 continue
-            for temp in target_temps:
+            if temp in target_temps:
                 monitor_slice = self.port_slices[out_slice_name]
                 fz = fields[(in_slice_name, wl, in_mode, temp)][pol]
                 fz = fz[monitor_slice]
@@ -662,15 +674,19 @@ class ShapeSimilarityObjective(object):
         )
 
         similarity_list = []
+        target_temps = set(target_temps)
         ## for each wavelength, we evaluate the objective
-        for (wl, pol), sim in self.sims.items():
+        for (wl, pol, temp), sim in self.sims.items():
             ## we calculate the average eigen energy for all output modes
-            if not any(math.isclose(wl, target_wl, rel_tol=0, abs_tol=1e-4) for target_wl in target_wls):
+            if not any(
+                math.isclose(wl, target_wl, rel_tol=0, abs_tol=1e-4)
+                for target_wl in target_wls
+            ):
                 continue
             if pol != in_mode[:2]:
                 continue
             for out_mode in out_modes:
-                for temp in target_temps:
+                if temp in target_temps:
                     monitor_slice = self.port_slices[out_slice_name]
                     monitor_direction = self.port_slices_info[out_slice_name][
                         "direction"
@@ -763,15 +779,19 @@ class ShapeSimilarityNear2FarObjective(object):
         )
 
         similarity_list = []
+        target_temps = set(target_temps)
         ## for each wavelength, we evaluate the objective
-        for (wl, pol), sim in self.sims.items():
+        for (wl, pol, temp), sim in self.sims.items():
             ## we calculate the average eigen energy for all output modes
-            if not any(math.isclose(wl, target_wl, rel_tol=0, abs_tol=1e-4) for target_wl in target_wls):
+            if not any(
+                math.isclose(wl, target_wl, rel_tol=0, abs_tol=1e-4)
+                for target_wl in target_wls
+            ):
                 continue
             if pol != in_mode[:2]:
                 continue
             for out_mode in out_modes:
-                for temp in target_temps:
+                if temp in target_temps:
                     monitor_slice = self.port_slices[out_slice_name]
                     monitor_direction = self.port_slices_info[out_slice_name][
                         "direction"
@@ -1116,6 +1136,10 @@ class ObjectiveFunc(object):
             temperatures = temperatures + cfg["temp"]
         temperatures = set(temperatures)
         if custom_source is None:
+            ### we only refactor the A matrix if A changes, i.e., different wl, eps, pol.
+            ### If only source/mode changes, the A keeps the same, we do not need to refactor the matrix, we can reuse the pardiso solver.
+            ### so here we need to reorder the simulation and cluster them into groups, so I can reuse the psolve if they have the same (temp, pol, and wl)
+            _simulation_queues = {}
             for slice_name, port_profile in self.port_profiles.items():
                 for (wl, mode), (
                     source,
@@ -1132,58 +1156,59 @@ class ObjectiveFunc(object):
                     pol = mode[:2]
                     ## temperature is effective only when there is active region defined
                     for temp in temperatures:
-                        if (
-                            getattr(self.device, "active_region_masks", None)
-                            is not None
-                        ):
-                            control_cfgs = {
-                                name: {"T": temp}
-                                for name in self.device.active_region_masks.keys()
-                            }
-                            modulated_eps = self.device.apply_active_modulation(
-                                permittivity, control_cfgs
+                        if (wl, pol, temp) not in _simulation_queues:
+                            _simulation_queues[(wl, pol, temp)] = [
+                                dict(mode=mode, slice_name=slice_name, source=source)
+                            ]
+                        else:
+                            _simulation_queues[(wl, pol, temp)].append(
+                                dict(mode=mode, slice_name=slice_name, source=source)
                             )
-                            self.sims[(wl, pol)].eps_r = modulated_eps
-                        else:
-                            self.sims[(wl, pol)].eps_r = permittivity
-                        ## eps_r: permittivity tensor, denormalized
-
-                        # self.sims[wl].eps_r = get_temp_related_eps(
-                        #     eps=permittivity,
-                        #     temp=temp,
-                        #     temp_0=300,
-                        #     eps_r_0=Si_eps(wl),
-                        #     dn_dT=1.8e-4,
-                        # )
-                        # plt.figure()
-                        # plt.imshow(source.real.detach().cpu().numpy(), cmap="hot")
-                        # plt.colorbar()
-                        # plt.savefig(f"source_{wl}_{pol}_{slice_name}_{mode}_{temp}.png")
-                        # plt.close()
-                        # quit()
-                        Fx, Fy, Fz = self.sims[(wl, pol)].solve(
-                            source, slice_name=slice_name, mode=mode, temp=temp
+            # print(_simulation_queues)
+            ## after clustering, we can run simulation for each group, and only factorize matrix once per group
+            for (wl, pol, temp), sim_inst_cfgs in _simulation_queues.items():
+                sim = self.sims[(wl, pol, temp)]
+                sim.set_cache_mode(True)
+                sim.clear_solver_cache()
+                for idx, sim_inst_cfg in enumerate(sim_inst_cfgs):
+                    slice_name = sim_inst_cfg["slice_name"]
+                    mode = sim_inst_cfg["mode"]
+                    source = sim_inst_cfg["source"]
+                    ## for each simulation instance, we run simulation
+                    if getattr(self.device, "active_region_masks", None) is not None:
+                        control_cfgs = {
+                            name: {"T": temp}
+                            for name in self.device.active_region_masks.keys()
+                        }
+                        modulated_eps = self.device.apply_active_modulation(
+                            permittivity, control_cfgs
                         )
-                        # print("this is the stats of the Fz")
-                        # print_stat(Fz.real)
-                        # print("this is the dtype of the Fz", Fz.dtype, flush=True)
-                        # quit()
-                        if pol == "Ez":
-                            self.solutions[(slice_name, wl, mode, temp)] = {
-                                "Hx": Fx,
-                                "Hy": Fy,
-                                "Ez": Fz,
-                            }
-                        elif pol == "Hz":
-                            self.solutions[(slice_name, wl, mode, temp)] = {
-                                "Ex": Fx,
-                                "Ey": Fy,
-                                "Hz": Fz,
-                            }
-                        else:
-                            raise ValueError("Invalid polarization")
+                        sim.eps_r = modulated_eps
+                    else:
+                        sim.eps_r = permittivity
 
-                        self.As[(wl, temp)] = self.sims[(wl, pol)].A
+                    Fx, Fy, Fz = sim.solve(
+                        source, slice_name=slice_name, mode=mode, temp=temp
+                    )
+                    if pol == "Ez":
+                        self.solutions[(slice_name, wl, mode, temp)] = {
+                            "Hx": Fx,
+                            "Hy": Fy,
+                            "Ez": Fz,
+                        }
+                    elif pol == "Hz":
+                        self.solutions[(slice_name, wl, mode, temp)] = {
+                            "Ex": Fx,
+                            "Ey": Fy,
+                            "Hz": Fz,
+                        }
+                    else:
+                        raise ValueError("Invalid polarization")
+
+                    self.As[(wl, temp)] = sim.A
+            ## IMPORTANT: You can clear the cache after backward. OR in next iteration's forward, the above cache will be cleared.
+            # Do not clear it here, as the pSolve can be reused by backward if symmetric A
+
         else:  # we have a custom source to simulate
             slice_name = custom_source["slice_name"]
             src = custom_source["source"]
@@ -1212,11 +1237,11 @@ class ObjectiveFunc(object):
                     modulated_eps = self.device.apply_active_modulation(
                         permittivity, control_cfgs
                     )
-                    self.sims[(wl, pol)].eps_r = modulated_eps
+                    self.sims[(wl, pol, temp)].eps_r = modulated_eps
                 else:
-                    self.sims[(wl, pol)].eps_r = permittivity
+                    self.sims[(wl, pol, temp)].eps_r = permittivity
 
-                Fx, Fy, Fz = self.sims[(wl, pol)].solve(
+                Fx, Fy, Fz = self.sims[(wl, pol, temp)].solve(
                     source, slice_name=slice_name, mode=mode, temp=temp
                 )
 
@@ -1233,7 +1258,7 @@ class ObjectiveFunc(object):
                         "Hz": Fz,
                     }
 
-                self.As[(wl, temp)] = self.sims[(wl, pol)].A
+                self.As[(wl, temp)] = self.sims[(wl, pol, temp)].A
         self.breakdown = {}
         for name, obj in self.Js.items():
             weight, value = obj["weight"], obj["fn"](fields=self.solutions)

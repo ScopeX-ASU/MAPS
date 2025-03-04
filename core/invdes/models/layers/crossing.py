@@ -49,9 +49,9 @@ class Crossing(N_Ports):
                 "Crossing region width and length are not equal, this is not a square crossing region."
             )
         wl_cen = sim_cfg["wl_cen"]
-        # eps_r_fn = material_fn_dict[material_r]
+        eps_r_fn = material_fn_dict[material_r]
         # eps_r_fn = lambda wl: 3.48**2 # effective index of Si waveguide
-        eps_r_fn = lambda wl: 2.848152 ** 2  # effective index of Si waveguide
+        # eps_r_fn = lambda wl: 2.848152 ** 2  # effective index of Si waveguide
         eps_bg_fn = material_fn_dict[material_bg]
         port_cfgs = dict(
             in_port_1=dict(

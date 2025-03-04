@@ -1,7 +1,7 @@
 """
 Date: 1969-12-31 17:00:00
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-02-16 16:51:36
+LastEditTime: 2025-03-03 23:37:54
 FilePath: /MAPS/core/invdes/examples/optical_diode.py
 """
 
@@ -43,7 +43,7 @@ if __name__ == "__main__":
 
     input_port_width = 0.48
     output_port_width = 0.8
-    exp_name = "180_220"
+    exp_name = "optical_diode_180_220"
     # exp_name = "adam"
 
     sim_cfg.update(
@@ -52,7 +52,7 @@ if __name__ == "__main__":
             # border_width=[port_len, port_len, 2, 2],
             border_width=[0, 0, 2, 2],
             resolution=50,
-            plot_root=f"./figs/optical_diode_{opticaldiode_region_size[0]}_{opticaldiode_region_size[1]}_{exp_name}",
+            plot_root=f"./figs/{exp_name}_{opticaldiode_region_size[0]}_{opticaldiode_region_size[1]}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -93,21 +93,29 @@ if __name__ == "__main__":
     invdesign = InvDesign(
         devOptimization=opt,
         optimizer=Config(
-            # name="adam",
-            name="nesterov",
+            name="adam",
+            # name="nesterov",
             lr=1e-2,
-            use_bb=False,
+            # use_bb=False,
+        ),
+        plot_cfgs=Config(
+            plot=True,
+            interval=5,
+            plot_name=f"{exp_name}",
+            objs=["fwd_trans", "bwd_trans"],
+            field_keys=[
+                ("in_slice_1", 1.55, "Ez1", 300),
+                ("out_slice_1", 1.55, "Ez1", 300),
+            ],
+            in_slice_names=["in_slice_1", "out_slice_1"],
+            exclude_slice_names=[],
+        ),
+        checkpoint_cfgs=Config(
+            save_model=False,
+            ckpt_name=f"{exp_name}",
+            dump_gds=True,
+            gds_name=f"{exp_name}",
         ),
     )
     invdesign.optimize(
-        plot=True,
-        plot_filename=f"optical_diode_{exp_name}",
-        objs=["fwd_trans", "bwd_trans"],
-        field_keys=[
-            ("in_slice_1", 1.55, "Ez1", 300),
-            ("out_slice_1", 1.55, "Ez1", 300),
-        ],
-        in_slice_names=["in_slice_1", "out_slice_1"],
-        exclude_slice_names=[],
-        dump_gds=True,
     )
