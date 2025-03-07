@@ -1,7 +1,7 @@
 """
 Date: 2024-10-10 19:50:23
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-03-04 00:33:14
+LastEditTime: 2025-03-07 00:36:41
 FilePath: /MAPS/core/fdfd/solver.py
 """
 
@@ -16,6 +16,7 @@ from torch import Tensor
 from core.utils import print_stat
 from thirdparty.ceviche.constants import *
 from thirdparty.ceviche.utils import make_sparse
+from .cudss_spsolve import spsolve_cudss
 
 try:
     # from pyMKL import pardisoSolver
@@ -353,6 +354,21 @@ class SparseSolveTorchFunction(torch.autograd.Function):
 
                 # x = solve_linear(A, b, iterative_method="lgmres", symmetry=symmetry, rtol=1e-2)
             # print(f"my solve time (symmetry={symmetry}): {t.interval}")
+        elif numerical_solver == "solve_direct_gpu":
+            assert symmetry and not double
+            with TimerCtx(enable=ENABLE_TIMER, desc="forward"):
+                if not double:
+                    b = (b / SCALE).astype(np.complex64)
+                    A = (A / SCALE).astype(np.complex64)
+
+                with torch.cuda.stream(torch.cuda.default_stream()):
+                    A = A.tocoo().tocsr().sorted_indices()
+                    x = spsolve_cudss(
+                        A, b, device=eps_matrix.device, mtype=1 if symmetry else 0
+                    )
+                torch.cuda.synchronize()
+
+                # print("forward x", np.max(x))
         elif numerical_solver == "none":
             assert neural_solver is not None
             # print("we are now using pure neural solver", flush=True)
@@ -484,6 +500,23 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                         adj = ctx.pSolve.solve(adj_src)
                         ctx.pSolve = None
                     # print("backward adj", adj[100])
+
+            elif numerical_solver == "solve_direct_gpu":
+                assert symmetry and not ctx.double
+                with TimerCtx(enable=ENABLE_TIMER, desc="adjoint"):
+                    if not ctx.double:
+                        adj_src = (adj_src / SCALE).astype(np.complex64)
+                        A_t = (A_t / SCALE).astype(np.complex64)
+
+                    with torch.cuda.stream(torch.cuda.default_stream()):
+                        A_t = A_t.tocoo().tocsr().sorted_indices()
+                        adj = spsolve_cudss(
+                            A_t,
+                            adj_src,
+                            device=eps_matrix.device,
+                            mtype=1 if symmetry else 0,
+                        )
+                    torch.cuda.synchronize()
 
             elif numerical_solver == "none":
                 assert adj_solver is not None

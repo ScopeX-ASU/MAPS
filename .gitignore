@@ -7,6 +7,8 @@ __pycache__/
 *.so
 *.png
 *.jpg
+*.gds
+*.out
 
 # Distribution / packaging
 .Python
