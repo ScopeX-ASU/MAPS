@@ -2014,7 +2014,7 @@ def Si_eps(wavelength):
 
 
 @lru_cache(maxsize=64)
-def Si_eff_eps(wavelength, width: float = 0.48, thickness: float = 0.22):
+def Si_eff_eps(wavelength, width: float = 10, thickness: float = 0.22):
     """Returns the effective permittivity of silicon at the given wavelength"""
     if width > 1:  # very wide waveguidem we will treat it as infinite wide waveguide
         assert 0.15 <= thickness <= 0.22, "thickness should be between 0.15 and 0.22"

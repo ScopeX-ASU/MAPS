@@ -1,7 +1,7 @@
 """
 Date: 2024-10-04 18:47:39
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-02-16 16:52:48
+LastEditTime: 2025-03-13 21:16:23
 FilePath: /MAPS/core/invdes/models/optical_diode.py
 """
 
@@ -18,16 +18,17 @@ class DefaultConfig(DefaultOptimizationConfig):
                 design_region_param_cfgs=dict(
                     design_region_1=dict(
                         method="levelset",
-                        rho_resolution=[25, 25],
+                        rho_resolution=[50, 50],
                         interpolation="bilinear",
+                        denorm_mode="linear_1",
                         transform=[
                             dict(type="mirror_symmetry", dims=[1]),
-                            dict(type="blur", mfs=0.1, resolutions=[310, 310], dim="xy"),
+                            dict(type="blur", mfs=0.2, resolutions=[310, 310], dim="xy"),
                             dict(type="binarize"),
                         ], # there is no symmetry in this design region
                         
-                        init_method="rectangle",
-                        # init_method="random",
+                        # init_method="rectangle",
+                        init_method="random",
                         binary_projection=dict(
                             fw_threshold=100,
                             bw_threshold=100,
@@ -190,7 +191,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         direction="x",
                     ),
                     bwd_rad_trans_xm=dict(
-                        weight=2,
+                        weight=-0.1,
                         #### objective is evaluated at this port
                         in_slice_name="out_slice_1",
                         out_slice_name="rad_slice_xm",

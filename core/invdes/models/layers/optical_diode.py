@@ -1,3 +1,4 @@
+from functools import partial
 from typing import Tuple
 
 import torch
@@ -12,11 +13,11 @@ __all__ = ["OpticalDiode"]
 class OpticalDiode(N_Ports):
     def __init__(
         self,
-        material_r1: str = "Si",  # waveguide material
-        material_r2: str = "SiO2",  # waveguide material
+        material_r1: str = "Si_eff",  # waveguide material
+        material_r2: str = "Si_eff",  # waveguide material
         material_bg: str = "SiO2",  # background material
-        material_in_port: str = "Si",  # input port material
-        material_out_port: str = "Si",  # output port material
+        thickness_r1: float = 0.22,
+        thickness_r2: float = 0.15,
         sim_cfg: dict = {
             "border_width": [
                 0,
@@ -39,23 +40,17 @@ class OpticalDiode(N_Ports):
         wl_cen = sim_cfg["wl_cen"]
         if isinstance(material_r1, str):
             eps_r1_fn = material_fn_dict[material_r1]
+            if "_eff" in material_r1:
+                eps_r1_fn = partial(eps_r1_fn, thickness=thickness_r1)
         else:
             eps_r1_fn = lambda wl: material_r1
-        
+
         if isinstance(material_r2, str):
             eps_r2_fn = material_fn_dict[material_r2]
+            if "_eff" in material_r2:
+                eps_r2_fn = partial(eps_r2_fn, thickness=thickness_r2)
         else:
             eps_r2_fn = lambda wl: material_r2
-        
-        if isinstance(material_in_port, str):
-            eps_in_port_fn = material_fn_dict[material_in_port]
-        else:
-            eps_in_port_fn = lambda wl: material_in_port
-        
-        if isinstance(material_out_port, str):
-            eps_out_port_fn = material_fn_dict[material_out_port]
-        else:
-            eps_out_port_fn = lambda wl: material_out_port
 
         eps_bg_fn = material_fn_dict[material_bg]
 
@@ -65,16 +60,16 @@ class OpticalDiode(N_Ports):
                 direction="x",
                 center=[-(port_len[0] + box_size[0] / 2) / 2, 0],
                 size=[port_len[0] + box_size[0] / 2, port_width[0]],
-                # eps=eps_r_fn(wl_cen),
-                eps=2.411707**2, # neff from Lumerical
+                eps=eps_r1_fn(wl_cen),
+                # eps=2.848152**2, # neff from Lumerical
             ),
             out_port_1=dict(
                 type="box",
                 direction="x",
                 center=[(port_len[1] + box_size[0] / 2) / 2, 0],
                 size=[port_len[1] + box_size[0] / 2, port_width[1]],
-                # eps=eps_r_fn(wl_cen),
-                eps=2.688673**2, # neff from Lumerical
+                eps=eps_r1_fn(wl_cen),
+                # eps=2.848152**2, # neff from Lumerical
             ),
         )
 
@@ -89,11 +84,8 @@ class OpticalDiode(N_Ports):
                 size=box_size,
                 # eps=eps_r_fn(wl_cen),
                 # eps_bg=eps_bg_fn(wl_cen),
-                eps = 2.848152**2,
-                # eps_bg = 2.539683**2, # 150
-                # eps_bg = 2.594905**2, # 160
-                # eps_bg = 2.645874**2, # 170
-                eps_bg = 2.692927**2, # 180
+                eps=eps_r1_fn(wl_cen),
+                eps_bg=eps_r2_fn(wl_cen),  # 150
             )
         )
 

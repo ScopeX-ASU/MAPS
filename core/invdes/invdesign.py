@@ -97,7 +97,7 @@ class InvDesign:
             scheduler_type="sharp_scheduler",
             config_total=self._cfg,
         )
-        self.plot_thread = ThreadPoolExecutor(1)
+        self.plot_thread = None  # ThreadPoolExecutor(2)
         self.saver = BestKModelSaver(
             k=1,
             descend=False,
@@ -139,6 +139,7 @@ class InvDesign:
         )
 
         self.global_step = 0
+        self._log = ""
 
     def load_cfgs(self, **cfgs):
         # Start with default configurations
@@ -171,11 +172,16 @@ class InvDesign:
                 "gds_name must be provided if dump gds"
             )
 
+    def _before_step_callbacks(self, feed_dict) -> Dict[str, Any]:
+        return feed_dict
+
     def before_step(self) -> Dict[str, Any]:
+        self._log = ""  # reset log
         sharpness = self.sharp_scheduler.get_sharpness()
         feed_dict = dict(
             sharpness=sharpness,
         )
+        feed_dict = self._before_step_callbacks(feed_dict)
         return feed_dict
 
     def run_step(self, feed_dict: Dict[str, Any] = {}):
@@ -265,6 +271,7 @@ class InvDesign:
             log += ", ".join(
                 [f"{k}: {obj['value']:.4f}" for k, obj in results["breakdown"].items()]
             )
+            log += self._log
             if verbose:
                 logger.info(log)
         self.after_epoch(results)
