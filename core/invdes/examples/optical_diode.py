@@ -64,9 +64,9 @@ if __name__ == "__main__":
     input_port_width = 0.48
     output_port_width = 0.8
     thickness_r1 = 0.22
-    thickness_r2 = 0.15
-    init_mfs = 0.35
-    final_mfs = 0.2
+    thickness_r2 = 0
+    init_mfs = 0.1
+    final_mfs = 0.1
 
     exp_name = f"optical_diode_{thickness_r1}_{thickness_r2}_mfs={init_mfs}-{final_mfs}"
 
@@ -99,7 +99,7 @@ if __name__ == "__main__":
 
     device = OpticalDiode(
         material_r1="Si_eff",
-        material_r2="Si_eff",
+        material_r2="SiO2",
         thickness_r1=thickness_r1,
         thickness_r2=thickness_r2,
         sim_cfg=sim_cfg,

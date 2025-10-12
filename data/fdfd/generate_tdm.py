@@ -38,7 +38,7 @@ def tdm_opt(
     perturb_probs=[0.05, 0.1, 0.15],
 ):
     set_torch_deterministic(int(device_id))
-    dump_data_path = f"./data/fdfd/tdm/raw_test"
+    dump_data_path = f"./data/fdfd/tdm/raw_opt_traj_ptb"
     sim_cfg = DefaultSimulationConfig()
     target_img_size = 512
     resolution = 50
@@ -61,7 +61,7 @@ def tdm_opt(
             solver="ceviche_torch",
             border_width=[0, 0, port_len, port_len],
             resolution=resolution,
-            plot_root=f"./data/fdfd/tdm/plot_test/tdm_{device_id}",
+            plot_root=f"./data/fdfd/tdm/plot_opt_traj_ptb/tdm_{device_id}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -76,7 +76,7 @@ def tdm_opt(
         port_width=(input_port_width, output_port_width),
         device=operation_device,
     )
-    hr_device = device.copy(resolution=50)
+    hr_device = device.copy(resolution=310)
     print(device)
     opt = TDMOptimization(
         device=device,

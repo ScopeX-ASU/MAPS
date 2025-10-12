@@ -136,8 +136,6 @@ class BendingOptimization(BaseOptimization):
         for region_name in device.design_region_cfgs.keys():
             design_region_param_cfgs[region_name] = dict(
                 method="levelset",
-                interpolation="gaussian",
-                # interpolation="bilinear",
                 rho_resolution=[25, 25],
                 transform=[
                     dict(type="transpose_symmetry", rot_k=3),
@@ -152,7 +150,8 @@ class BendingOptimization(BaseOptimization):
                     dict(type="binarize"),
                 ],
                 init_method="random",
-                # init_method="ring",
+                denorm_mode="linear_eps",
+                interpolation="bilinear",
                 binary_projection=dict(
                     fw_threshold=100,
                     bw_threshold=100,

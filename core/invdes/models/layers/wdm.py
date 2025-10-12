@@ -1,3 +1,4 @@
+from functools import partial
 from typing import Tuple
 
 import torch
@@ -13,7 +14,10 @@ __all__ = ["WDM"]
 class WDM(N_Ports):
     def __init__(
         self,
-        material_r: str = "Si",  # waveguide material
+        material_r1: str = "Si_eff",  # waveguide material
+        material_r2: str = "SiO2",  # waveguide material
+        thickness_r1: float = 0.22,
+        thickness_r2: float = 0,
         material_bg: str = "SiO2",  # background material
         sim_cfg: dict = {
             "border_width": [
@@ -35,7 +39,20 @@ class WDM(N_Ports):
         device: torch.device = torch.device("cuda:0"),
     ):
         wl_cen = sim_cfg["wl_cen"]
-        eps_r_fn = material_fn_dict[material_r]
+        if isinstance(material_r1, str):
+            eps_r1_fn = material_fn_dict[material_r1]
+            if "_eff" in material_r1:
+                eps_r1_fn = partial(eps_r1_fn, thickness=thickness_r1)
+        else:
+            eps_r1_fn = lambda wl: material_r1
+
+        if isinstance(material_r2, str):
+            eps_r2_fn = material_fn_dict[material_r2]
+            if "_eff" in material_r2:
+                eps_r2_fn = partial(eps_r2_fn, thickness=thickness_r2)
+        else:
+            eps_r2_fn = lambda wl: material_r2
+
         eps_bg_fn = material_fn_dict[material_bg]
         port_cfgs = dict(
             in_port_1=dict(
@@ -43,23 +60,21 @@ class WDM(N_Ports):
                 direction="x",
                 center=[-(port_len[0] + box_size[0] / 2) / 2, 0],
                 size=[port_len[0] + box_size[0] / 2, port_width[0]],
-                eps=eps_r_fn(wl_cen),
+                eps=eps_r1_fn(wl_cen),
             ),
             out_port_1=dict(
                 type="box",
                 direction="x",
-                # center=[(port_len[1] + box_size[0] / 2) / 2, 1*port_width[1]],
                 center=[(port_len[1] + box_size[0] / 2) / 2, box_size[1] / 6],
                 size=[port_len[1] + box_size[0] / 2, port_width[1]],
-                eps=eps_r_fn(wl_cen),
+                eps=eps_r1_fn(wl_cen),
             ),
             out_port_2=dict(
                 type="box",
                 direction="x",
-                # center=[(port_len[1] + box_size[0] / 2) / 2, -1*port_width[1]],
                 center=[(port_len[1] + box_size[0] / 2) / 2, -box_size[1] / 6],
                 size=[port_len[1] + box_size[0] / 2, port_width[1]],
-                eps=eps_r_fn(wl_cen),
+                eps=eps_r1_fn(wl_cen),
             ),
         )
 
@@ -72,8 +87,8 @@ class WDM(N_Ports):
                     0,
                 ],
                 size=box_size,
-                eps=eps_r_fn(wl_cen),
-                eps_bg=eps_bg_fn(wl_cen),
+                eps=eps_r1_fn(wl_cen),
+                eps_bg=eps_r2_fn(wl_cen),
             )
         )
 
@@ -88,30 +103,33 @@ class WDM(N_Ports):
 
     def init_monitors(self, verbose: bool = True):
         rel_width = 2
+        pml = self.sim_cfg["PML"][0]
+        offset = 0.2 + pml
+        port_len = self.port_cfgs["in_port_1"]["size"][0]
         if verbose:
             logger.info("Start generating sources and monitors ...")
         src_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="in_slice_1",
-            rel_loc=0.25,
+            rel_loc=offset / port_len,
             rel_width=rel_width,
         )
         refl_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="refl_slice_1",
-            rel_loc=0.26,
+            rel_loc=(offset + 0.05) / port_len,
             rel_width=rel_width,
         )
         wl1_out_slice = self.build_port_monitor_slice(
             port_name="out_port_1",
             slice_name="out_slice_1",
-            rel_loc=0.75,
+            rel_loc=1 - offset / port_len,
             rel_width=rel_width,
         )
         wl2_out_slice = self.build_port_monitor_slice(
             port_name="out_port_2",
             slice_name="out_slice_2",
-            rel_loc=0.75,
+            rel_loc=1 - offset / port_len,
             rel_width=rel_width,
         )
         self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=rel_width)

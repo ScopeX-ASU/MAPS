@@ -127,7 +127,11 @@ class EtchMMIOptimization(BaseOptimization):
                 rho_resolution=[5, 5],
                 transform=[
                     dict(type="transpose_symmetry", flag=True),
-                    dict(type="blur", mfs=0.1, resolutions=[310, 310]),
+                    dict(
+                        type="blur",
+                        mfs=0.1,
+                        resolutions=[hr_device.resolution, hr_device.resolution],
+                    ),
                 ],
                 init_method="random",  # this can only converge to fwd transmission ~ 25% in TE1 mode
                 # init_method="ring",

@@ -79,7 +79,7 @@ def wdm_opt(
         port_width=(input_port_width, output_port_width),
         device=operation_device,
     )
-    hr_device = device.copy(resolution=50)
+    hr_device = device.copy(resolution=310)
     print(device)
     opt = WDMOptimization(
         device=device,

@@ -38,7 +38,7 @@ def bending_opt(
     perturb_probs=[0.1, 0.3, 0.5],
 ):
     set_torch_deterministic(int(device_id))
-    dump_data_path = f"./data/fdfd/bending/raw_opt_traj"
+    dump_data_path = f"./data/fdfd/bending/raw_opt_traj_ptb"
     sim_cfg = DefaultSimulationConfig()
     target_img_size = 256
     resolution = 50
@@ -61,7 +61,7 @@ def bending_opt(
             solver="ceviche_torch",
             border_width=[0, port_len, port_len, 0],
             resolution=resolution,
-            plot_root=f"./data/fdfd/bending/plot_opt_traj/bending_{device_id}",
+            plot_root=f"./data/fdfd/bending/plot_opt_traj_ptb/bending_{device_id}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",

@@ -15,10 +15,10 @@ class OpticalDiode(N_Ports):
     def __init__(
         self,
         material_r1: str = "Si_eff",  # waveguide material
-        material_r2: str = "Si_eff",  # waveguide material
-        material_bg: str = "SiO2",  # background material
+        material_r2: str = "SiO2",  # waveguide material
         thickness_r1: float = 0.22,
-        thickness_r2: float = 0.15,
+        thickness_r2: float = 0,
+        material_bg: str = "SiO2",  # background material
         sim_cfg: dict = {
             "border_width": [
                 0,

@@ -138,9 +138,17 @@ class MMIOptimization(BaseOptimization):
                 rho_resolution=[25, 25],
                 transform=[
                     dict(type="mirror_symmetry", dims=[1]),
+                    dict(
+                        type="blur",
+                        mfs=0.1,
+                        resolutions=[hr_device.resolution, hr_device.resolution],
+                        dim="xy",
+                    ),
+                    dict(type="binarize"),
                 ],
                 init_method="ones",
-                # init_method="ring",
+                denorm_mode="linear_eps",
+                interpolation="bilinear",
                 binary_projection=dict(
                     fw_threshold=100,
                     bw_threshold=100,

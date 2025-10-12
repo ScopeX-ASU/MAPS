@@ -169,7 +169,12 @@ class CrossingOptimization(BaseOptimization):
                 transform=[
                     dict(type="transpose_symmetry", rot_k=0),
                     dict(type="mirror_symmetry", dims=[0, 1]),
-                    dict(type="blur", mfs=0.1, resolutions=[310, 310], dim="xy"),
+                    dict(
+                        type="blur",
+                        mfs=0.1,
+                        resolutions=[hr_device.resolution, hr_device.resolution],
+                        dim="xy",
+                    ),
                     # dict(type="fft", mfs=0.1, resolutions=[310, 310], dim="xy"),
                     dict(type="binarize"),
                     # dict(type="transpose_symmetry", flag=True),
@@ -179,7 +184,6 @@ class CrossingOptimization(BaseOptimization):
                 # init_method="ball",
                 init_method="diamond_0.3",
                 # init_method="crossing",
-                # denorm_mode="linear_index",
                 denorm_mode="linear_eps",
                 binary_projection=dict(
                     fw_threshold=100,

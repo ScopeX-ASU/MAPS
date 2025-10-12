@@ -15,7 +15,7 @@ from .metalens import MetaLensOptimization
 from .metalens_fdtd import Metalens
 from .metamirror import MetaMirrorOptimization
 from .mmi import MMIOptimization
-from .mode_mux import ModeMuxOptimization
+from .mode_mux import ModeCvtMuxOptimization
 from .optical_diode import OpticalDiodeOptimization
 from .tdm import TDMOptimization
 from .wdm import WDMOptimization

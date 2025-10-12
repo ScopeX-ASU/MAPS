@@ -11,23 +11,7 @@ class DefaultConfig(DefaultOptimizationConfig):
         super().__init__()
         self.update(
             dict(
-                design_region_param_cfgs=dict(
-                    design_region_1=dict(
-                        method="levelset",
-                        rho_resolution=[20, 20],
-                        # transform=[dict(type="mirror_symmetry", dims=[1])],
-                        transform=[
-                            dict(type="blur", mfs=0.1, resolutions=[50, 50], dim="xy"),
-                            dict(type="binarize"),
-                        ],  # there is no symmetry in this design region
-                        init_method="ones",
-                        binary_projection=dict(
-                            fw_threshold=100,
-                            bw_threshold=100,
-                            mode="regular",
-                        ),
-                    )
-                ),
+                design_region_param_cfgs=dict(),
                 sim_cfg=dict(
                     solver="ceviche_torch",
                     binary_projection=dict(
@@ -270,6 +254,29 @@ class WDMOptimization(BaseOptimization):
         obj_cfgs=dict(),
         operation_device=torch.device("cuda:0"),
     ):
+        design_region_param_cfgs = dict()
+        for region_name in device.design_region_cfgs.keys():
+            design_region_param_cfgs[region_name] = dict(
+                method="levelset",
+                rho_resolution=[25, 25],
+                transform=[
+                    dict(
+                        type="blur",
+                        mfs=0.1,
+                        resolutions=[hr_device.resolution, hr_device.resolution],
+                        dim="xy",
+                    ),
+                    dict(type="binarize"),
+                ],  # there is no symmetry in this design region
+                init_method="ones",
+                denorm_mode="linear_eps",
+                interpolation="bilinear",
+                binary_projection=dict(
+                    fw_threshold=100,
+                    bw_threshold=100,
+                    mode="regular",
+                ),
+            )
         cfgs = DefaultConfig()  ## this is default configurations
         ## here we accept new configurations and update the default configurations
         cfgs.update(

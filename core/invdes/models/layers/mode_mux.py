@@ -1,19 +1,26 @@
+from functools import partial
 from typing import Tuple
 
 import torch
 from pyutils.general import logger
 
-from core.utils import get_material_fn
+from core.utils import material_fn_dict
 
 from .device_base import N_Ports
 
-__all__ = ["ModeMux"]
+__all__ = ["ModeCvtMux"]
 
 
-class ModeMux(N_Ports):
+class ModeCvtMux(N_Ports):
+    ### this is mode converter and mode mux fused together.
+    ### Ez1 from in_port_1 goes to Ez1 of out_port_1
+    ### Ez1 from in_port_2 goes to Ez2 of out_port_1
     def __init__(
         self,
-        material_r: str = "Si_eff",  # waveguide material
+        material_r1: str = "Si_eff",  # waveguide material
+        material_r2: str = "SiO2",  # waveguide material
+        thickness_r1: float = 0.22,  # waveguide thickness
+        thickness_r2: float = 0.0,  # waveguide thickness
         material_bg: str = "SiO2",  # background material
         etch_thickness: float = 0.15,
         sim_cfg: dict = {
@@ -36,35 +43,43 @@ class ModeMux(N_Ports):
         device: torch.device = torch.device("cuda:0"),
     ):
         wl_cen = sim_cfg["wl_cen"]
-        eps_r_fn = get_material_fn(material_r)
-        eps_bg_fn = get_material_fn(material_bg)
+        wl_cen = sim_cfg["wl_cen"]
+        if isinstance(material_r1, str):
+            eps_r1_fn = material_fn_dict[material_r1]
+            if "_eff" in material_r1:
+                eps_r1_fn = partial(eps_r1_fn, thickness=thickness_r1)
+        else:
+            eps_r1_fn = lambda wl: material_r1
+
+        if isinstance(material_r2, str):
+            eps_r2_fn = material_fn_dict[material_r2]
+            if "_eff" in material_r2:
+                eps_r2_fn = partial(eps_r2_fn, thickness=thickness_r2)
+        else:
+            eps_r2_fn = lambda wl: material_r2
+
+        eps_bg_fn = material_fn_dict[material_bg]
         port_cfgs = dict(
             in_port_1=dict(
                 type="box",
                 direction="x",
                 center=[-(port_len[0] + box_size[0] / 2) / 2, box_size[1] / 6],
                 size=[port_len[0] + box_size[0] / 2, port_width[0]],
-                eps=eps_r_fn(
-                    wl_cen, width=port_width[0], thickness=0.22
-                ),  # neff from Lumerical
+                eps=eps_r1_fn(wl_cen),  # neff from Lumerical
             ),
             in_port_2=dict(
                 type="box",
                 direction="x",
                 center=[-(port_len[0] + box_size[0] / 2) / 2, -box_size[1] / 6],
                 size=[port_len[0] + box_size[0] / 2, port_width[0]],
-                eps=eps_r_fn(
-                    wl_cen, width=port_width[0], thickness=0.22
-                ),  # neff from Lumerical
+                eps=eps_r1_fn(wl_cen),  # neff from Lumerical
             ),
             out_port_1=dict(
                 type="box",
                 direction="x",
                 center=[(port_len[1] + box_size[0] / 2) / 2, 0],
                 size=[port_len[1] + box_size[0] / 2, port_width[1]],
-                eps=eps_r_fn(
-                    wl_cen, width=port_width[1], thickness=0.22
-                ),  # neff from Lumerical
+                eps=eps_r1_fn(wl_cen),  # neff from Lumerical
             ),
         )
 
@@ -77,14 +92,8 @@ class ModeMux(N_Ports):
                     0,
                 ],
                 size=box_size,
-                eps=eps_r_fn(wl_cen, width=box_size[1], thickness=0.22),
-                # eps_bg = 2.539683**2, # 150
-                # eps_bg = 2.594905**2, # 160
-                # eps_bg = 2.645874**2, # 170
-                eps_bg=eps_r_fn(
-                    wl_cen, width=box_size[1], thickness=etch_thickness
-                ),  # 180
-                # eps_bg = 2.692927**2, # 180
+                eps=eps_r1_fn(wl_cen),
+                eps_bg=eps_r2_fn(wl_cen),
             )
         )
 
@@ -99,36 +108,39 @@ class ModeMux(N_Ports):
 
     def init_monitors(self, verbose: bool = True):
         rel_width = 2
+        pml = self.sim_cfg["PML"][0]
+        offset = 0.2 + pml
+        port_len = self.port_cfgs["in_port_1"]["size"][0]
         if verbose:
             logger.info("Start generating sources and monitors ...")
         src_slice_1 = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="in_slice_1",
-            rel_loc=0.7 / self.port_cfgs["in_port_1"]["size"][0],
+            rel_loc=offset / port_len,
             rel_width=rel_width,
         )
         src_slice_2 = self.build_port_monitor_slice(
             port_name="in_port_2",
             slice_name="in_slice_2",
-            rel_loc=0.7 / self.port_cfgs["in_port_1"]["size"][0],
+            rel_loc=offset / port_len,
             rel_width=rel_width,
         )
         refl_slice_1 = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="refl_slice_1",
-            rel_loc=0.75 / self.port_cfgs["in_port_1"]["size"][0],
+            rel_loc=(offset + 0.05) / port_len,
             rel_width=rel_width,
         )
         refl_slice_2 = self.build_port_monitor_slice(
             port_name="in_port_2",
             slice_name="refl_slice_2",
-            rel_loc=0.75 / self.port_cfgs["in_port_1"]["size"][0],
+            rel_loc=(offset + 0.05) / port_len,
             rel_width=rel_width,
         )
         out_slice = self.build_port_monitor_slice(
             port_name="out_port_1",
             slice_name="out_slice_1",
-            rel_loc=1 - 0.7 / self.port_cfgs["out_port_1"]["size"][0],
+            rel_loc=1 - offset / port_len,
             rel_width=rel_width,
         )
         self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=rel_width)

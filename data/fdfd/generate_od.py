@@ -38,7 +38,7 @@ def optical_diode_opt(
     perturb_probs=[0.05, 0.1, 0.15],
 ):
     set_torch_deterministic(int(device_id))
-    dump_data_path = f"./data/fdfd/optical_diode/raw_test"
+    dump_data_path = f"./data/fdfd/optical_diode/raw_opt_traj_ptb"
     sim_cfg = DefaultSimulationConfig()
     target_img_size = 256
     resolution = 50
@@ -54,14 +54,14 @@ def optical_diode_opt(
     ), f"right hand side: {optical_diode_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
 
     input_port_width = 0.48
-    output_port_width = 0.48
+    output_port_width = 0.8
 
     sim_cfg.update(
         dict(
             solver="ceviche_torch",
             border_width=[0, 0, port_len, port_len],
             resolution=resolution,
-            plot_root=f"./data/fdfd/optical_diode/plot_test/optical_diode_{device_id}",
+            plot_root=f"./data/fdfd/optical_diode/plot_opt_traj_ptb/optical_diode_{device_id}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",

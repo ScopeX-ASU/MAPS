@@ -16,9 +16,9 @@ from pyutils.config import Config
 
 from core.invdes import builder
 from core.invdes.invdesign import InvDesign
-from core.invdes.models import ModeMuxOptimization
+from core.invdes.models import ModeCvtMuxOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
-from core.invdes.models.layers import ModeMux
+from core.invdes.models.layers import ModeCvtMux
 from core.utils import set_torch_deterministic
 
 sys.path.pop(0)
@@ -67,7 +67,7 @@ if __name__ == "__main__":
         return fom, {"trans_product": {"weight": 1, "value": product}}
 
     obj_cfgs = dict(_fusion_func=fom_func)
-    device = ModeMux(
+    device = ModeCvtMux(
         etch_thickness=etch_thickness,
         sim_cfg=sim_cfg,
         box_size=mode_mux_region_size,
@@ -78,7 +78,7 @@ if __name__ == "__main__":
 
     hr_device = device.copy(resolution=310)
     print(device)
-    opt = ModeMuxOptimization(
+    opt = ModeCvtMuxOptimization(
         device=device,
         hr_device=hr_device,
         sim_cfg=sim_cfg,

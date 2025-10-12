@@ -33,7 +33,7 @@ def mdm_opt(
     perturb_probs=[0.05, 0.1, 0.15],
 ):
     set_torch_deterministic(int(device_id))
-    dump_data_path = f"./data/fdfd/mdm/raw_test_hz_branch"
+    dump_data_path = f"./data/fdfd/mdm/raw_opt_traj_ptb"
     sim_cfg = DefaultSimulationConfig()
     target_img_size = 256
     resolution = 50
@@ -48,15 +48,15 @@ def mdm_opt(
         round(mdm_region_size[0] + 2 * port_len, 2) == target_cell_size
     ), f"right hand side: {mdm_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
 
-    input_port_width = 0.48
-    output_port_width = 0.48
+    input_port_width = 0.8
+    output_port_width = 0.8
 
     sim_cfg.update(
         dict(
             solver="ceviche_torch",
             border_width=[0, 0, port_len, port_len],
             resolution=resolution,
-            plot_root=f"./data/fdfd/mdm/plot_test_hz_branch/mdm_{device_id}",
+            plot_root=f"./data/fdfd/mdm/plot_opt_traj_ptb/mdm_{device_id}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -71,7 +71,7 @@ def mdm_opt(
         port_width=(input_port_width, output_port_width),
         device=operation_device,
     )
-    hr_device = device.copy(resolution=200)
+    hr_device = device.copy(resolution=310)
     print(device)
     opt = MDMOptimization(
         device=device,

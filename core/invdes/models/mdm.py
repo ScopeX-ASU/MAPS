@@ -17,7 +17,9 @@ class DefaultConfig(DefaultOptimizationConfig):
                         rho_resolution=[20, 20],
                         # transform=[dict(type="mirror_symmetry", dims=[1])],
                         transform=[
-                            dict(type="blur", mfs=0.1, resolutions=[50, 50], dim="xy"),
+                            dict(
+                                type="blur", mfs=0.1, resolutions=[310, 310], dim="xy"
+                            ),
                             dict(type="binarize"),
                         ],  # there is no symmetry in this design region
                         init_method="random",
@@ -274,7 +276,7 @@ class MDMOptimization(BaseOptimization):
         for region_name in device.design_region_cfgs.keys():
             design_region_param_cfgs[region_name] = dict(
                 method="levelset",
-                rho_resolution=[20, 20],
+                rho_resolution=[25, 25],
                 transform=[
                     dict(
                         type="blur",
@@ -285,7 +287,8 @@ class MDMOptimization(BaseOptimization):
                     dict(type="binarize"),
                 ],
                 init_method="random",
-                # init_method="ring",
+                denorm_mode="linear_eps",
+                interpolation="bilinear",
                 binary_projection=dict(
                     fw_threshold=100,
                     bw_threshold=100,

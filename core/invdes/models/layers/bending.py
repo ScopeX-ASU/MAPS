@@ -1,4 +1,5 @@
 import warnings
+from functools import partial
 from typing import Tuple
 
 import torch
@@ -14,7 +15,10 @@ __all__ = ["Bending"]
 class Bending(N_Ports):
     def __init__(
         self,
-        material_r: str = "Si",  # waveguide material
+        material_r1: str = "Si_eff",  # waveguide material
+        material_r2: str = "SiO2",  # waveguide material
+        thickness_r1: float = 0.22,  # waveguide thickness
+        thickness_r2: float = 0.0,  # waveguide thickness
         material_bg: str = "SiO2",  # background material
         sim_cfg: dict = {
             "border_width": [
@@ -50,8 +54,22 @@ class Bending(N_Ports):
                 "Bending region width and length are not equal, this is not a square bending region."
             )
         wl_cen = sim_cfg["wl_cen"]
-        eps_r_fn = material_fn_dict[material_r]
+        if isinstance(material_r1, str):
+            eps_r1_fn = material_fn_dict[material_r1]
+            if "_eff" in material_r1:
+                eps_r1_fn = partial(eps_r1_fn, thickness=thickness_r1)
+        else:
+            eps_r1_fn = lambda wl: material_r1
+
+        if isinstance(material_r2, str):
+            eps_r2_fn = material_fn_dict[material_r2]
+            if "_eff" in material_r2:
+                eps_r2_fn = partial(eps_r2_fn, thickness=thickness_r2)
+        else:
+            eps_r2_fn = lambda wl: material_r2
+
         eps_bg_fn = material_fn_dict[material_bg]
+
         box_size = list(bending_region_size)
         port_cfgs = dict(
             in_port_1=dict(
@@ -59,14 +77,14 @@ class Bending(N_Ports):
                 direction="x",
                 center=[-(port_len[0] + box_size[0] / 2) / 2, 0],
                 size=[port_len[0] + box_size[0] / 2, port_width[0]],
-                eps=eps_r_fn(wl_cen),
+                eps=eps_r1_fn(wl_cen),
             ),
             out_port_1=dict(
                 type="box",
                 direction="y",
                 center=[0, (port_len[1] + box_size[1] / 2) / 2],
                 size=[port_width[1], port_len[1] + box_size[1] / 2],
-                eps=eps_r_fn(wl_cen),
+                eps=eps_r1_fn(wl_cen),
             ),
         )
 
@@ -77,8 +95,8 @@ class Bending(N_Ports):
             type="box",
             center=[0, 0],
             size=box_size,
-            eps=eps_r_fn(wl_cen),
-            eps_bg=eps_bg_fn(wl_cen),
+            eps=eps_r1_fn(wl_cen),
+            eps_bg=eps_r2_fn(wl_cen),
         )
 
         super().__init__(
