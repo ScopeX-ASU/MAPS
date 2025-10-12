@@ -552,7 +552,7 @@ class BaseParametrization(nn.Module):
         ## however, we can also use other methods such as nonlinear interpolation, e.g., create absorption (imag part of eps) for intermediate permittivity density
         eps_r = self.design_region_cfg["eps"]
         eps_bg = self.design_region_cfg["eps_bg"]
-        mode = mode or self.cfgs["denorm_mode"]
+        mode = mode or self.cfgs.get("denorm_mode", "linear_eps")
 
         alg, exp = mode.split("_")
 
