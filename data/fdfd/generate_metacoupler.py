@@ -5,20 +5,14 @@ LastEditTime: 2025-01-06 18:59:45
 FilePath: /MAPS/data/fdfd/generate_metacoupler.py
 """
 
-"""
-Date: 2024-10-03 02:27:36
-LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-10-04 00:50:55
-FilePath: /Metasurface-Opt/unitest/test_device_base.py
-"""
 import argparse
 
 import torch
 import torch.nn.functional as F
 
-from core.models import MetaCouplerOptimization
-from core.models.base_optimization import DefaultSimulationConfig
-from core.models.layers import MetaCoupler
+from core.invdes.models import MetaCouplerOptimization
+from core.invdes.models.base_optimization import DefaultSimulationConfig
+from core.invdes.models.layers import MetaCoupler
 from core.utils import set_torch_deterministic
 from thirdparty.ceviche.constants import *
 
@@ -99,13 +93,14 @@ def metacoupler_opt(device_id, operation_device):
     ).to(operation_device)
     print(opt)
 
+    n_epoch = 100
     optimizer = torch.optim.Adam(opt.parameters(), lr=0.02)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=70, eta_min=0.0002
     )
     last_design_region_dict = None
-    # for step in range(10):
-    for step in range(1):
+    for step in range(n_epoch):
+        # for step in range(1):
         optimizer.zero_grad()
         # results = opt.forward(sharpness=1 + 2 * step)
         results = opt.forward(sharpness=256)
@@ -127,19 +122,19 @@ def metacoupler_opt(device_id, operation_device):
                 eps_map=opt._eps_map,
                 obj=results["breakdown"]["fwd_trans"]["value"],
                 plot_filename="metacoupler_opt_step_{}_fwd.png".format(step),
-                field_key=("in_port_1", 1.55, 1),
+                field_key=("in_slice_1", 1.55, "Ez1", 300),
                 field_component="Ez",
-                in_port_name="in_port_1",
-                exclude_port_names=["refl_port_2"],
+                in_slice_name="in_slice_1",
+                exclude_slice_names=["refl_slice_2"],
             )
             opt.plot(
                 eps_map=opt._eps_map,
                 obj=results["breakdown"]["bwd_trans"]["value"],
                 plot_filename="metacoupler_opt_step_{}_bwd.png".format(step),
-                field_key=("out_port_1", 1.55, 1),
+                field_key=("out_slice_1", 1.55, "Ez1", 300),
                 field_component="Ez",
-                in_port_name="out_port_1",
-                exclude_port_names=["refl_port_1"],
+                in_slice_name="out_slice_1",
+                exclude_slice_names=["refl_slice_1"],
             )
         else:
             cosine_similarity = compare_designs(
@@ -154,19 +149,19 @@ def metacoupler_opt(device_id, operation_device):
                     eps_map=opt._eps_map,
                     obj=results["breakdown"]["fwd_trans"]["value"],
                     plot_filename="metacoupler_opt_step_{}_fwd.png".format(step),
-                    field_key=("in_port_1", 1.55, 1),
+                    field_key=("in_slice_1", 1.55, "Ez1", 300),
                     field_component="Ez",
-                    in_port_name="in_port_1",
-                    exclude_port_names=["refl_port_2"],
+                    in_slice_name="in_slice_1",
+                    exclude_slice_names=["refl_slice_2"],
                 )
                 opt.plot(
                     eps_map=opt._eps_map,
                     obj=results["breakdown"]["bwd_trans"]["value"],
                     plot_filename="metacoupler_opt_step_{}_bwd.png".format(step),
-                    field_key=("out_port_1", 1.55, 1),
+                    field_key=("out_slice_1", 1.55, "Ez1", 300),
                     field_component="Ez",
-                    in_port_name="out_port_1",
-                    exclude_port_names=["refl_port_1"],
+                    in_slice_name="out_slice_1",
+                    exclude_slice_names=["refl_slice_1"],
                 )
         # for p in opt.parameters():
         #     print(p.grad)

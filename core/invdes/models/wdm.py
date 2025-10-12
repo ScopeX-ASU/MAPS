@@ -72,7 +72,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_modes=(
                             "Ez1",
                         ),  # can evaluate on multiple output modes and get average transmission
-                        type="flux",
+                        type="eigenmode",
                         direction="x+",
                     ),
                     wl2_trans=dict(
@@ -102,7 +102,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_modes=(
                             "Ez1",
                         ),  # can evaluate on multiple output modes and get average transmission
-                        type="flux",
+                        type="eigenmode",
                         direction="x+",
                     ),
                     wl1_refl_trans=dict(

@@ -1170,7 +1170,11 @@ class ObjectiveFunc(object):
                             _simulation_queues[(wl, pol, temp)].append(
                                 dict(mode=mode, slice_name=slice_name, source=source)
                             )
-            # print(_simulation_queues)
+            if len(_simulation_queues) == 0:
+                print(
+                    "Warning: No simulation is required by the objective function. Please check require_sim flag in port profiles."
+                )
+
             ## after clustering, we can run simulation for each group, and only factorize matrix once per group
             for (wl, pol, temp), sim_inst_cfgs in _simulation_queues.items():
                 sim = self.sims[(wl, pol, temp)]

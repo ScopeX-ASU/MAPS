@@ -35,6 +35,7 @@ if __name__ == "__main__":
 
     input_port_width = 0.48
     output_port_width = 0.48
+    exp_name = "tdm_opt"
 
     sim_cfg.update(
         dict(
@@ -42,7 +43,7 @@ if __name__ == "__main__":
             # border_width=[port_len, port_len, 2, 2],
             border_width=[0, 0, 2, 2],
             resolution=50,
-            plot_root=f"./figs/tdm_{'init_try'}",
+            plot_root=f"./figs/{exp_name}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -84,12 +85,28 @@ if __name__ == "__main__":
         obj_cfgs=obj_cfgs,
         operation_device=operation_device,
     ).to(operation_device)
-    invdesign = InvDesign(devOptimization=opt)
-    invdesign.optimize(
-        plot=True,
-        plot_filename=f"tdm_{'init_try'}",
-        objs=["temp1_trans", "temp2_trans"],
-        field_keys=[("in_port_1", 1.55, 1, 300), ("in_port_1", 1.55, 1, 360)],
-        in_port_names=["in_port_1", "in_port_1"],
-        exclude_port_names=[],
+    invdesign = InvDesign(
+        devOptimization=opt,
+        run=Config(
+            n_epochs=100,
+        ),
+        plot_cfgs=Config(
+            plot=True,
+            interval=5,
+            plot_name=f"{exp_name}",
+            objs=["temp1_trans", "temp2_trans"],
+            field_keys=[
+                ("in_slice_1", 1.55, "Ez1", 300),
+                ("in_slice_1", 1.55, "Ez1", 360),
+            ],
+            in_slice_names=["in_slice_1", "in_slice_1"],
+            exclude_port_names=[],
+        ),
+        checkpoint_cfgs=Config(
+            save_model=False,
+            ckpt_name=f"{exp_name}",
+            dump_gds=True,
+            gds_name=f"{exp_name}",
+        ),
     )
+    invdesign.optimize()

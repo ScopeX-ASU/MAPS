@@ -12,6 +12,7 @@ sys.path.insert(
 )
 import numpy as np
 import torch
+from pyutils.config import Config
 
 from core.invdes.invdesign import InvDesign
 from core.invdes.models import WDMOptimization
@@ -34,6 +35,7 @@ if __name__ == "__main__":
 
     input_port_width = 0.48
     output_port_width = 0.48
+    exp_name = "wdm_opt"
 
     sim_cfg.update(
         dict(
@@ -41,7 +43,7 @@ if __name__ == "__main__":
             # border_width=[port_len, port_len, 2, 2],
             border_width=[0, 0, 2, 2],
             resolution=50,
-            plot_root=f"./figs/wdm_{'BO'}",
+            plot_root=f"./figs/{exp_name}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -91,21 +93,30 @@ if __name__ == "__main__":
             lr=2e-2,
             weight_decay=0,
         ),
+        run=Config(
+            n_epochs=100,
+        ),
+        plot_cfgs=Config(
+            plot=True,
+            interval=5,
+            plot_name=f"{exp_name}",
+            objs=["wl1_trans", "wl2_trans"],
+            field_keys=[
+                ("in_slice_1", wl, "Ez1", 300)
+                for wl in np.linspace(
+                    sim_cfg["wl_cen"] - sim_cfg["wl_width"] / 2,
+                    sim_cfg["wl_cen"] + sim_cfg["wl_width"] / 2,
+                    sim_cfg["n_wl"],
+                )
+            ],
+            in_slice_names=["in_slice_1", "in_slice_1"],
+            exclude_slice_names=[],
+        ),
+        checkpoint_cfgs=Config(
+            save_model=False,
+            ckpt_name=f"{exp_name}",
+            dump_gds=True,
+            gds_name=f"{exp_name}",
+        ),
     )
-    invdesign.optimize(
-        plot=True,
-        plot_filename=f"wdm_{'BO'}",
-        objs=["wl1_trans", "wl2_trans"],
-        field_keys=[
-            ("in_slice_1", wl, "Ez1", 300)
-            for wl in np.linspace(
-                sim_cfg["wl_cen"] - sim_cfg["wl_width"] / 2,
-                sim_cfg["wl_cen"] + sim_cfg["wl_width"] / 2,
-                sim_cfg["n_wl"],
-            )
-        ],
-        in_slice_names=["in_port_1", "in_port_1"],
-        exclude_slice_names=[],
-        dump_gds=False,
-        save_model=False,
-    )
+    invdesign.optimize()

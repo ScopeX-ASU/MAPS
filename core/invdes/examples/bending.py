@@ -43,13 +43,14 @@ if __name__ == "__main__":
 
     input_port_width = 0.5
     output_port_width = 0.5
+    exp_name = "bending_opt"
 
     sim_cfg.update(
         dict(
             solver="ceviche_torch",
             border_width=[0, port_len, port_len, 0],
             resolution=50,
-            plot_root=f"./figs/bending_{'init_try_Hz1'}",
+            plot_root=f"./figs/bending_{exp_name}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -94,14 +95,23 @@ if __name__ == "__main__":
             lr=1e-2,
             use_bb=False,
         ),
+        run=Config(
+            n_epochs=100,
+        ),
+        plot_cfgs=Config(
+            plot=True,
+            interval=5,
+            plot_name=f"{exp_name}",
+            objs=["fwd_trans"],
+            field_keys=[("in_slice_1", 1.55, "Ez1", 300)],
+            in_slice_names=["in_slice_1"],
+            exclude_slice_names=[],
+        ),
+        checkpoint_cfgs=Config(
+            save_model=False,
+            ckpt_name=f"{exp_name}",
+            dump_gds=True,
+            gds_name=f"{exp_name}",
+        ),
     )
-    invdesign.optimize(
-        plot=True,
-        plot_filename=f"bending_{'init_try_Hz1'}",
-        objs=["fwd_trans"],
-        field_keys=[("in_slice_1", 1.55, "Hz1", 300)],
-        in_slice_names=["in_slice_1"],
-        exclude_slice_names=[],
-        dump_gds=False,
-        save_model=False,
-    )
+    invdesign.optimize()

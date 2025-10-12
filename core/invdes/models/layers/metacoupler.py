@@ -89,25 +89,25 @@ class MetaCoupler(N_Ports):
             logger.info("Start generating sources and monitors ...")
         src_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
-            slice_name="in_port_1",
+            slice_name="in_slice_1",
             rel_loc=0.4,
             rel_width=rel_width,
         )
         refl_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
-            slice_name="refl_port_1",
+            slice_name="refl_slice_1",
             rel_loc=0.41,
             rel_width=rel_width,
         )
         out_slice = self.build_port_monitor_slice(
             port_name="out_port_1",
-            slice_name="out_port_1",
+            slice_name="out_slice_1",
             rel_loc=0.6,
             rel_width=rel_width,
         )
         out_refl_slice = self.build_port_monitor_slice(
             port_name="out_port_1",
-            slice_name="refl_port_2",
+            slice_name="refl_slice_2",
             rel_loc=0.59,
             rel_width=rel_width,
         )
@@ -119,46 +119,50 @@ class MetaCoupler(N_Ports):
         if verbose:
             logger.info("Start normalization run ...")
         norm_source_profiles = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Ez1",),
             input_port_name="in_port_1",
-            input_slice_name="in_port_1",
+            input_slice_name="in_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             solver=self.sim_cfg["solver"],
-            plot=False,
+            plot=True,
+            require_sim=True,
         )
 
         norm_refl_profiles_1 = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Ez1",),
             input_port_name="in_port_1",
-            input_slice_name="refl_port_1",
+            input_slice_name="refl_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             solver=self.sim_cfg["solver"],
-            plot=False,
+            plot=True,
+            require_sim=False,
         )
         norm_refl_profiles_2 = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Ez1",),
             input_port_name="out_port_1",
-            input_slice_name="refl_port_2",
+            input_slice_name="refl_slice_2",
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             solver=self.sim_cfg["solver"],
-            plot=False,
+            plot=True,
+            require_sim=False,
         )
 
         norm_monitor_profiles = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Ez1",),
             input_port_name="out_port_1",
-            input_slice_name="out_port_1",
+            input_slice_name="out_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             solver=self.sim_cfg["solver"],
-            plot=False,
+            plot=True,
+            require_sim=True,
         )
         return (
             norm_source_profiles,

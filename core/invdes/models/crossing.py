@@ -26,124 +26,124 @@ class DefaultConfig(DefaultOptimizationConfig):
                     plot_root="./figs/crossing",
                 ),
                 obj_cfgs=dict(
-                    # fwd_trans=dict(
-                    #     weight=1,
-                    #     #### objective is evaluated at this port
-                    #     in_slice_name="in_slice_1",
-                    #     out_slice_name="out_slice_1",
-                    #     #### objective is evaluated at all points by sweeping the wavelength and modes
-                    #     in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                    #     wl=[1.55],
-                    #     temp=[300],
-                    #     out_modes=(
-                    #         "Ez1",
-                    #     ),  # can evaluate on multiple output modes and get average transmission
-                    #     type="eigenmode",  # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
-                    #     direction="x+",
-                    # ),
-                    # refl_trans=dict(
-                    #     weight=-0.1,
-                    #     #### objective is evaluated at this port
-                    #     in_slice_name="in_slice_1",
-                    #     out_slice_name="refl_slice_1",
-                    #     #### objective is evaluated at all points by sweeping the wavelength and modes
-                    #     in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                    #     wl=[1.55],
-                    #     temp=[300],
-                    #     out_modes=(
-                    #         "Ez1",
-                    #     ),  # can evaluate on multiple output modes and get average transmission
-                    #     type="flux_minus_src",
-                    #     direction="x",
-                    # ),
-                    # top_cross_talk=dict(
-                    #     weight=-0.1,
-                    #     #### objective is evaluated at this port
-                    #     in_slice_name="in_slice_1",
-                    #     out_slice_name="top_slice",
-                    #     in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                    #     wl=[1.55],
-                    #     temp=[300],
-                    #     out_modes=(
-                    #         "Ez1",
-                    #     ),  # can evaluate on multiple output modes and get average transmission
-                    #     type="flux",
-                    #     direction="y+",
-                    # ),
-                    # bot_cross_talk=dict(
-                    #     weight=-0.1,
-                    #     #### objective is evaluated at this port
-                    #     in_slice_name="in_slice_1",
-                    #     out_slice_name="bot_slice",
-                    #     in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                    #     wl=[1.55],
-                    #     temp=[300],
-                    #     out_modes=(
-                    #         "Ez1",
-                    #     ),  # can evaluate on multiple output modes and get average transmission
-                    #     type="flux",
-                    #     direction="y-",
-                    # ),
-                    # rad_trans_xp=dict(
-                    #     weight=0,
-                    #     #### objective is evaluated at this port
-                    #     in_slice_name="in_slice_1",
-                    #     out_slice_name="rad_slice_xp",
-                    #     #### objective is evaluated at all points by sweeping the wavelength and modes
-                    #     wl=[1.55],
-                    #     temp=[300],
-                    #     in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                    #     out_modes=(
-                    #         "Ez1",
-                    #     ),  # can evaluate on multiple output modes and get average transmission
-                    #     type="flux",
-                    #     direction="x",
-                    # ),
-                    # rad_trans_xm=dict(
-                    #     weight=0,
-                    #     #### objective is evaluated at this port
-                    #     in_slice_name="in_slice_1",
-                    #     out_slice_name="rad_slice_xm",
-                    #     #### objective is evaluated at all points by sweeping the wavelength and modes
-                    #     wl=[1.55],
-                    #     temp=[300],
-                    #     in_mode="Ez1",  # only one source mode is supsliceed, cannot input multiple modes at the same time
-                    #     out_modes=(
-                    #         "Ez1",
-                    #     ),  # can evaluate on multiple output modes and get average transmission
-                    #     type="flux",
-                    #     direction="x",
-                    # ),
-                    # rad_trans_yp=dict(
-                    #     weight=0,
-                    #     #### objective is evaluated at this port
-                    #     in_slice_name="in_slice_1",
-                    #     out_slice_name="rad_slice_yp",
-                    #     #### objective is evaluated at all points by sweeping the wavelength and modes
-                    #     wl=[1.55],
-                    #     temp=[300],
-                    #     in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                    #     out_modes=(
-                    #         "Ez1",
-                    #     ),  # can evaluate on multiple output modes and get average transmission
-                    #     type="flux",
-                    #     direction="y",
-                    # ),
-                    # rad_trans_ym=dict(
-                    #     weight=0,
-                    #     #### objective is evaluated at this port
-                    #     in_slice_name="in_slice_1",
-                    #     out_slice_name="rad_slice_ym",
-                    #     #### objective is evaluated at all points by sweeping the wavelength and modes
-                    #     wl=[1.55],
-                    #     temp=[300],
-                    #     in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                    #     out_modes=(
-                    #         "Ez1",
-                    #     ),  # can evaluate on multiple output modes and get average transmission
-                    #     type="flux",
-                    #     direction="y",
-                    # ),
+                    fwd_trans=dict(
+                        weight=1,
+                        #### objective is evaluated at this port
+                        in_slice_name="in_slice_1",
+                        out_slice_name="out_slice_1",
+                        #### objective is evaluated at all points by sweeping the wavelength and modes
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
+                        wl=[1.55],
+                        temp=[300],
+                        out_modes=(
+                            "Ez1",
+                        ),  # can evaluate on multiple output modes and get average transmission
+                        type="eigenmode",  # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
+                        direction="x+",
+                    ),
+                    refl_trans=dict(
+                        weight=-0.1,
+                        #### objective is evaluated at this port
+                        in_slice_name="in_slice_1",
+                        out_slice_name="refl_slice_1",
+                        #### objective is evaluated at all points by sweeping the wavelength and modes
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
+                        wl=[1.55],
+                        temp=[300],
+                        out_modes=(
+                            "Ez1",
+                        ),  # can evaluate on multiple output modes and get average transmission
+                        type="flux_minus_src",
+                        direction="x",
+                    ),
+                    top_cross_talk=dict(
+                        weight=-0.1,
+                        #### objective is evaluated at this port
+                        in_slice_name="in_slice_1",
+                        out_slice_name="top_slice",
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
+                        wl=[1.55],
+                        temp=[300],
+                        out_modes=(
+                            "Ez1",
+                        ),  # can evaluate on multiple output modes and get average transmission
+                        type="flux",
+                        direction="y+",
+                    ),
+                    bot_cross_talk=dict(
+                        weight=-0.1,
+                        #### objective is evaluated at this port
+                        in_slice_name="in_slice_1",
+                        out_slice_name="bot_slice",
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
+                        wl=[1.55],
+                        temp=[300],
+                        out_modes=(
+                            "Ez1",
+                        ),  # can evaluate on multiple output modes and get average transmission
+                        type="flux",
+                        direction="y-",
+                    ),
+                    rad_trans_xp=dict(
+                        weight=0,
+                        #### objective is evaluated at this port
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_slice_xp",
+                        #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
+                        out_modes=(
+                            "Ez1",
+                        ),  # can evaluate on multiple output modes and get average transmission
+                        type="flux",
+                        direction="x",
+                    ),
+                    rad_trans_xm=dict(
+                        weight=0,
+                        #### objective is evaluated at this port
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_slice_xm",
+                        #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
+                        in_mode="Ez1",  # only one source mode is supsliceed, cannot input multiple modes at the same time
+                        out_modes=(
+                            "Ez1",
+                        ),  # can evaluate on multiple output modes and get average transmission
+                        type="flux",
+                        direction="x",
+                    ),
+                    rad_trans_yp=dict(
+                        weight=0,
+                        #### objective is evaluated at this port
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_slice_yp",
+                        #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
+                        out_modes=(
+                            "Ez1",
+                        ),  # can evaluate on multiple output modes and get average transmission
+                        type="flux",
+                        direction="y",
+                    ),
+                    rad_trans_ym=dict(
+                        weight=0,
+                        #### objective is evaluated at this port
+                        in_slice_name="in_slice_1",
+                        out_slice_name="rad_slice_ym",
+                        #### objective is evaluated at all points by sweeping the wavelength and modes
+                        wl=[1.55],
+                        temp=[300],
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
+                        out_modes=(
+                            "Ez1",
+                        ),  # can evaluate on multiple output modes and get average transmission
+                        type="flux",
+                        direction="y",
+                    ),
                 ),
             )
         )

@@ -32,11 +32,11 @@ class DefaultConfig(DefaultOptimizationConfig):
                         in_slice_name="in_slice_1",
                         out_slice_name="out_slice_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
-                        in_mode="Hz1",  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         wl=[1.55],
                         temp=[300],
                         out_modes=(
-                            "Hz1",
+                            "Ez1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="eigenmode",  # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
                         # type="flux",  # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
@@ -48,11 +48,11 @@ class DefaultConfig(DefaultOptimizationConfig):
                         in_slice_name="in_slice_1",
                         out_slice_name="refl_slice_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
-                        in_mode="Hz1",  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         wl=[1.55],
                         temp=[300],
                         out_modes=(
-                            "Hz1",
+                            "Ez1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux_minus_src",
                         direction="x",
@@ -65,9 +65,9 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
-                        in_mode="Hz1",  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            "Hz1",
+                            "Ez1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux",
                         direction="x",
@@ -80,9 +80,9 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
-                        in_mode="Hz1",  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            "Hz1",
+                            "Ez1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux",
                         direction="x",
@@ -95,9 +95,9 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
-                        in_mode="Hz1",  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            "Hz1",
+                            "Ez1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux",
                         direction="y",
@@ -110,9 +110,9 @@ class DefaultConfig(DefaultOptimizationConfig):
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
                         temp=[300],
-                        in_mode="Hz1",  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         out_modes=(
-                            "Hz1",
+                            "Ez1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux",
                         direction="y",

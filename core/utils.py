@@ -2021,7 +2021,9 @@ def Si_eps(wavelength):
 @lru_cache(maxsize=64)
 def Si_eff_eps(wavelength, width: float = 10, thickness: float = 0.22):
     """Returns the effective permittivity of silicon at the given wavelength"""
-    if width > 1:  # very wide waveguidem we will treat it as infinite wide waveguide
+    if (
+        1 or width > 1
+    ):  # very wide waveguidem we will treat it as infinite wide waveguide
         assert 0.15 <= thickness <= 0.22, "thickness should be between 0.15 and 0.22"
         # eps = 2.539683**2, # 150nm
         # eps = 2.594905**2, # 160nm
@@ -2033,6 +2035,9 @@ def Si_eff_eps(wavelength, width: float = 10, thickness: float = 0.22):
             + 1.2951253477e00
         ) ** 2
     else:
+        assert (
+            False
+        ), "For 2.5D simulation, effective index is only related to thickness, the width-related effective index is solved by 2D FDFD itself, do not need to consider separately"
         assert (
             thickness == 0.22
         ), f"only support thickness of 0.22 for narrow waveguide, but got {thickness}"

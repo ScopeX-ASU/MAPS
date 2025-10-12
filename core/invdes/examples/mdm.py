@@ -36,6 +36,7 @@ if __name__ == "__main__":
 
     input_port_width = 0.8
     output_port_width = 0.8
+    exp_name = "mdm_opt"
 
     sim_cfg.update(
         dict(
@@ -43,7 +44,7 @@ if __name__ == "__main__":
             # border_width=[port_len, port_len, 2, 2],
             border_width=[0, 0, 2, 2],
             resolution=100,
-            plot_root=f"./figs/mdm_{'init_try_test'}",
+            plot_root=f"./figs/{exp_name}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -67,12 +68,28 @@ if __name__ == "__main__":
         sim_cfg=sim_cfg,
         operation_device=operation_device,
     ).to(operation_device)
-    invdesign = InvDesign(devOptimization=opt)
-    invdesign.optimize(
-        plot=True,
-        plot_filename=f"mdm_{'init_try_test'}",
-        objs=["mode1_trans", "mode2_trans"],
-        field_keys=[("in_slice_1", 1.55, "Ez1", 300), ("in_slice_1", 1.55, "Ez2", 300)],
-        in_slice_names=["in_slice_1", "in_slice_1"],
-        exclude_slice_names=[["out_slice_2"], ["out_slice_1"]],
+    invdesign = InvDesign(
+        devOptimization=opt,
+        run=Config(
+            n_epochs=100,
+        ),
+        plot_cfgs=Config(
+            plot=True,
+            interval=5,
+            plot_name=f"{exp_name}",
+            objs=["mode1_trans", "mode2_trans"],
+            field_keys=[
+                ("in_slice_1", 1.55, "Ez1", 300),
+                ("in_slice_1", 1.55, "Ez2", 300),
+            ],
+            in_slice_names=["in_slice_1", "in_slice_1"],
+            exclude_slice_names=[["out_slice_2"], ["out_slice_1"]],
+        ),
+        checkpoint_cfgs=Config(
+            save_model=False,
+            ckpt_name=f"{exp_name}",
+            dump_gds=True,
+            gds_name=f"{exp_name}",
+        ),
     )
+    invdesign.optimize()

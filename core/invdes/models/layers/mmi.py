@@ -109,23 +109,26 @@ class MMI(N_Ports):
         rel_width = 2
         if verbose:
             logger.info("Start generating sources and monitors ...")
+        pml = self.sim_cfg["PML"][0]
+        port_len = self.port_cfgs["in_port_1"]["size"][0]
+        offset = 0.2 + pml
         src_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
-            slice_name="in_port_1",
-            rel_loc=0.4,
+            slice_name="in_slice_1",
+            rel_loc=offset / port_len,
             rel_width=rel_width,
         )
         refl_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
-            slice_name="refl_port_1",
-            rel_loc=0.41,
+            slice_name="refl_slice_1",
+            rel_loc=(offset + 0.1) / port_len,
             rel_width=rel_width,
         )
         out_slices = [
             self.build_port_monitor_slice(
                 port_name=f"out_port_{i}",
-                slice_name=f"out_port_{i}",
-                rel_loc=0.6,
+                slice_name=f"out_slice_{i}",
+                rel_loc=1 - offset / port_len,
                 rel_width=rel_width,
             )
             for i in range(1, self.num_outports + 1)
@@ -146,44 +149,47 @@ class MMI(N_Ports):
         # norm_run_sim_cfg = copy.deepcopy(self.sim_cfg)
         # norm_run_sim_cfg["numerical_solver"] = "solve_direct"
         norm_source_profiles = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Ez1",),
             input_port_name="in_port_1",
-            input_slice_name="in_port_1",
+            input_slice_name="in_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             # solver=self.sim_cfg["solver"],
             solver="ceviche",
             plot=True,
+            require_sim=True,
         )
 
         norm_refl_profiles = self.build_norm_sources(
-            source_modes=(1,),
+            source_modes=("Ez1",),
             input_port_name="in_port_1",
-            input_slice_name="refl_port_1",
+            input_slice_name="refl_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],
             wl_width=self.sim_cfg["wl_width"],
             n_wl=self.sim_cfg["n_wl"],
             # solver=self.sim_cfg["solver"],
             solver="ceviche",
             plot=True,
+            require_sim=False,
         )
         norm_monitor_profiles = [
             self.build_norm_sources(
-                source_modes=(1,),
+                source_modes=("Ez1",),
                 input_port_name=f"out_port_{i}",
-                input_slice_name=f"out_port_{i}",
+                input_slice_name=f"out_slice_{i}",
                 wl_cen=self.sim_cfg["wl_cen"],
                 wl_width=self.sim_cfg["wl_width"],
                 n_wl=self.sim_cfg["n_wl"],
                 # solver=self.sim_cfg["solver"],
                 solver="ceviche",
                 plot=True,
+                require_sim=False,
             )
             for i in range(1, self.num_outports + 1)
         ]
         # norm_monitor_profiles = self.build_norm_sources(
-        #     source_modes=(1,),
+        #     source_modes=("Ez1",),
         #     input_port_name="out_port_1",
         #     input_slice_name="out_port_1",
         #     wl_cen=self.sim_cfg["wl_cen"],

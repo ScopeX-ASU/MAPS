@@ -3,9 +3,9 @@ import argparse
 import torch
 import torch.nn.functional as F
 
-from core.models import EtchMMIOptimization
-from core.models.base_optimization import DefaultSimulationConfig
-from core.models.layers import EtchMMI
+from core.invdes.models import EtchMMIOptimization
+from core.invdes.models.base_optimization import DefaultSimulationConfig
+from core.invdes.models.layers import EtchMMI
 from core.utils import set_torch_deterministic
 from thirdparty.ceviche.constants import *
 
@@ -80,10 +80,10 @@ def etchmmi_opt(device_id, operation_device):
                 eps_map=opt._eps_map,
                 obj=results["breakdown"]["fwd_trans"]["value"],
                 plot_filename="bending_opt_step_{}_fwd.png".format(step),
-                field_key=("in_port_1", 1.55, 1),
+                field_key=("in_slice_1", 1.55, "Ez1", 300),
                 field_component="Ez",
-                in_port_name="in_port_1",
-                exclude_port_names=["refl_port_2"],
+                in_slice_name="in_slice_1",
+                exclude_slice_names=["refl_slice_2"],
             )
         else:
             cosine_similarity = compare_designs(
@@ -98,10 +98,10 @@ def etchmmi_opt(device_id, operation_device):
                     eps_map=opt._eps_map,
                     obj=results["breakdown"]["fwd_trans"]["value"],
                     plot_filename="bending_opt_step_{}_fwd.png".format(step),
-                    field_key=("in_port_1", 1.55, 1),
+                    field_key=("in_slice_1", 1.55, "Ez1", 300),
                     field_component="Ez",
-                    in_port_name="in_port_1",
-                    exclude_port_names=["refl_port_2"],
+                    in_slice_name="in_slice_1",
+                    exclude_slice_names=["refl_slice_2"],
                 )
         # for p in opt.parameters():
         #     print(p.grad)
