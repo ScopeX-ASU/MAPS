@@ -639,7 +639,7 @@ class BaseOptimization(nn.Module):
                             data=store_s_params,
                         )  # 3d numpy array
                     # only the adj_src I care
-                    adj_src = adj_srcs[(WaveLen, SrcMode[:2])]
+                    adj_src = adj_srcs[(WaveLen, SrcMode[:2], Temperture)]
                     J_adj = adj_src[(SliceName, SrcMode, Temperture)]
                     J_adj = J_adj.reshape(self.epsilon_map.shape)
                     if isinstance(J_adj, Tensor):
@@ -650,7 +650,7 @@ class BaseOptimization(nn.Module):
                         J_adj = J_adj._value
                     f.create_dataset(f"adj_src", data=J_adj)
                     # only the fields_adj I care
-                    field = fields_adj[(WaveLen, SrcMode[:2])][
+                    field = fields_adj[(WaveLen, SrcMode[:2], Temperture)][
                         (SliceName, SrcMode, Temperture)
                     ]
                     store_fields = {}
@@ -676,9 +676,9 @@ class BaseOptimization(nn.Module):
                         data=store_fields,
                     )  # 3d numpy array
                     # only the field_adj_normalizer I care
-                    normalizer = field_adj_normalizer[(WaveLen, SrcMode[:2])][
-                        (SliceName, SrcMode, Temperture)
-                    ]
+                    normalizer = field_adj_normalizer[
+                        (WaveLen, SrcMode[:2], Temperture)
+                    ][(SliceName, SrcMode, Temperture)]
                     if isinstance(normalizer, Tensor):
                         if normalizer.dtype in complex_type:
                             normalizer = normalizer.to(torch.complex64)
@@ -717,13 +717,13 @@ class BaseOptimization(nn.Module):
                     # only the gradient I care
                     # not the total gradient, but the gradient from this specific forward simulation
                     if isinstance(
-                        gradients[(WaveLen, SrcMode[:2])][
+                        gradients[(WaveLen, SrcMode[:2], Temperture)][
                             (SliceName, SrcMode, Temperture)
                         ],
                         torch.Tensor,
                     ):
                         grad = (
-                            gradients[(WaveLen, SrcMode[:2])][
+                            gradients[(WaveLen, SrcMode[:2], Temperture)][
                                 (SliceName, SrcMode, Temperture)
                             ]
                             .detach()

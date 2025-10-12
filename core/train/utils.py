@@ -15,8 +15,7 @@ from torch import Tensor
 from torch_sparse import spmm
 
 from core.fdfd.fdfd import fdfd_ez
-from core.utils import (Slice, _load_opt_cfgs, get_eigenmode_coefficients,
-                        get_flux)
+from core.utils import Slice, _load_opt_cfgs, get_eigenmode_coefficients, get_flux
 
 if TYPE_CHECKING:
     from torch.optim.optimizer import _params_t
@@ -811,8 +810,10 @@ class maskedNMSELoss(torch.nn.modules.loss._Loss):
                     :,
                 ] = 3
         assert (
-            (frame_mask is not None) or self.if_spatial_mask
-        ), "if mask NMSE, either frame_mask or spatial_mask should be True"
+            frame_mask is not None
+        ) or self.if_spatial_mask, (
+            "if mask NMSE, either frame_mask or spatial_mask should be True"
+        )
         if self.if_spatial_mask:
             error_energy = torch.norm((x - y) * mask, p=2, dim=(-1, -2))
             field_energy = torch.norm(y * mask, p=2, dim=(-1, -2))
@@ -853,8 +854,10 @@ class maskedNL2NormLoss(torch.nn.modules.loss._Loss):
                     :,
                 ] = 3
         assert (
-            (frame_mask is not None) or self.if_spatial_mask
-        ), "if mask nl2norm, either frame_mask or spatial_mask should be True"
+            frame_mask is not None
+        ) or self.if_spatial_mask, (
+            "if mask nl2norm, either frame_mask or spatial_mask should be True"
+        )
         if self.if_spatial_mask:
             error_energy = torch.norm((x - y) * mask, p=2, dim=(-1, -2))
             field_energy = torch.norm(y * mask, p=2, dim=(-1, -2))
@@ -1037,6 +1040,7 @@ def rip_padding(eps, pady_0, pady_1, padx_0, padx_1):
     """
     return eps[padx_0:-padx_1, pady_0:-pady_1]
 
+
 class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
     def __init__(
         self,
@@ -1047,14 +1051,14 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
         super().__init__(size_average, reduce, reduction)
 
     def forward(
-            self,
-            Ez: Tensor,
-            source: Tensor,
-            A,
-            transpose_A,
-            wl,
-            field_normalizer,
-        ):
+        self,
+        Ez: Tensor,
+        source: Tensor,
+        A,
+        transpose_A,
+        wl,
+        field_normalizer,
+    ):
         Ez = Ez[:, -2:, :, :]
         Ez = Ez.permute(0, 2, 3, 1).contiguous()
         Ez = torch.view_as_complex(Ez)  # convert Ez to the required complex format
@@ -1076,10 +1080,12 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
 
         for i in range(Ez.shape[0]):  # loop over samples in a batch
             ez = Ez[i].flatten()
-            entries = A['entries_a'][i]
-            indices = A['indices_a'][i]
+            entries = A["entries_a"][i]
+            indices = A["indices_a"][i]
             if transpose_A:
-                indices = torch.flip(indices, [0]) # considering the batch dimension, the axis set to 1 corresponds to axis = 0 in solver.
+                indices = torch.flip(
+                    indices, [0]
+                )  # considering the batch dimension, the axis set to 1 corresponds to axis = 0 in solver.
             A_by_e = spmm(
                 indices,
                 entries,
@@ -1090,13 +1096,11 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
             lhs.append(A_by_e)
         lhs = torch.stack(lhs, 0)  # [bs*n_wl, h*w]
         if not transpose_A:
-            b = (
-                (source * (1j * omega.unsqueeze(-1).unsqueeze(-1))).flatten(1)
+            b = (source * (1j * omega.unsqueeze(-1).unsqueeze(-1))).flatten(
+                1
             )  # [bs, h*w]
         else:
-            b = (
-                (source * field_normalizer.unsqueeze(-1)).flatten(1)
-            )
+            b = (source * field_normalizer.unsqueeze(-1)).flatten(1)
         difference = lhs - b
 
         difference = torch.view_as_real(difference).double()
@@ -1107,6 +1111,7 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
             / (torch.norm(b, p=2, dim=(-2, -1)) + 1e-6)
         ).mean()
         return loss
+
 
 class SParamLoss(torch.nn.modules.loss._Loss):
     def __init__(self, reduce="mean"):
@@ -1147,11 +1152,15 @@ class SParamLoss(torch.nn.modules.loss._Loss):
                 in_mode = opt_cfg["in_mode"]
                 out_modes = opt_cfg.get("out_modes", [])
                 out_modes = [int(mode) for mode in out_modes]
-                assert len(out_modes) == 1, f"The code can handle multiple modes, but I have not check if it is correct"
+                assert (
+                    len(out_modes) == 1
+                ), f"The code can handle multiple modes, but I have not check if it is correct"
                 temperture = opt_cfg["temp"]
                 temperture = [float(temp) for temp in temperture]
                 wavelength = opt_cfg["wl"]
-                assert len(wavelength) == 1, f"only support one wavelength for now but the wavelength is: {wavelength}"
+                assert (
+                    len(wavelength) == 1
+                ), f"only support one wavelength for now but the wavelength is: {wavelength}"
                 wavelength = wavelength[0]
                 input_slice_name = opt_cfg["in_slice_name"]
                 obj_type = opt_cfg["type"]
@@ -1174,19 +1183,23 @@ class SParamLoss(torch.nn.modules.loss._Loss):
                             hx=Hx[i],
                             hy=Hy[i],
                             ez=Ez[i],
-                            ht_m=ht_m[f"ht_m-wl-{wl[i].item()}-slice-{out_slice_name}-mode-{output_mode}"][
-                                i
-                            ],
-                            et_m=et_m[f"et_m-wl-{wl[i].item()}-slice-{out_slice_name}-mode-{output_mode}"][
-                                i
-                            ],
+                            ht_m=ht_m[
+                                f"ht_m-wl-{wl[i].item()}-slice-{out_slice_name}-mode-{output_mode}"
+                            ][i],
+                            et_m=et_m[
+                                f"et_m-wl-{wl[i].item()}-slice-{out_slice_name}-mode-{output_mode}"
+                            ][i],
                             monitor=monitor,
                             grid_step=1 / resolution,
                             direction=direction,
                             energy=True,
                         )
                         fom = fom / 1e-8  # normalize with the input power
-                        target_s.append(target_SParam[f"s_params-obj_slice_name-{out_slice_name}-type-{output_mode}-in_slice_name-{input_slice_name}-wl-{wl[i].item()}-in_mode-{in_mode}-temp-{temp[i]}"][i][0])
+                        target_s.append(
+                            target_SParam[
+                                f"s_params-obj_slice_name-{out_slice_name}-type-{output_mode}-in_slice_name-{input_slice_name}-wl-{wl[i].item()}-in_mode-{in_mode}-temp-{temp[i]}"
+                            ][i][0]
+                        )
                 elif "flux" in obj_type:  # flux or flux_minus_src
                     fom = get_flux(
                         hx=Hx[i],
@@ -1199,24 +1212,36 @@ class SParamLoss(torch.nn.modules.loss._Loss):
                     # f"s_params-obj_slice_name-{slice_name}-type-{obj_type}-in_slice_name-{input_slice_name}-wl-{wl}-in_mode-{in_mode}-temp-{temp}"
                     if "minus_src" in opt_cfg["type"]:
                         fom = torch.abs(torch.abs(fom / 1e-8) - 1)
-                        target_s.append(target_SParam[f"s_params-obj_slice_name-{out_slice_name}-type-{obj_type}-in_slice_name-{input_slice_name}-wl-{wl[i].item()}-in_mode-{in_mode}-temp-{temp[i]}"][i][1])
+                        target_s.append(
+                            target_SParam[
+                                f"s_params-obj_slice_name-{out_slice_name}-type-{obj_type}-in_slice_name-{input_slice_name}-wl-{wl[i].item()}-in_mode-{in_mode}-temp-{temp[i]}"
+                            ][i][1]
+                        )
                     else:
                         fom = torch.abs(fom / 1e-8)
-                        target_s.append(target_SParam[f"s_params-obj_slice_name-{out_slice_name}-type-{obj_type}-in_slice_name-{input_slice_name}-wl-{wl[i].item()}-in_mode-{in_mode}-temp-{temp[i]}"][i])
+                        target_s.append(
+                            target_SParam[
+                                f"s_params-obj_slice_name-{out_slice_name}-type-{obj_type}-in_slice_name-{input_slice_name}-wl-{wl[i].item()}-in_mode-{in_mode}-temp-{temp[i]}"
+                            ][i]
+                        )
                 else:
                     raise ValueError(f"Unknown optimization type: {opt_cfg['type']}")
                 s_params.append(fom)
         s_params = torch.stack(s_params, 0)
         target_s = torch.stack(target_s, 0)
         s_params_diff = s_params - target_s
-        normalizeMSE = (s_params_diff.norm(p=2, dim=-1) / (target_s.norm(p=2, dim=-1)).mean() + 1e-9)
+        normalizeMSE = (
+            s_params_diff.norm(p=2, dim=-1) / (target_s.norm(p=2, dim=-1)).mean() + 1e-9
+        )
         return normalizeMSE
 
+
 class DirectCompareSParam(torch.nn.modules.loss._Loss):
-    '''
+    """
     There is no need to calculate the S from the field
     Only need to compare the S parameters GT and the predicted S parameters
-    '''
+    """
+
     def __init__(self, reduce="mean"):
         super(DirectCompareSParam, self).__init__()
 
@@ -1232,12 +1257,24 @@ class DirectCompareSParam(torch.nn.modules.loss._Loss):
         # print("this is the keys in the s_params_GT", list(s_params_GT.keys()), flush=True)
         # quit()
         # ['s_params-obj_slice_name-out_slice_1-type-1-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300', 's_params-obj_slice_name-rad_slice_xm-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300', 's_params-obj_slice_name-rad_slice_xp-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300', 's_params-obj_slice_name-rad_slice_ym-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300', 's_params-obj_slice_name-rad_slice_yp-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300', 's_params-obj_slice_name-refl_slice_1-type-flux_minus_src-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
-        fwd_trans_GT = s_params_GT['s_params-obj_slice_name-out_slice_1-type-1-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
-        ref_GT = s_params_GT['s_params-obj_slice_name-refl_slice_1-type-flux_minus_src-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
-        rad_xp_GT = s_params_GT['s_params-obj_slice_name-rad_slice_xp-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
-        rad_xm_GT = s_params_GT['s_params-obj_slice_name-rad_slice_xm-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
-        rad_yp_GT = s_params_GT['s_params-obj_slice_name-rad_slice_yp-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
-        rad_ym_GT = s_params_GT['s_params-obj_slice_name-rad_slice_ym-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
+        fwd_trans_GT = s_params_GT[
+            "s_params-obj_slice_name-out_slice_1-type-1-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300"
+        ]
+        ref_GT = s_params_GT[
+            "s_params-obj_slice_name-refl_slice_1-type-flux_minus_src-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300"
+        ]
+        rad_xp_GT = s_params_GT[
+            "s_params-obj_slice_name-rad_slice_xp-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300"
+        ]
+        rad_xm_GT = s_params_GT[
+            "s_params-obj_slice_name-rad_slice_xm-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300"
+        ]
+        rad_yp_GT = s_params_GT[
+            "s_params-obj_slice_name-rad_slice_yp-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300"
+        ]
+        rad_ym_GT = s_params_GT[
+            "s_params-obj_slice_name-rad_slice_ym-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300"
+        ]
 
         target_s = torch.cat(
             (
@@ -1253,11 +1290,12 @@ class DirectCompareSParam(torch.nn.modules.loss._Loss):
         # print("this is the target s parameters", target_s, flush=True)
         # quit()
         prediction_error = s_params_pred - target_s
-        normalizeMSE = (prediction_error.norm(p=2, dim=-1) / (target_s.norm(p=2, dim=-1)).mean() + 1e-9)
+        normalizeMSE = (
+            prediction_error.norm(p=2, dim=-1) / (target_s.norm(p=2, dim=-1)).mean()
+            + 1e-9
+        )
         return normalizeMSE.mean()
 
-
-class GradientLoss(torch.nn.modules.loss._Loss):
 
 class GradientLoss(torch.nn.modules.loss._Loss):
     def __init__(self, reduce="mean"):
@@ -1271,8 +1309,8 @@ class GradientLoss(torch.nn.modules.loss._Loss):
         adjoint_fields,
         target_gradient,
         gradient_multiplier,
-        dr_mask = None,
-        wl = 1.55,
+        dr_mask=None,
+        wl=1.55,
     ):
         forward_fields_ez = forward_fields[
             :, -2:, :, :
@@ -1314,7 +1352,11 @@ class GradientLoss(torch.nn.modules.loss._Loss):
         else:
             dr_masks = torch.ones_like(gradient)
 
-        x = - EPSILON_0 * (2 * torch.pi * C_0 / (wl.unsqueeze(-1).unsqueeze(-1) * 1e-6))**2 * (gradient)
+        x = (
+            -EPSILON_0
+            * (2 * torch.pi * C_0 / (wl.unsqueeze(-1).unsqueeze(-1) * 1e-6)) ** 2
+            * (gradient)
+        )
         y = target_gradient
         error_energy = torch.norm((x - y) * dr_masks, p=2, dim=(-1, -2))
         field_energy = torch.norm(y * dr_masks, p=2, dim=(-1, -2)) + 1e-6
@@ -1333,13 +1375,21 @@ class GradSimilarityLoss(torch.nn.modules.loss._Loss):
         forward_fields,
         adjoint_fields,
         target_gradient,
-        dr_mask = None,
+        dr_mask=None,
     ):
-        forward_fields_ez = forward_fields[:, -2:, :, :] # the forward fields has three components, we only need the Ez component
-        forward_fields_ez = torch.view_as_complex(forward_fields_ez.permute(0, 2, 3, 1).contiguous())
-        adjoint_fields = adjoint_fields[:, -2:, :, :] # the adjoint fields has three components, we only need the Ez component
-        adjoint_fields = torch.view_as_complex(adjoint_fields.permute(0, 2, 3, 1).contiguous()) # adjoint fields only Ez
-        gradient = (adjoint_fields*forward_fields_ez).real
+        forward_fields_ez = forward_fields[
+            :, -2:, :, :
+        ]  # the forward fields has three components, we only need the Ez component
+        forward_fields_ez = torch.view_as_complex(
+            forward_fields_ez.permute(0, 2, 3, 1).contiguous()
+        )
+        adjoint_fields = adjoint_fields[
+            :, -2:, :, :
+        ]  # the adjoint fields has three components, we only need the Ez component
+        adjoint_fields = torch.view_as_complex(
+            adjoint_fields.permute(0, 2, 3, 1).contiguous()
+        )  # adjoint fields only Ez
+        gradient = (adjoint_fields * forward_fields_ez).real
         batch_size = gradient.shape[0]
         # Step 0: build one_mask from dr_mask
         ## This is not correct
@@ -1371,9 +1421,13 @@ class GradSimilarityLoss(torch.nn.modules.loss._Loss):
 
         # Flatten the gradients for F.cosine_similarity
         masked_gradient_flat = masked_gradient.view(masked_gradient.size(0), -1)
-        masked_target_gradient_flat = masked_target_gradient.view(masked_target_gradient.size(0), -1)
+        masked_target_gradient_flat = masked_target_gradient.view(
+            masked_target_gradient.size(0), -1
+        )
 
-        cosine_similarity = F.cosine_similarity(masked_gradient_flat, masked_target_gradient_flat, dim=1)
+        cosine_similarity = F.cosine_similarity(
+            masked_gradient_flat, masked_target_gradient_flat, dim=1
+        )
 
         # Apply reduction
         if self.reduce == "mean":
