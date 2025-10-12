@@ -107,42 +107,40 @@ class Crossing(N_Ports):
 
     def init_monitors(self, verbose: bool = True):
         rel_width = 3
+        pml_x, pml_y = self.sim_cfg["PML"]
+        offset_x, offset_y = 0.2 + pml_x, 0.2 + pml_y
+        port_len_x = self.port_cfgs["in_port_1"]["size"][0]
+        port_len_y = self.port_cfgs["top_port"]["size"][1]
         if verbose:
             logger.info("Start generating sources and monitors ...")
         src_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="in_slice_1",
-            # rel_loc=0.4,
-            # rel_loc=0.3,
-            rel_loc=0.7 / self.port_cfgs["in_port_1"]["size"][0],
+            rel_loc=offset_x / port_len_x,
             rel_width=rel_width,
         )
         refl_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="refl_slice_1",
-            # rel_loc=0.31,
-            rel_loc=0.75 / self.port_cfgs["in_port_1"]["size"][0],
+            rel_loc=(offset_x + 0.05) / port_len_x,
             rel_width=rel_width,
         )
         out_slice = self.build_port_monitor_slice(
             port_name="out_port_1",
             slice_name="out_slice_1",
-            # rel_loc=0.7,
-            rel_loc=1 - 0.7 / self.port_cfgs["out_port_1"]["size"][0],
+            rel_loc=1 - offset_x / port_len_x,
             rel_width=rel_width,
         )
         top_slice = self.build_port_monitor_slice(
             port_name="top_port",
             slice_name="top_slice",
-            # rel_loc=0.7,
-            rel_loc=1 - 0.7 / self.port_cfgs["top_port"]["size"][1],
+            rel_loc=1 - offset_y / port_len_y,
             rel_width=rel_width,
         )
         bot_slice = self.build_port_monitor_slice(
             port_name="bot_port",
             slice_name="bot_slice",
-            # rel_loc=0.3,
-            rel_loc=0.7 / self.port_cfgs["bot_port"]["size"][1],
+            rel_loc=offset_y / port_len_y,
             rel_width=rel_width,
         )
         self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=rel_width)

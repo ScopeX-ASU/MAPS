@@ -29,13 +29,13 @@ if __name__ == "__main__":
     # first we need to instantiate the a optimization object
     sim_cfg = DefaultSimulationConfig()
 
-    crossing_region_size = (1.6, 1.6)
-    # crossing_region_size = (2.5, 2.5)
+    # crossing_region_size = (1.6, 1.6)
+    crossing_region_size = (3.4, 3.4)
     port_len = 1.8
 
     input_port_width = 0.48
     output_port_width = 0.48
-    exp_name = "crossing_init_try"
+    exp_name = "crossing_opt"
 
     sim_cfg.update(
         dict(
@@ -193,6 +193,18 @@ if __name__ == "__main__":
         devOptimization=opt,
         run=Config(
             n_epochs=100,
+        ),
+        # optimizer=Config(
+        #     name="lbfgs",
+        #     line_search_fn="strong_wolfe",
+        #     lr=1e-2,
+        #     use_bb=False,
+        # ),
+        sharp_scheduler=Config(
+            mode="cosine",
+            name="sharpness",
+            init_sharp=1,
+            final_sharp=256,
         ),
         plot_cfgs=Config(
             plot=True,
