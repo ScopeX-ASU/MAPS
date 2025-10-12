@@ -12,10 +12,7 @@ import torch
 import torch.nn.functional as F
 from torch_sparse import spmm
 
-from core.models.layers.utils import (
-    Si_eps,
-    SiO2_eps,
-)
+from core.models.layers.utils import Si_eps, SiO2_eps
 from core.utils import print_stat
 from thirdparty.ceviche.constants import *
 from thirdparty.ceviche.solvers import _solve_direct

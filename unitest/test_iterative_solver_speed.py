@@ -11,8 +11,9 @@ import scipy.sparse.linalg as spl
 import torch
 import torch.nn.functional as F
 from pyutils.config import configs
-from pyutils.general import AverageMeter, print_stat
+from pyutils.general import AverageMeter
 from pyutils.general import logger as lg
+from pyutils.general import print_stat
 from pyutils.torch_train import (
     BestKModelSaver,
     count_parameters,

@@ -14,9 +14,7 @@ import numpy as np
 import torch
 
 from core.invdes.invdesign import InvDesign
-from core.invdes.models import (
-    WDMOptimization,
-)
+from core.invdes.models import WDMOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import WDM
 from core.utils import set_torch_deterministic

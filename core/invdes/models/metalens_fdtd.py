@@ -23,7 +23,7 @@ from .layers.metalens_fdtd import metalens_fdtd
 from .layers.utils import get_eps_1d
 
 eps_sio2 = 1.44**2
-eps_si = 3.48**2, # 3.648 @850nm
+eps_si = (3.48**2,)  # 3.648 @850nm
 air = 1**2
 eps_glass = 1.5**2
 

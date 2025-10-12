@@ -25,9 +25,13 @@ def spsolve_cudss(A, b, device="cuda:0", mtype: int = 0) -> torch.Tensor:
     # CUDSS_MTYPE_SPD,
     # CUDSS_MTYPE_HPD
     ## assert device must be cuda
-    assert isinstance(mtype, int) and mtype in {0, 1, 2, 3, 4}, (
-        "mtype must be 0,1,2,3,4"
-    )
+    assert isinstance(mtype, int) and mtype in {
+        0,
+        1,
+        2,
+        3,
+        4,
+    }, "mtype must be 0,1,2,3,4"
     if isinstance(A, sp.coo_matrix):
         A = A.tocsr()
 
@@ -38,8 +42,9 @@ def spsolve_cudss(A, b, device="cuda:0", mtype: int = 0) -> torch.Tensor:
         elif A.layout == torch.sparse_csr:
             val = A.to_sparse_coo().values().to(device).to(torch.complex128)
         else:
-            raise ValueError("A must be torch.sparse_coo_tensor or torch.sparse_csr_tensor")
-
+            raise ValueError(
+                "A must be torch.sparse_coo_tensor or torch.sparse_csr_tensor"
+            )
 
     if isinstance(A, sp.csr_matrix):
         A = A.sorted_indices()

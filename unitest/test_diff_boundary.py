@@ -1,7 +1,9 @@
-from core.models.layers.diff_bdry_layer import DiffBdry
-from core.utils import print_stat
 import matplotlib.pyplot as plt
 import torch
+
+from core.models.layers.diff_bdry_layer import DiffBdry
+from core.utils import print_stat
+
 
 def get_meshgrid(box_size, resolution):
     x = torch.linspace(
@@ -16,6 +18,7 @@ def get_meshgrid(box_size, resolution):
     )
     X, Y = torch.meshgrid(x, y)
     return X, Y
+
 
 if __name__ == "__main__":
     diff_boundary = DiffBdry(10)

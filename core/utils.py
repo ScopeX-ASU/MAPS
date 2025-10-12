@@ -16,7 +16,6 @@ import torch.nn.functional as F
 import torch.optim
 import yaml
 from pyutils.config import Config
-from pyutils.config import Config
 from pyutils.general import TimerCtx
 from torch import Tensor
 from torch.types import Device
@@ -417,15 +416,15 @@ def cal_fom_from_fwd_field(
             in_mode = opt_cfg["in_mode"]
             out_modes = opt_cfg.get("out_modes", [])
             out_modes = [int(mode) for mode in out_modes]
-            assert len(out_modes) == 1, (
-                f"The code can handle multiple modes, but I have not check if it is correct"
-            )
+            assert (
+                len(out_modes) == 1
+            ), f"The code can handle multiple modes, but I have not check if it is correct"
             temperture = opt_cfg["temp"]
             temperture = [float(temp) for temp in temperture]
             wavelength = opt_cfg["wl"]
-            assert len(wavelength) == 1, (
-                f"only support one wavelength for now but the wavelength is: {wavelength}"
-            )
+            assert (
+                len(wavelength) == 1
+            ), f"only support one wavelength for now but the wavelength is: {wavelength}"
             wavelength = wavelength[0]
             input_slice_name = opt_cfg["in_slice_name"]
             obj_type = opt_cfg["type"]
@@ -565,15 +564,15 @@ def cal_total_field_adj_src_from_fwd_field(
                 in_mode = opt_cfg["in_mode"]
                 out_modes = opt_cfg.get("out_modes", [])
                 out_modes = [int(mode) for mode in out_modes]
-                assert len(out_modes) == 1, (
-                    f"The code can handle multiple modes, but I have not check if it is correct"
-                )
+                assert (
+                    len(out_modes) == 1
+                ), f"The code can handle multiple modes, but I have not check if it is correct"
                 temperture = opt_cfg["temp"]
                 temperture = [float(temp) for temp in temperture]
                 wavelength = opt_cfg["wl"]
-                assert len(wavelength) == 1, (
-                    f"only support one wavelength for now but the wavelength is: {wavelength}"
-                )
+                assert (
+                    len(wavelength) == 1
+                ), f"only support one wavelength for now but the wavelength is: {wavelength}"
                 wavelength = wavelength[0]
                 input_slice_name = opt_cfg["in_slice_name"]
                 obj_type = opt_cfg["type"]
@@ -638,9 +637,9 @@ def cal_total_field_adj_src_from_fwd_field(
             gradient_list.append(gradient)
         Hx = torch.stack(Hx_list, dim=0)
         Hy = torch.stack(Hy_list, dim=0)
-        assert Ez4fullfield_copy.dim() == 4, (
-            f"Ez_copy should be 4D, Bs, 2, H, W but now {Ez4fullfield_copy.shape}"
-        )
+        assert (
+            Ez4fullfield_copy.dim() == 4
+        ), f"Ez_copy should be 4D, Bs, 2, H, W but now {Ez4fullfield_copy.shape}"
         total_field = torch.cat((Hx, Hy, Ez4fullfield_copy), dim=1)
         total_field = pml_mask.unsqueeze(0).unsqueeze(0) * total_field
         adj_src = torch.conj(torch.stack(gradient_list, dim=0))
@@ -1293,7 +1292,9 @@ class maskedNMSELoss(torch.nn.modules.loss._Loss):
                     :,
                     :,
                 ] = 3
-        assert (frame_mask is not None) or self.if_spatial_mask, (
+        assert (
+            frame_mask is not None
+        ) or self.if_spatial_mask, (
             "if mask NMSE, either frame_mask or spatial_mask should be True"
         )
         if self.if_spatial_mask:
@@ -1335,7 +1336,9 @@ class maskedNL2NormLoss(torch.nn.modules.loss._Loss):
                     :,
                     :,
                 ] = 3
-        assert (frame_mask is not None) or self.if_spatial_mask, (
+        assert (
+            frame_mask is not None
+        ) or self.if_spatial_mask, (
             "if mask nl2norm, either frame_mask or spatial_mask should be True"
         )
         if self.if_spatial_mask:
@@ -1419,9 +1422,9 @@ class SharpnessScheduler(object):
         self.current_step = 0
         self.current_sharp = initial_sharp
         self.mode = mode
-        assert mode in self.__mode_list__, (
-            f"mode should be one of {self.__mode_list__}, but got {mode}"
-        )
+        assert (
+            mode in self.__mode_list__
+        ), f"mode should be one of {self.__mode_list__}, but got {mode}"
 
     def _step_cosine(self):
         self.current_step += 1
@@ -1634,7 +1637,9 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
         else:
             b = (source).flatten(0, 1).flatten(1)
         difference = lhs - b
-        if not self.using_ALM:  # when we are not using ALM, we set the difference to zero in the free space region
+        if (
+            not self.using_ALM
+        ):  # when we are not using ALM, we set the difference to zero in the free space region
             difference[~free_space_mask] = 0
         # b[~free_space_mask] = 0
         # fig, ax = plt.subplots(1, 3, figsize=(15, 5))
@@ -2028,7 +2033,9 @@ def Si_eff_eps(wavelength, width: float = 10, thickness: float = 0.22):
             + 1.2951253477e00
         ) ** 2
     else:
-        assert thickness == 0.22, f"only support thickness of 0.22 for narrow waveguide, but got {thickness}"
+        assert (
+            thickness == 0.22
+        ), f"only support thickness of 0.22 for narrow waveguide, but got {thickness}"
         match width:
             case 0.48:
                 permittivity = 2.411707**2  # from lumerical

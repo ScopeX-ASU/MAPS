@@ -78,10 +78,12 @@ def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
             opt_coupling_method=configs.model.opt_coupling_method,
             grad_mode=configs.model.grad_mode,
             cal_bd_mode=configs.model.cal_bd_mode,
-            aux_out=True
-            if configs.aux_criterion.curl_loss.weight > 0
-            or configs.aux_criterion.gap_loss.weight > 0
-            else False,
+            aux_out=(
+                True
+                if configs.aux_criterion.curl_loss.weight > 0
+                or configs.aux_criterion.gap_loss.weight > 0
+                else False
+            ),
             device=device,
         ).to(device)
     elif "metalens" in configs.model.name.lower():

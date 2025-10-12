@@ -1,10 +1,11 @@
 from typing import Tuple
 
 import torch
-from .device_base import N_Ports
+from pyutils.general import logger
 
 from core.utils import get_material_fn
-from pyutils.general import logger
+
+from .device_base import N_Ports
 
 __all__ = ["ModeMux"]
 

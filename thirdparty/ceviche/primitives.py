@@ -1,10 +1,20 @@
+import autograd as ag
 import autograd.numpy as npa
 import scipy.sparse as sp
-import autograd as ag
 
 from .solvers import solve_linear
-from .utils import (make_sparse, transpose_indices, make_rand, make_rand_complex, make_rand_indeces,
-                    make_rand_sparse, der_num, grad_num, get_entries_indices, make_IO_matrices)
+from .utils import (
+    der_num,
+    get_entries_indices,
+    grad_num,
+    make_IO_matrices,
+    make_rand,
+    make_rand_complex,
+    make_rand_indeces,
+    make_rand_sparse,
+    make_sparse,
+    transpose_indices,
+)
 
 """ This file defines the very lowest level sparse matrix primitives that allow autograd to
 be compatible with FDFD.  One needs to define the derivatives of Ax = b and x = A^-1 b for sparse A.
@@ -16,7 +26,7 @@ know how to handle those as arguments to functions.
 """ GUIDE TO THE PRIMITIVES DEFINED BELOW:
         naming convention for gradient functions:
            "def grad_{function_name}_{argument_name}_{mode}"
-        defines the derivative of `function_name` with respect to `argument_name` using `mode`-mode differentiation    
+        defines the derivative of `function_name` with respect to `argument_name` using `mode`-mode differentiation
         where 'mode' is one of 'reverse' or 'forward'
 
     These functions define the basic operations needed for FDFD and also their derivatives
@@ -27,7 +37,7 @@ know how to handle those as arguments to functions.
 
     NOTES for the curious (since this information isnt in autograd documentation...)
 
-        To define a function as being trackable by autograd, need to add the 
+        To define a function as being trackable by autograd, need to add the
         @primitive decorator
 
     REVERSE MODE
@@ -55,9 +65,10 @@ know how to handle those as arguments to functions.
 
 """ ========================== Sparse Matrix-Vector Multiplication =========================="""
 
+
 @ag.primitive
 def sp_mult(entries, indices, x):
-    """ Multiply a sparse matrix (A) by a dense vector (x)
+    """Multiply a sparse matrix (A) by a dense vector (x)
     Args:
       entries: numpy array with shape (num_non_zeros,) giving values for non-zero
         matrix entries into A.
@@ -71,38 +82,49 @@ def sp_mult(entries, indices, x):
     A = make_sparse(entries, indices, shape=(N, N))
     return A.dot(x)
 
+
 def grad_sp_mult_entries_reverse(ans, entries, indices, x):
     # x^T @ dA/de^T @ v => the outer product of x and v using the indices of A
     ia, ja = indices
+
     def vjp(v):
         return v[ia] * x[ja]
+
     return vjp
+
 
 def grad_sp_mult_x_reverse(b, entries, indices, x):
     # dx/de^T @ A^T @ v => multiplying A^T by v
     indices_T = transpose_indices(indices)
+
     def vjp(v):
         return sp_mult(entries, indices_T, v)
+
     return vjp
 
+
 ag.extend.defvjp(sp_mult, grad_sp_mult_entries_reverse, None, grad_sp_mult_x_reverse)
+
 
 def grad_sp_mult_entries_forward(g, b, entries, indices, x):
     # dA/de @ x @ g => use `g` as the entries into A and multiply by x
     return sp_mult(g, indices, x)
 
+
 def grad_sp_mult_x_forward(g, b, entries, indices, x):
     # A @ dx/de @ g -> simply multiply A @ g
     return sp_mult(entries, indices, g)
+
 
 ag.extend.defjvp(sp_mult, grad_sp_mult_entries_forward, None, grad_sp_mult_x_forward)
 
 
 """ ========================== Sparse Matrix-Vector Solve =========================="""
 
+
 @ag.primitive
 def sp_solve(entries, indices, b):
-    """ Solve a sparse matrix (A) with source (b)
+    """Solve a sparse matrix (A) with source (b)
     Args:
       entries: numpy array with shape (num_non_zeros,) giving values for non-zero
         matrix entries.
@@ -118,41 +140,52 @@ def sp_solve(entries, indices, b):
     # calls a customizable solving function from ceviche.solvers, could add options to sp_solve() here eventually
     return solve_linear(A, b)
 
+
 def grad_sp_solve_entries_reverse(x, entries, indices, b):
     # x^T @ dA/de^T @ A_inv^T @ -v => do the solve on the RHS, then take outer product with x using indices of A
     indices_T = transpose_indices(indices)
     i, j = indices
+
     def vjp(v):
         adj = sp_solve(entries, indices_T, -v)
         return adj[i] * x[j]
+
     return vjp
+
 
 def grad_sp_solve_b_reverse(ans, entries, indices, b):
     # dx/de^T @ A_inv^T @ v => do the solve on the RHS and you're done.
     indices_T = transpose_indices(indices)
+
     def vjp(v):
         return sp_solve(entries, indices_T, v)
+
     return vjp
 
+
 ag.extend.defvjp(sp_solve, grad_sp_solve_entries_reverse, None, grad_sp_solve_b_reverse)
+
 
 def grad_sp_solve_entries_forward(g, x, entries, indices, b):
     # -A_inv @ dA/de @ A_inv @ b @ g => insert x = A_inv @ b and multiply with g using A indices.  Then solve as source for A_inv.
     forward = sp_mult(g, indices, x)
     return sp_solve(entries, indices, -forward)
 
+
 def grad_sp_solve_b_forward(g, x, entries, indices, b):
     # A_inv @ db/de @ g => simply solve A_inv @ g
     return sp_solve(entries, indices, g)
+
 
 ag.extend.defjvp(sp_solve, grad_sp_solve_entries_forward, None, grad_sp_solve_b_forward)
 
 
 """ ==========================Sparse Matrix-Sparse Matrix Multiplication ========================== """
 
+
 @ag.primitive
 def spsp_mult(entries_a, indices_a, entries_x, indices_x, N):
-    """ Multiply a sparse matrix (A) by a sparse matrix (X) A @ X = B
+    """Multiply a sparse matrix (A) by a sparse matrix (X) A @ X = B
     Args:
       entries_a: numpy array with shape (num_non_zeros,) giving values for non-zero
         matrix entries into A.
@@ -167,7 +200,7 @@ def spsp_mult(entries_a, indices_a, entries_x, indices_x, N):
       entries_b: numpy array with shape (num_non_zeros,) giving values for non-zero
         matrix entries into the result B.
       indices_b: numpy array with shape (2, num_non_zeros) giving i, j indices for
-        non-zero matrix entries into the result B.      
+        non-zero matrix entries into the result B.
     """
     A = make_sparse(entries_a, indices_a, shape=(N, N))
     X = make_sparse(entries_x, indices_x, shape=(N, N))
@@ -175,11 +208,14 @@ def spsp_mult(entries_a, indices_a, entries_x, indices_x, N):
     entries_b, indices_b = get_entries_indices(B)
     return entries_b, indices_b
 
-def grad_spsp_mult_entries_a_reverse(b_out, entries_a, indices_a, entries_x, indices_x, N):
-    """ For AX=B, we want to relate the entries of A to the entries of B.
-        The goal is to compute the gradient of the output entries with respect to the input.
-        For this, though, we need to convert into matrix form, do our computation, and convert back to the entries.
-        If you write out the matrix elements and do the calculation, you can derive the code below, but it's a hairy derivation.
+
+def grad_spsp_mult_entries_a_reverse(
+    b_out, entries_a, indices_a, entries_x, indices_x, N
+):
+    """For AX=B, we want to relate the entries of A to the entries of B.
+    The goal is to compute the gradient of the output entries with respect to the input.
+    For this, though, we need to convert into matrix form, do our computation, and convert back to the entries.
+    If you write out the matrix elements and do the calculation, you can derive the code below, but it's a hairy derivation.
     """
 
     # make the indices matrices for A
@@ -191,7 +227,9 @@ def grad_spsp_mult_entries_a_reverse(b_out, entries_a, indices_a, entries_x, ind
         # multiply the v_entries with X^T using the indices of B
         entries_v, _ = v
         indices_xT = transpose_indices(indices_x)
-        entries_vxt, indices_vxt = spsp_mult(entries_v, indices_b, entries_x, indices_xT, N)
+        entries_vxt, indices_vxt = spsp_mult(
+            entries_v, indices_b, entries_x, indices_xT, N
+        )
 
         # rutn this into a sparse matrix and convert to the basis of A's indices
         VXT = make_sparse(entries_vxt, indices_vxt, shape=(N, N))
@@ -202,9 +240,12 @@ def grad_spsp_mult_entries_a_reverse(b_out, entries_a, indices_a, entries_x, ind
 
     return vjp
 
-def grad_spsp_mult_entries_x_reverse(b_out, entries_a, indices_a, entries_x, indices_x, N):
-    """ Now we wish to do the gradient with respect to the X matrix in AX=B
-        Instead of doing it all out again, we just use the previous grad function on the transpose equation X^T A^T = B^T 
+
+def grad_spsp_mult_entries_x_reverse(
+    b_out, entries_a, indices_a, entries_x, indices_x, N
+):
+    """Now we wish to do the gradient with respect to the X matrix in AX=B
+    Instead of doing it all out again, we just use the previous grad function on the transpose equation X^T A^T = B^T
     """
 
     # get the transposes of the original problem
@@ -215,17 +256,30 @@ def grad_spsp_mult_entries_x_reverse(b_out, entries_a, indices_a, entries_x, ind
     b_T_out = entries_b, indices_bT
 
     # call the vjp maker for AX=B using the substitution A=>X^T, X=>A^T, B=>B^T
-    vjp_XT_AT = grad_spsp_mult_entries_a_reverse(b_T_out, entries_x, indices_xT, entries_a, indices_aT, N)
+    vjp_XT_AT = grad_spsp_mult_entries_a_reverse(
+        b_T_out, entries_x, indices_xT, entries_a, indices_aT, N
+    )
 
     # return the function of the transpose vjp maker being called on the backprop vector
     return lambda v: vjp_XT_AT(v)
 
-ag.extend.defvjp(spsp_mult, grad_spsp_mult_entries_a_reverse, None, grad_spsp_mult_entries_x_reverse, None, None)
 
-def grad_spsp_mult_entries_a_forward(g, b_out, entries_a, indices_a, entries_x, indices_x, N):
-    """ Forward mode is not much better than reverse mode, but the same general logic aoplies:
-        Convert to matrix form, do the calculation, convert back to entries.        
-            dA/de @ x @ g
+ag.extend.defvjp(
+    spsp_mult,
+    grad_spsp_mult_entries_a_reverse,
+    None,
+    grad_spsp_mult_entries_x_reverse,
+    None,
+    None,
+)
+
+
+def grad_spsp_mult_entries_a_forward(
+    g, b_out, entries_a, indices_a, entries_x, indices_x, N
+):
+    """Forward mode is not much better than reverse mode, but the same general logic aoplies:
+    Convert to matrix form, do the calculation, convert back to entries.
+        dA/de @ x @ g
     """
 
     # get the IO indices matrices for B
@@ -243,8 +297,11 @@ def grad_spsp_mult_entries_a_forward(g, b_out, entries_a, indices_a, entries_x, 
     # return the diagonal (resulting entries) and indices of 0 (because indices are not affected by entries)
     return M.diagonal(), npa.zeros(Mb)
 
-def grad_spsp_mult_entries_x_forward(g, b_out, entries_a, indices_a, entries_x, indices_x, N):
-    """ Same trick as before: Reuse the previous VJP but for the transpose system """
+
+def grad_spsp_mult_entries_x_forward(
+    g, b_out, entries_a, indices_a, entries_x, indices_x, N
+):
+    """Same trick as before: Reuse the previous VJP but for the transpose system"""
 
     # Transpose A, X, and B
     indices_aT = transpose_indices(indices_a)
@@ -254,32 +311,45 @@ def grad_spsp_mult_entries_x_forward(g, b_out, entries_a, indices_a, entries_x, 
     b_T_out = entries_b, indices_bT
 
     # return the jvp of B^T = X^T A^T
-    return grad_spsp_mult_entries_a_forward(g, b_T_out, entries_x, indices_xT, entries_a, indices_aT, N)
+    return grad_spsp_mult_entries_a_forward(
+        g, b_T_out, entries_x, indices_xT, entries_a, indices_aT, N
+    )
 
-ag.extend.defjvp(spsp_mult, grad_spsp_mult_entries_a_forward, None, grad_spsp_mult_entries_x_forward, None, None)
+
+ag.extend.defjvp(
+    spsp_mult,
+    grad_spsp_mult_entries_a_forward,
+    None,
+    grad_spsp_mult_entries_x_forward,
+    None,
+    None,
+)
 
 
 """ ========================== Nonlinear Solve ========================== """
 
 # this is just a sketch of how to do problems involving sparse matrix solves with nonlinear elements...  WIP.
 
+
 def sp_solve_nl(parameters, a_indices, b, fn_nl):
     """
-        parameters: entries into matrix A are function of parameters and solution x
-        a_indices: indices into sparse A matrix
-        b: source vector for A(xx = b
-        fn_nl: describes how the entries of a depend on the solution of A(x,p) @ x = b and the parameters  `a_entries = fn_nl(params, x)`
+    parameters: entries into matrix A are function of parameters and solution x
+    a_indices: indices into sparse A matrix
+    b: source vector for A(xx = b
+    fn_nl: describes how the entries of a depend on the solution of A(x,p) @ x = b and the parameters  `a_entries = fn_nl(params, x)`
     """
 
     # do the actual nonlinear solve in `_solve_nl_problem` (using newton, picard, whatever)
     # this tells you the final entries into A given the parameters and the nonlinear function.
-    a_entries = ceviche.solvers._solve_nl_problem(parameters, a_indices, fn_nl, a_entries0=None)  # optinally, give starting a_entries
+    a_entries = ceviche.solvers._solve_nl_problem(
+        parameters, a_indices, fn_nl, a_entries0=None
+    )  # optinally, give starting a_entries
     x = sp_solve(a_entries, a_indices, b)  # the final solution to A(x) x = b
     return x
 
-def grad_sp_solve_nl_parameters(x, parameters, a_indices, b, fn_nl):
 
-    """ 
+def grad_sp_solve_nl_parameters(x, parameters, a_indices, b, fn_nl):
+    """
     We are finding the solution (x) to the nonlinear function:
 
         f = A(x, p) @ x - b = 0
@@ -293,7 +363,7 @@ def grad_sp_solve_nl_parameters(x, parameters, a_indices, b, fn_nl):
 
         [ df  / dx,  df  / dx*] [ dx  / dp ] = -[ df  / dp]
         [ df* / dx,  df* / dx*] [ dx* / dp ]    [ df* / dp]
-    
+
     Note that we need to explicitly make A a function of x and x* for complex x
 
     In our case:
@@ -314,7 +384,7 @@ def grad_sp_solve_nl_parameters(x, parameters, a_indices, b, fn_nl):
 
         (dA / dp) @ x -> ag.jacobian(Ax, 1)
 
-    Note that this is a matrix, not a vector. 
+    Note that this is a matrix, not a vector.
     We'll have to handle dA/dx* but this can probably be done, maybe with autograd directly.
 
     Other than this, assuming entries_a(x, p) is fully autograd compatible, we can get these terms no problem!
@@ -349,11 +419,12 @@ def grad_sp_solve_nl_parameters(x, parameters, a_indices, b, fn_nl):
 
     def vjp(v):
         raise NotImplementedError
+
     return vjp
 
-def grad_sp_solve_nl_b(x, parameters, a_indices, b, fn_nl):
 
-    """ 
+def grad_sp_solve_nl_b(x, parameters, a_indices, b, fn_nl):
+    """
     Computing the derivative w.r.t b is simpler
 
         f = A(x) @ x - b(p) = 0
@@ -369,22 +440,27 @@ def grad_sp_solve_nl_b(x, parameters, a_indices, b, fn_nl):
 
     def vjp(v):
         raise NotImplementedError
+
     return vjp
 
-ag.extend.defvjp(sp_solve_nl, grad_sp_solve_nl_parameters, None, grad_sp_solve_nl_b, None)
+
+ag.extend.defvjp(
+    sp_solve_nl, grad_sp_solve_nl_parameters, None, grad_sp_solve_nl_b, None
+)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
 
-    """ Testing ground for sparsse-sparse matmul primitives. """
+    """Testing ground for sparsse-sparse matmul primitives."""
 
-    import ceviche    # use the ceviche wrapper for autograd derivatives
-    DECIMAL = 3       # number of decimals to check to
+    import ceviche  # use the ceviche wrapper for autograd derivatives
+
+    DECIMAL = 3  # number of decimals to check to
 
     ## Setup
 
-    N = 5        # size of matrix dimensions.  matrix shape = (N, N)
-    M = N**2 - 1     # number of non-zeros (make it dense for numerical stability)
+    N = 5  # size of matrix dimensions.  matrix shape = (N, N)
+    M = N**2 - 1  # number of non-zeros (make it dense for numerical stability)
 
     # these are the default values used within the test functions
     indices_const = make_rand_indeces(N, M)
@@ -398,20 +474,22 @@ if __name__ == '__main__':
 
     def fn_spsp_entries(entries):
         # sparse matrix multiplication (Ax = b) as a function of matrix entries 'A(entries)'
-        entries_c, indices_c = spsp_mult(entries_const, indices_const, entries, indices_const, N=N)
+        entries_c, indices_c = spsp_mult(
+            entries_const, indices_const, entries, indices_const, N=N
+        )
         x = sp_solve(entries_c, indices_c, b_const)
         return out_fn(x)
 
     entries = make_rand_complex(M)
 
     # doesnt pass yet
-    grad_rev = ceviche.jacobian(fn_spsp_entries, mode='reverse')(entries)[0]
+    grad_rev = ceviche.jacobian(fn_spsp_entries, mode="reverse")(entries)[0]
     grad_true = grad_num(fn_spsp_entries, entries)
     npa.testing.assert_almost_equal(grad_rev, grad_true, decimal=DECIMAL)
 
     # Testing Gradients of 'Sparse-Sparse Multiply entries Forward-mode'
 
-    grad_for = ceviche.jacobian(fn_spsp_entries, mode='forward')(entries)[0]
+    grad_for = ceviche.jacobian(fn_spsp_entries, mode="forward")(entries)[0]
     grad_true = grad_num(fn_spsp_entries, entries)
     npa.testing.assert_almost_equal(grad_for, grad_true, decimal=DECIMAL)
 
@@ -428,4 +506,3 @@ if __name__ == '__main__':
     C_test = make_sparse(ce, ci, shape=(N, N)).todense()
 
     npa.testing.assert_almost_equal(C_true, C_test, decimal=DECIMAL)
-

@@ -1,38 +1,37 @@
+import copy
+from functools import lru_cache
 from turtle import pos
 from typing import List, Optional, Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import rearrange
+from mmcv.cnn.bricks import build_activation_layer, build_conv_layer, build_norm_layer
+from mmengine.registry import MODELS
+from neuralop.layers.fno_block import FNOBlocks
+from neuralop.layers.mlp import MLP
+from neuralop.layers.spectral_convolution import SpectralConv
+from neuralop.models import FNO
 from pyutils.activation import Swish
+from pyutils.torch_train import set_torch_deterministic
 from timm.models.layers import DropPath
 from torch import nn
 from torch.functional import Tensor
 from torch.types import Device
-from .layers.fno_conv2d import FNOConv2d
-from neuralop.models import FNO
-from neuralop.layers.mlp import MLP
-from neuralop.layers.fno_block import FNOBlocks
-from neuralop.layers.spectral_convolution import SpectralConv
-import matplotlib.pyplot as plt
-from core.utils import (
-    Si_eps,
-    SiO2_eps,
-)
-import copy
-from mmengine.registry import MODELS
-from mmcv.cnn.bricks import build_activation_layer, build_conv_layer, build_norm_layer
-import torch.nn.functional as F
-from functools import lru_cache
-from pyutils.torch_train import set_torch_deterministic
-from core.train.utils import resize_to_targt_size
+
 from core.fdfd.fdfd import fdfd_ez
-from einops import rearrange
-from .model_base import ModelBase, ConvBlock, LinearBlock
+from core.train.utils import resize_to_targt_size
+from core.utils import Si_eps, SiO2_eps
+
+from .layers.fno_conv2d import FNOConv2d
 from .layers.fourier_feature import LearnableFourierFeatures
+from .model_base import ConvBlock, LinearBlock, ModelBase
 
 __all__ = ["FNO2d"]
+
 
 class FNO2dBlock(nn.Module):
     def __init__(
@@ -44,13 +43,17 @@ class FNO2dBlock(nn.Module):
         padding: int = 0,
         conv_cfg: dict = dict(type="Conv2d", padding_mode="zeros"),
         act_cfg: dict | None = dict(type="GELU"),
-        norm_cfg: dict | None = dict(type="LayerNorm", eps=1e-6, data_format="channels_first"),
+        norm_cfg: dict | None = dict(
+            type="LayerNorm", eps=1e-6, data_format="channels_first"
+        ),
         drop_path_rate: float = 0.0,
         device: Device = torch.device("cuda:0"),
     ) -> None:
         super().__init__()
         self.drop_path_rate = drop_path_rate
-        self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0 else nn.Identity()
+        self.drop_path = (
+            DropPath(drop_path_rate) if drop_path_rate > 0 else nn.Identity()
+        )
         self.f_conv = FNOConv2d(in_channels, out_channels, n_modes, device=device)
         self.conv = build_conv_layer(
             conv_cfg,
@@ -75,6 +78,7 @@ class FNO2dBlock(nn.Module):
         if self.act_func is not None:
             x = self.act_func(x)
         return x
+
 
 @MODELS.register_module()
 class FNO2d(ModelBase):
@@ -197,7 +201,7 @@ class FNO2d(ModelBase):
             raise ValueError("fourier_feature only supports basic and gauss or none")
 
     def build_layers(self):
-        self.stem = ConvBlock( # just a regular conv 1*1 block
+        self.stem = ConvBlock(  # just a regular conv 1*1 block
             in_channels=self.in_channels,
             out_channels=self.dim,
             kernel_size=1,
@@ -234,12 +238,12 @@ class FNO2d(ModelBase):
         head = [
             nn.Sequential(
                 ConvBlock(
-                    inc, 
-                    outc, 
-                    kernel_size=1, 
-                    padding=0, 
-                    act_cfg=self.act_cfg, 
-                    device=self.device
+                    inc,
+                    outc,
+                    kernel_size=1,
+                    padding=0,
+                    act_cfg=self.act_cfg,
+                    device=self.device,
                 ),
                 nn.Dropout2d(self.dropout_rate),
             )
@@ -263,11 +267,11 @@ class FNO2d(ModelBase):
             head = [
                 nn.Sequential(
                     ConvBlock(
-                        inc, 
-                        outc, 
-                        kernel_size=1, 
-                        padding=0, 
-                        act_cfg=self.act_cfg, 
+                        inc,
+                        outc,
+                        kernel_size=1,
+                        padding=0,
+                        act_cfg=self.act_cfg,
                         device=self.device,
                     ),
                     nn.Dropout2d(self.dropout_rate),
@@ -332,29 +336,40 @@ class FNO2d(ModelBase):
         bs = eps.shape[0]
         eps = eps.to(self.device)
         if wl is None:
-            assert not self.incident_field, "wl must be provided when incident_field is True"
+            assert (
+                not self.incident_field
+            ), "wl must be provided when incident_field is True"
             wl = [1.55] * bs
             wl = torch.tensor(wl, device=eps.device)
         if temp is None:
-            assert not self.incident_field, "temp must be provided when incident_field is True"
+            assert (
+                not self.incident_field
+            ), "temp must be provided when incident_field is True"
             temp = [300] * bs
             temp = torch.tensor(temp, device=eps.device)
         if in_slice_name is None:
-            assert not self.incident_field, "in_slice_name must be provided when incident_field is True"
+            assert (
+                not self.incident_field
+            ), "in_slice_name must be provided when incident_field is True"
             in_slice_name = ["in_slice_1"] * bs
-        src = src / (torch.abs(src).amax(dim=(1, 2), keepdim=True) + 1e-6) # B, H, W
+        src = src / (torch.abs(src).amax(dim=(1, 2), keepdim=True) + 1e-6)  # B, H, W
         if self.incident_field:
             incident_field = self.calculate_incident_light_field(
-                                                        source=src,
-                                                        monitor_slices=monitor_slices,
-                                                        monitor_slice_list=monitor_slice_list,
-                                                        in_slice_name=in_slice_name,
-                                                        wl=wl,
-                                                        temp=temp,
-                                                    ) # Bs, 2, H, W
-        temp_multiplier = self._get_temp_multiplier(temp).unsqueeze(-1).unsqueeze(-1)  # B, 1, 1
+                source=src,
+                monitor_slices=monitor_slices,
+                monitor_slice_list=monitor_slice_list,
+                in_slice_name=in_slice_name,
+                wl=wl,
+                temp=temp,
+            )  # Bs, 2, H, W
+        temp_multiplier = (
+            self._get_temp_multiplier(temp).unsqueeze(-1).unsqueeze(-1)
+        )  # B, 1, 1
         eps_min = torch.amin(eps, dim=(-1, -2), keepdim=True)
-        eps = (eps - torch.amin(eps, dim=(-1, -2), keepdim=True)) / (torch.amax(eps, dim=(-1, -2), keepdim=True) - torch.amin(eps, dim=(-1, -2), keepdim=True))
+        eps = (eps - torch.amin(eps, dim=(-1, -2), keepdim=True)) / (
+            torch.amax(eps, dim=(-1, -2), keepdim=True)
+            - torch.amin(eps, dim=(-1, -2), keepdim=True)
+        )
         # now it is normalized to [0, 1]
         eps = (eps * temp_multiplier + eps_min) / 12.11
         eps = eps.unsqueeze(1)  # B, 1, H, W
@@ -375,12 +390,16 @@ class FNO2d(ModelBase):
             eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1)
         else:
             enc_fwd = self.fourier_feature_mapping(eps)
-            eps_enc_fwd = torch.cat((eps, enc_fwd), dim=1) if self.fourier_feature != "none" else eps
+            eps_enc_fwd = (
+                torch.cat((eps, enc_fwd), dim=1)
+                if self.fourier_feature != "none"
+                else eps
+            )
 
         if self.incident_field:
             x = torch.cat((eps_enc_fwd, incident_field), dim=1)
         else:
-            src = torch.view_as_real(src).permute(0, 3, 1, 2) # B, 2, H, W
+            src = torch.view_as_real(src).permute(0, 3, 1, 2)  # B, 2, H, W
             x = torch.cat((eps_enc_fwd, src), dim=1)
 
         # positional encoding
@@ -389,7 +408,8 @@ class FNO2d(ModelBase):
             x.device,
             mode=self.pos_encoding,
             epsilon=eps * 12.11,
-            wavelength=wl.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) * 1e-6, # B, 1, 1, 1
+            wavelength=wl.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+            * 1e-6,  # B, 1, 1, 1
             grid_step=1 / self.img_res * 1e-6,
         )  # [bs, 2 or 4 or 8, h, w] real
         if grid is not None:

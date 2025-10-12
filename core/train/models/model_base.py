@@ -1,7 +1,10 @@
 import copy
 import inspect
+import math
+from functools import lru_cache
 from typing import Dict, Optional, Union
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
@@ -12,10 +15,8 @@ from torch import Tensor
 from torch.types import Device, _size
 
 from core.fdfd.fdfd import fdfd_ez
-import math
 from core.utils import Slice
-import matplotlib.pyplot as plt
-from functools import lru_cache
+
 __all__ = [
     "LinearBlock",
     "ConvBlock",
@@ -111,8 +112,9 @@ class ConvBlock(nn.Module):
         groups: int = 1,
         bias: bool = True,
         conv_cfg: dict = dict(type="Conv2d", padding_mode="replicate"),
-        norm_cfg: dict
-        | None = None,  # dict(type="LayerNorm", eps=1e-6, data_format="channels_first"),
+        norm_cfg: (
+            dict | None
+        ) = None,  # dict(type="LayerNorm", eps=1e-6, data_format="channels_first"),
         act_cfg: dict | None = None,  # dict(type="GELU"),
         skip: bool = False,
         device: Device = (
@@ -203,6 +205,7 @@ class LayerBlock(nn.Module):
             x += y
         return x
 
+
 class ProgressiveConvDecoder(nn.Module):
     def __init__(
         self,
@@ -216,19 +219,19 @@ class ProgressiveConvDecoder(nn.Module):
     ):
         super().__init__()
         number_of_layers = int(np.log2(img_size // 16)) + 1
-        kernel_list = [in_channels * 2 ** i for i in range(number_of_layers)]
+        kernel_list = [in_channels * 2**i for i in range(number_of_layers)]
         head = [
             nn.Sequential(
                 ConvBlock(
-                    inc, 
-                    outc, 
-                    kernel_size=3, 
+                    inc,
+                    outc,
+                    kernel_size=3,
                     stride=2,
-                    padding=1, 
-                    act_cfg=act_cfg, 
+                    padding=1,
+                    act_cfg=act_cfg,
                     norm_cfg=norm_cfg,
                     skip=True,
-                    device=device
+                    device=device,
                 ),
                 nn.Dropout2d(dropout_rate),
             )
@@ -246,7 +249,7 @@ class ProgressiveConvDecoder(nn.Module):
                 skip=True,
                 device=device,
             )
-        ] # from 16 --> 8
+        ]  # from 16 --> 8
         self.head = nn.Sequential(*head)
         self.avg = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(kernel_list[-1], num_classes)
@@ -254,10 +257,10 @@ class ProgressiveConvDecoder(nn.Module):
     def forward(self, x):
         """
         Forward pass for the decoder.
-        
+
         Args:
             x (torch.Tensor): Input tensor of shape (batch_size, in_channels, height, width).
-        
+
         Returns:
             torch.Tensor: Logits for classification with shape (batch_size, num_classes).
         """
@@ -266,6 +269,7 @@ class ProgressiveConvDecoder(nn.Module):
         x = x.view(x.size(0), -1)  # Flatten to (batch_size, channels)
         x = self.fc(x)  # Fully connected layer
         return x
+
 
 class ModelBase(nn.Module):
     # default_cfgs = dict(
@@ -317,7 +321,9 @@ class ModelBase(nn.Module):
             self.sim[wl] = fdfd_ez(
                 omega=omega,
                 dL=1 / self.img_res * 1e-6,
-                eps_r=torch.randn((self.img_size, self.img_size), device=self.device),  # random permittivity
+                eps_r=torch.randn(
+                    (self.img_size, self.img_size), device=self.device
+                ),  # random permittivity
                 npml=(
                     round(self.pml_width * self.img_res),
                     round(self.pml_width * self.img_res),
@@ -427,7 +433,7 @@ class ModelBase(nn.Module):
 
     #         mode = mode_x + mode_y  # superposition of two sources
     #     return mode
-        
+
     def _get_temp_multiplier(
         self,
         temp: Tensor,
@@ -480,9 +486,9 @@ class ModelBase(nn.Module):
         wl,
         temp,
     ):
-        '''
+        """
         need to read the obj file and determine which objective is calculated to the source
-        '''
+        """
         bs, _, _ = source.shape
         incident_light_field_list = []
         if self.train_field == "fwd":
@@ -496,9 +502,9 @@ class ModelBase(nn.Module):
                     y=monitor_slice_y,
                 )
                 incident_field = self._cal_light_field(
-                    src, 
-                    monitor_slice, 
-                    wl[i], 
+                    src,
+                    monitor_slice,
+                    wl[i],
                     temp[i],
                     "x",
                 )
@@ -517,7 +523,9 @@ class ModelBase(nn.Module):
                 # plt.savefig(f"./figs/source_field_{i}_fwd.png")
                 # plt.close()
             incident_light_field = torch.stack(incident_light_field_list, dim=0)
-            return torch.view_as_real(incident_light_field).permute(0, 3, 1, 2) # [bs, 2, h, w]
+            return torch.view_as_real(incident_light_field).permute(
+                0, 3, 1, 2
+            )  # [bs, 2, h, w]
         elif self.train_field == "adj":
             for i in range(bs):
                 src = source[i]
@@ -530,14 +538,18 @@ class ModelBase(nn.Module):
                     else:
                         raise ValueError(f"monitor slice {slice} not supported")
                     incident_field = self._cal_light_field(
-                        src, # the adjoint source
-                        slice, # the slice that we used to calculate the adjoint source
-                        wl[i], 
+                        src,  # the adjoint source
+                        slice,  # the slice that we used to calculate the adjoint source
+                        wl[i],
                         temp[i],
                         direction,
                     )
                     incident_light_field_each_comp.append(incident_field)
-                total_incident_field = torch.stack(incident_light_field_each_comp, dim=0).sum(dim=0).squeeze() # H, W
+                total_incident_field = (
+                    torch.stack(incident_light_field_each_comp, dim=0)
+                    .sum(dim=0)
+                    .squeeze()
+                )  # H, W
                 # plt.figure()
                 # plt.imshow(total_incident_field.real.cpu().detach().numpy(), cmap="RdBu")
                 # plt.colorbar()
@@ -553,11 +565,21 @@ class ModelBase(nn.Module):
                 # plt.close()
                 incident_light_field_list.append(total_incident_field)
             incident_light_field = torch.stack(incident_light_field_list, dim=0)
-            return torch.view_as_real(incident_light_field).permute(0, 3, 1, 2) # [bs, 2, h, w]
+            return torch.view_as_real(incident_light_field).permute(
+                0, 3, 1, 2
+            )  # [bs, 2, h, w]
         else:
             raise ValueError(f"train_field {self.train_field} not supported")
 
-    def get_grid(self, shape, device: Device, mode: str = "linear", epsilon=None, wavelength=None, grid_step=None):
+    def get_grid(
+        self,
+        shape,
+        device: Device,
+        mode: str = "linear",
+        epsilon=None,
+        wavelength=None,
+        grid_step=None,
+    ):
         # epsilon must be real permittivity without normalization
         batchsize, size_x, size_y = shape[0], shape[2], shape[3]
         if mode == "linear":
@@ -582,7 +604,9 @@ class ModelBase(nn.Module):
             # )  # [bs, 2, h, w, 2] real
             mesh = torch.view_as_real(
                 torch.exp(
-                    mesh.mul((grid_step/wavelength).mul(1j * 2 * np.pi)).mul(epsilon.data.sqrt())
+                    mesh.mul((grid_step / wavelength).mul(1j * 2 * np.pi)).mul(
+                        epsilon.data.sqrt()
+                    )
                 )
             )  # [bs, 2, h, w, 2] real
             # mesh = mesh.permute(0, 1, 4, 2, 3).flatten(1, 2)

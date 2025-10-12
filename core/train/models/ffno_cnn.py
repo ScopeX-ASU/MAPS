@@ -13,9 +13,7 @@ from torch.types import Device, _size
 from torch.utils.checkpoint import checkpoint
 
 from core.fdfd.fdfd import fdfd_ez
-from core.utils import (
-    Si_eps,
-)
+from core.utils import Si_eps
 from thirdparty.ceviche.constants import C_0, MICRON_UNIT
 
 from .fno_cnn import LearnableFourierFeatures

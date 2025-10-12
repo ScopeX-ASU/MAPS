@@ -23,10 +23,11 @@ class DefaultConfig(DefaultOptimizationConfig):
                         denorm_mode="linear_1",
                         transform=[
                             dict(type="mirror_symmetry", dims=[1]),
-                            dict(type="blur", mfs=0.2, resolutions=[310, 310], dim="xy"),
+                            dict(
+                                type="blur", mfs=0.2, resolutions=[310, 310], dim="xy"
+                            ),
                             dict(type="binarize"),
-                        ], # there is no symmetry in this design region
-                        
+                        ],  # there is no symmetry in this design region
                         # init_method="rectangle",
                         init_method="random",
                         binary_projection=dict(

@@ -1,7 +1,7 @@
 import torch
+from pyutils.config import Config
 
 from .base_optimization import BaseOptimization, DefaultOptimizationConfig
-from pyutils.config import Config
 
 
 class DefaultConfig(DefaultOptimizationConfig):

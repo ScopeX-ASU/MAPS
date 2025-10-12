@@ -2,26 +2,21 @@ import os
 import sys
 
 # Add the project root to sys.path
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 import argparse
+import random
 
+import h5py
 import torch
 import torch.nn.functional as F
 
-from core.invdes.models import (
-    BendingOptimization,
-)
-from core.invdes.models.base_optimization import (
-    DefaultSimulationConfig,
-)
+from core.invdes.models import BendingOptimization
+from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import Bending
-from core.utils import set_torch_deterministic
-from thirdparty.ceviche.ceviche.constants import *
-import random
-from core.utils import DeterministicCtx, print_stat
-import h5py
+from core.utils import DeterministicCtx, print_stat, set_torch_deterministic
+from thirdparty.ceviche.constants import *
+
+
 def compare_designs(design_regions_1, design_regions_2):
     similarity = []
     for k, v in design_regions_1.items():
@@ -31,7 +26,9 @@ def compare_designs(design_regions_1, design_regions_2):
     return torch.mean(torch.stack(similarity)).item()
 
 
-def bending_opt(device_id, operation_device, port_len, init_weight, perturb_probs=[0.1, 0.3, 0.5]):
+def bending_opt(
+    device_id, operation_device, port_len, init_weight, perturb_probs=[0.1, 0.3, 0.5]
+):
 
     dump_data_path = f"./data/fdfd/bending/raw_random_LHS"
     sim_cfg = DefaultSimulationConfig()
@@ -43,7 +40,9 @@ def bending_opt(device_id, operation_device, port_len, init_weight, perturb_prob
         round((target_cell_size - 2 * port_len) * resolution) / resolution,
         round((target_cell_size - 2 * port_len) * resolution) / resolution,
     ]
-    assert round(bending_region_size[0] + 2 * port_len, 2) == target_cell_size, f"right hand side: {bending_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
+    assert (
+        round(bending_region_size[0] + 2 * port_len, 2) == target_cell_size
+    ), f"right hand side: {bending_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
 
     input_port_width = 0.48
     output_port_width = 0.48
@@ -60,7 +59,6 @@ def bending_opt(device_id, operation_device, port_len, init_weight, perturb_prob
             use_autodiff=False,
         )
     )
-
 
     device = Bending(
         sim_cfg=sim_cfg,
@@ -103,7 +101,7 @@ def bending_opt(device_id, operation_device, port_len, init_weight, perturb_prob
                 with torch.no_grad():
                     for p in opt.parameters():
                         mask = torch.rand_like(p) < flip_prob
-                        p.data[mask] =  -1 * p.data[mask]
+                        p.data[mask] = -1 * p.data[mask]
                         # p.data.add_(torch.randn_like(p) * perturb_scale)
 
                 # Forward and backward pass (isolate computation graph)
@@ -118,9 +116,16 @@ def bending_opt(device_id, operation_device, port_len, init_weight, perturb_prob
                 (-results_perturbed["obj"]).backward()
 
                 # Dump data for the perturbed model
-                filename_h5 = dump_data_path + f"/bending_id-{device_id}_opt_step_{step}_perturbed_{i}.h5"
-                filename_yml = dump_data_path + f"/bending_id-{device_id}_perturbed_{i}.yml"
-                opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
+                filename_h5 = (
+                    dump_data_path
+                    + f"/bending_id-{device_id}_opt_step_{step}_perturbed_{i}.h5"
+                )
+                filename_yml = (
+                    dump_data_path + f"/bending_id-{device_id}_perturbed_{i}.yml"
+                )
+                opt.dump_data(
+                    filename_h5=filename_h5, filename_yml=filename_yml, step=step
+                )
 
                 opt.plot(
                     eps_map=opt._eps_map,
@@ -139,7 +144,6 @@ def bending_opt(device_id, operation_device, port_len, init_weight, perturb_prob
                         p.copy_(original_p)
                 optimizer.load_state_dict(optimizer_state)
                 optimizer.zero_grad(set_to_none=True)  # Clear gradients completely
-
 
     for step in range(1):
         # for step in range(1):
@@ -173,7 +177,7 @@ def bending_opt(device_id, operation_device, port_len, init_weight, perturb_prob
                 last_design_region_dict, current_design_region_dict
             )
             # if cosine_similarity < 0.996 or step == 9:
-            if cosine_similarity < 1: # sample each step
+            if cosine_similarity < 1:  # sample each step
                 opt.dump_data(
                     filename_h5=filename_h5, filename_yml=filename_yml, step=step
                 )
@@ -213,7 +217,7 @@ def main():
     device = torch.device("cuda:" + str(gpu_id))
     torch.backends.cudnn.benchmark = True
     set_torch_deterministic(int(41 + random_seed))
-    with h5py.File('./data/fdfd/init_weight_dict.h5', 'r') as f:
+    with h5py.File("./data/fdfd/init_weight_dict.h5", "r") as f:
         init_weight = f[str(port_len)][int(init_weight_idx)]
         init_weight = torch.tensor(init_weight, device=device, dtype=torch.float32)
     bending_opt(random_seed, device, port_len, init_weight)

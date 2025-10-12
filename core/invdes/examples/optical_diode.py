@@ -21,9 +21,7 @@ import torch
 from pyutils.config import Config
 
 from core.invdes.invdesign import InvDesign
-from core.invdes.models import (
-    OpticalDiodeOptimization,
-)
+from core.invdes.models import OpticalDiodeOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import OpticalDiode
 from core.utils import SharpnessScheduler, set_torch_deterministic
@@ -71,7 +69,6 @@ if __name__ == "__main__":
     final_mfs = 0.2
 
     exp_name = f"optical_diode_{thickness_r1}_{thickness_r2}_mfs={init_mfs}-{final_mfs}"
-
 
     sim_cfg.update(
         dict(

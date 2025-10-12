@@ -19,14 +19,10 @@ sys.path.insert(
 )
 import torch
 from pyutils.config import Config
-from pyutils.torch_train import (
-    load_model,
-)
+from pyutils.torch_train import load_model
 
 from core.invdes.invdesign import InvDesign
-from core.invdes.models import (
-    MetaMirrorOptimization,
-)
+from core.invdes.models import MetaMirrorOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import MetaMirror
 from core.utils import set_torch_deterministic

@@ -4,8 +4,10 @@ LastEditors: Jiaqi Gu && jiaqigu@asu.edu
 LastEditTime: 2024-10-05 23:27:36
 FilePath: /Metasurface-Opt/core/models/layers/parametrization/__init__.py
 """
+
 import torch
 from torch import nn
+
 from .base_parametrization import BaseParametrization
 from .levelset import LeveSetParameterization
 
@@ -13,9 +15,10 @@ _param_registry = {"levelset": LeveSetParameterization}
 
 __all__ = ["parametrization_builder"]
 
+
 def parametrization_builder(
     device, hr_device, sim_cfg, parametrization_cfgs, operation_device, **kwargs
-):     
+):
     ### build multiple design regions as a dictionary of nn.Module
     param_dict = nn.ModuleDict()
     for region_name, param_cfg in parametrization_cfgs.items():

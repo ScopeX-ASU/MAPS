@@ -12,10 +12,9 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import h5py
 import numpy as np
+import ryaml
 import torch
 import yaml
-import ryaml
-import h5py
 from torch import Tensor
 from torch.nn import functional as F
 from torchvision import transforms
@@ -82,10 +81,11 @@ class FDFD(VisionDataset):
         processed_training_file = os.path.join(
             processed_dir, self.data_dir, f"{self.train_filename}.yml"
         )
-        processed_test_file = os.path.join(processed_dir, self.data_dir, f"{self.test_filename}.yml")
-        if (
-            os.path.exists(processed_training_file)
-            and os.path.exists(processed_test_file)
+        processed_test_file = os.path.join(
+            processed_dir, self.data_dir, f"{self.test_filename}.yml"
+        )
+        if os.path.exists(processed_training_file) and os.path.exists(
+            processed_test_file
         ):
             print("Data already processed")
             return
@@ -112,9 +112,16 @@ class FDFD(VisionDataset):
     def _load_dataset(self) -> List:
         ## do not load actual data here, too slow. Just load the filenames
         all_samples = [
-                os.path.basename(i)
-                for i in glob.glob(os.path.join(self.root, self.device_type, self.data_dir, f"{self.device_type}_*.h5"))
-            ]
+            os.path.basename(i)
+            for i in glob.glob(
+                os.path.join(
+                    self.root,
+                    self.device_type,
+                    self.data_dir,
+                    f"{self.device_type}_*.h5",
+                )
+            )
+        ]
         total_device_id = []
         for filename in all_samples:
             device_id = filename.split("_id-")[1].split("_")[0]
@@ -128,7 +135,9 @@ class FDFD(VisionDataset):
         print("this is the train ratio: ", self.train_ratio, flush=True)
         print("this is the length of the filenames: ", len(filenames), flush=True)
         if len(filenames) * self.train_ratio < 1:
-            assert "test" in self.data_dir.lower(), "only in test dataset, training set can be empty"
+            assert (
+                "test" in self.data_dir.lower()
+            ), "only in test dataset, training set can be empty"
             return (
                 [],
                 filenames,
@@ -154,9 +163,16 @@ class FDFD(VisionDataset):
         self, data_train: Tensor, data_test: Tensor
     ) -> Tuple[Tensor, Tensor]:
         all_samples = [
-                os.path.basename(i)
-                for i in glob.glob(os.path.join(self.root, self.device_type, self.data_dir, f"{self.device_type}_*.h5"))
-            ]
+            os.path.basename(i)
+            for i in glob.glob(
+                os.path.join(
+                    self.root,
+                    self.device_type,
+                    self.data_dir,
+                    f"{self.device_type}_*.h5",
+                )
+            )
+        ]
         filename_train = []
         filename_test = []
         for filename in all_samples:
@@ -178,8 +194,12 @@ class FDFD(VisionDataset):
         test_filename: str = "test",
     ) -> None:
         os.makedirs(processed_dir, exist_ok=True)
-        processed_training_file = os.path.join(processed_dir, data_dir, f"{train_filename}.yml")
-        processed_test_file = os.path.join(processed_dir, data_dir, f"{test_filename}.yml")
+        processed_training_file = os.path.join(
+            processed_dir, data_dir, f"{train_filename}.yml"
+        )
+        processed_test_file = os.path.join(
+            processed_dir, data_dir, f"{test_filename}.yml"
+        )
 
         with open(processed_training_file, "w") as f:
             yaml.dump(data_train, f)
@@ -193,7 +213,9 @@ class FDFD(VisionDataset):
         filename = (
             f"{self.train_filename}.yml" if train else f"{self.test_filename}.yml"
         )
-        path_to_file = os.path.join(self.root, self.processed_dir, self.data_dir, filename)
+        path_to_file = os.path.join(
+            self.root, self.processed_dir, self.data_dir, filename
+        )
         print(f"Loading data from {path_to_file}")
         with open(path_to_file, "r") as f:
             data = ryaml.load(f)
@@ -206,7 +228,12 @@ class FDFD(VisionDataset):
 
     def _check_integrity(self) -> bool:
         raise NotImplementedError
-        return all([os.path.exists(os.path.join(self.root, self.data_dir, filename)) for filename in self.filenames])
+        return all(
+            [
+                os.path.exists(os.path.join(self.root, self.data_dir, filename))
+                for filename in self.filenames
+            ]
+        )
 
     def __len__(self):
         return len(self.data)
@@ -226,13 +253,17 @@ class FDFD(VisionDataset):
         path = os.path.join(self.root, self.device_type, self.data_dir, device_file)
         with h5py.File(path, "r") as f:
             keys = list(f.keys())
-            eps_map = torch.from_numpy(f["eps_map"][()]).float() # sqrt the eps_map to get the refractive index TODO: I deleted the sqrt here, need to recheck the aux losses
+            eps_map = torch.from_numpy(
+                f["eps_map"][()]
+            ).float()  # sqrt the eps_map to get the refractive index TODO: I deleted the sqrt here, need to recheck the aux losses
             gradient = torch.from_numpy(f["gradient"][()]).float()
             fwd_field = torch.from_numpy(f["field_solutions"][()])
             adj_field = torch.from_numpy(f["fields_adj"][()])
             adj_src = torch.from_numpy(f["adj_src"][()])
             src_profile = torch.from_numpy(f["source_profile"][()])
-            field_adj_normalizer = torch.from_numpy(f["field_adj_normalizer"][()]).float()
+            field_adj_normalizer = torch.from_numpy(
+                f["field_adj_normalizer"][()]
+            ).float()
             A = {
                 "entries_a": torch.from_numpy(f["A-entries_a"][()]),
                 "indices_a": torch.from_numpy(f["A-indices_a"][()]),
@@ -262,8 +293,26 @@ class FDFD(VisionDataset):
                 elif key.startswith("et_m"):
                     et_m[key] = torch.from_numpy(f[key][()])
 
-
-        return input_slice, wavelength, mode, temp, eps_map, adj_src, gradient, fwd_field, s_params, src_profile, adj_field, field_adj_normalizer, design_region_mask, ht_m, et_m, monitor_slice, A, path
+        return (
+            input_slice,
+            wavelength,
+            mode,
+            temp,
+            eps_map,
+            adj_src,
+            gradient,
+            fwd_field,
+            s_params,
+            src_profile,
+            adj_field,
+            field_adj_normalizer,
+            design_region_mask,
+            ht_m,
+            et_m,
+            monitor_slice,
+            A,
+            path,
+        )
 
     def extra_repr(self) -> str:
         return "Split: {}".format("Train" if self.train is True else "Test")

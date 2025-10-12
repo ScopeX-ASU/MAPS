@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
-from torch import nn
 from mmengine.registry import MODELS
+from torch import nn
 
 __all__ = ["MyLayerNorm", "preNorm", "postNorm"]
 
@@ -145,6 +145,7 @@ class postNorm(nn.Module):
             15 * s
         )  ## TODO not quite sure about if I could substrct the mean.
         return normalized_field
+
 
 @MODELS.register_module()
 class LayerNorm(nn.Module):

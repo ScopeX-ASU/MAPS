@@ -11,26 +11,26 @@ from pyutils.typing import DataLoader, Optimizer, Scheduler
 from torch.types import Device
 from torch.utils.data import Sampler
 
-from core.models import *
 from core.datasets import *
+from core.models import *
 
 from .utils import (
+    AspectRatioLoss,
+    ComplexL1Loss,
     DAdaptAdam,
     DistanceLoss,
+    GradientLoss,
+    MaxwellResidualLoss,
     NL2NormLoss,
     NormalizedMSELoss,
-    TemperatureScheduler,
-    SharpnessScheduler,
     ResolutionScheduler,
-    maskedNL2NormLoss,
-    maskedNMSELoss,
+    SharpnessScheduler,
+    SParamLoss,
+    TemperatureScheduler,
     fab_penalty_ls_curve,
     fab_penalty_ls_gap,
-    AspectRatioLoss,
-    MaxwellResidualLoss,
-    GradientLoss,
-    SParamLoss,
-    ComplexL1Loss,
+    maskedNL2NormLoss,
+    maskedNMSELoss,
 )
 
 __all__ = [
@@ -80,7 +80,9 @@ def collate_fn_keep_spatial_res(batch):
     for idx, item in enumerate(data):
         item["Ez"] = torch.nn.functional.interpolate(
             item["Ez"].unsqueeze(0), size=new_size[idx], mode="bilinear"
-        ).squeeze(0)  # dummy batch dim and then remove it
+        ).squeeze(
+            0
+        )  # dummy batch dim and then remove it
         item["eps"] = torch.nn.functional.interpolate(
             item["eps"].unsqueeze(0), size=new_size[idx], mode="bilinear"
         ).squeeze(0)
@@ -273,7 +275,9 @@ def collate_fn_keep_spatial_res_pad_to_256(batch):
     for idx, item in enumerate(data):
         item["Ez"] = torch.nn.functional.interpolate(
             item["Ez"].unsqueeze(0), size=new_size[idx], mode="bilinear"
-        ).squeeze(0)  # dummy batch dim and then remove it
+        ).squeeze(
+            0
+        )  # dummy batch dim and then remove it
         item["eps"] = torch.nn.functional.interpolate(
             item["eps"].unsqueeze(0), size=new_size[idx], mode="bilinear"
         ).squeeze(0)
@@ -538,12 +542,14 @@ def make_dataloader(
 
     return train_loader, validation_loader, test_loader
 
+
 def make_device(device: Device):
     device_to_opt = eval(configs.model.device_type)(
         sim_cfg=configs.model.sim_cfg,
         device=device,
     )
     return device_to_opt
+
 
 def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
     if (
@@ -588,10 +594,12 @@ def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
             opt_coupling_method=configs.model.opt_coupling_method,
             grad_mode=configs.model.grad_mode,
             cal_bd_mode=configs.model.cal_bd_mode,
-            aux_out=True
-            if configs.aux_criterion.curl_loss.weight > 0
-            or configs.aux_criterion.gap_loss.weight > 0
-            else False,
+            aux_out=(
+                True
+                if configs.aux_criterion.curl_loss.weight > 0
+                or configs.aux_criterion.gap_loss.weight > 0
+                else False
+            ),
             device=device,
         ).to(device)
     elif "metalens" in configs.model.name.lower():
@@ -616,7 +624,7 @@ def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
             if_constant_period=configs.model.if_constant_period,
             focal_constant=configs.model.focal_constant,
         ).to(device)
-    elif configs.model.name.lower() == 'metacoupleroptimization':
+    elif configs.model.name.lower() == "metacoupleroptimization":
         model = eval(configs.model.name)(
             device=kwargs["optDevice"],
             sim_cfg=configs.model.sim_cfg,

@@ -1,10 +1,11 @@
 from typing import Tuple
 
 import torch
-from .device_base import N_Ports
+from pyutils.general import logger
 
 from core.utils import material_fn_dict
-from pyutils.general import logger
+
+from .device_base import N_Ports
 
 __all__ = ["MetaLens"]
 
@@ -36,7 +37,7 @@ class MetaLens(N_Ports):
         port_len: Tuple[float] = (1, 1),
         port_width: Tuple[float] = (3, 2),
         nearfield_dx: float = 0.5,  # distance from metalens surface to nearfield monitor, e.g., 500 nm
-        nearfield_offset: float = 0, 
+        nearfield_offset: float = 0,
         nearfield_size: float = 4,  # monitor size of nearfield monitor, e.g., 1um
         farfield_dxs: Tuple[float] = (
             (10, 30),
@@ -44,7 +45,7 @@ class MetaLens(N_Ports):
         farfield_sizes: Tuple[float] = (
             2,
         ),  # monitor size of multiple farfield monitors, e.g., (1um) (dim-x, dim-y)
-        farfield_offset: float = 0, # only support y direction offset for now
+        farfield_offset: float = 0,  # only support y direction offset for now
         device: torch.device = torch.device("cuda:0"),
     ):
         wl_cen = sim_cfg["wl_cen"]

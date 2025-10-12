@@ -9,9 +9,7 @@ import os
 import sys
 
 # Add the project root to sys.path
-project_root = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..")
-)
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
 import copy
 
@@ -24,12 +22,8 @@ from core.fdfd.near2far import (
     get_farfields_GreenFunction,
     get_farfields_Rayleigh_Sommerfeld,
 )
-from core.invdes.models import (
-    MetaLensOptimization,
-)
-from core.invdes.models.base_optimization import (
-    DefaultSimulationConfig,
-)
+from core.invdes.models import MetaLensOptimization
+from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import MetaLens
 from core.utils import set_torch_deterministic
 from thirdparty.ceviche.constants import *

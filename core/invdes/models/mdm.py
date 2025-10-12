@@ -1,6 +1,9 @@
 import torch
 
-from core.invdes.models.base_optimization import BaseOptimization, DefaultOptimizationConfig
+from core.invdes.models.base_optimization import (
+    BaseOptimization,
+    DefaultOptimizationConfig,
+)
 
 
 class DefaultConfig(DefaultOptimizationConfig):
@@ -16,7 +19,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         transform=[
                             dict(type="blur", mfs=0.1, resolutions=[50, 50], dim="xy"),
                             dict(type="binarize"),
-                        ], # there is no symmetry in this design region
+                        ],  # there is no symmetry in this design region
                         init_method="random",
                         binary_projection=dict(
                             fw_threshold=100,
@@ -132,7 +135,6 @@ class DefaultConfig(DefaultOptimizationConfig):
                         type="flux_minus_src",
                         direction="x",
                     ),
-                    
                     mode1_rad_trans_xp=dict(
                         weight=-2,
                         #### objective is evaluated at this port
@@ -274,7 +276,12 @@ class MDMOptimization(BaseOptimization):
                 method="levelset",
                 rho_resolution=[20, 20],
                 transform=[
-                    dict(type="blur", mfs=0.1, resolutions=[hr_device.resolution, hr_device.resolution], dim="xy"),
+                    dict(
+                        type="blur",
+                        mfs=0.1,
+                        resolutions=[hr_device.resolution, hr_device.resolution],
+                        dim="xy",
+                    ),
                     dict(type="binarize"),
                 ],
                 init_method="random",

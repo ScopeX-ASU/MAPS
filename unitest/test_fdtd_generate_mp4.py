@@ -3,10 +3,10 @@ import datetime
 import os
 from typing import List
 
+import matplotlib.pyplot as plt
 import torch
 import torch.cuda.amp as amp
 import torch.fft
-import matplotlib.pyplot as plt
 from pyutils.config import configs
 from pyutils.general import AverageMeter
 from pyutils.general import logger as lg
@@ -92,7 +92,12 @@ if __name__ == "__main__":
             )
         else:
             lg.info("No checkpoint to restore, output the initial model video")
-        model.output_video(configs.temp_scheduler.lr_min, configs.model.T_lse, None, filepath=configs.plot.output_video_path + ".h5")
+        model.output_video(
+            configs.temp_scheduler.lr_min,
+            configs.model.T_lse,
+            None,
+            filepath=configs.plot.output_video_path + ".h5",
+        )
 
     except KeyboardInterrupt:
         lg.warning("Ctrl-C Stopped")

@@ -12,21 +12,20 @@ LastEditTime: 2024-10-04 00:50:55
 FilePath: /Metasurface-Opt/unitest/test_device_base.py
 """
 from copy import deepcopy
-import torch
 
-from core.models.layers.device_base import N_Ports, Si_eps
-from core.models.layers import MetaMirror, MetaCoupler, Isolator
-from core.models.base_optimization import BaseOptimization, DefaultSimulationConfig
-from core.models import (
-    MetaMirrorOptimization,
-    MetaCouplerOptimization,
-    IsolatorOptimization,
-)
-
-from core.models.layers.utils import plot_eps_field
 import numpy as np
+import torch
 from pyutils.general import print_stat
 
+from core.models import (
+    IsolatorOptimization,
+    MetaCouplerOptimization,
+    MetaMirrorOptimization,
+)
+from core.models.base_optimization import BaseOptimization, DefaultSimulationConfig
+from core.models.layers import Isolator, MetaCoupler, MetaMirror
+from core.models.layers.device_base import N_Ports, Si_eps
+from core.models.layers.utils import plot_eps_field
 from core.utils import set_torch_deterministic
 
 
@@ -169,11 +168,7 @@ def test_metacoupler_opt():
     device = MetaCoupler(sim_cfg=sim_cfg, device="cuda:0")
     hr_device = MetaCoupler(sim_cfg=hr_sim_cfg, device="cuda:0")
     print(device)
-    opt = MetaCouplerOptimization(
-        device=device, 
-        hr_device=hr_device,
-        sim_cfg=sim_cfg
-    )
+    opt = MetaCouplerOptimization(device=device, hr_device=hr_device, sim_cfg=sim_cfg)
     print(opt)
 
     optimizer = torch.optim.Adam(opt.parameters(), lr=0.02)
@@ -242,7 +237,9 @@ def test_isolator_opt():
     hr_device = device.copy(resolution=310)
     print(device, flush=True)
     print(hr_device, flush=True)
-    opt = IsolatorOptimization(device=device, hr_device=hr_device, sim_cfg=sim_cfg, obj_cfgs=obj_cfgs)
+    opt = IsolatorOptimization(
+        device=device, hr_device=hr_device, sim_cfg=sim_cfg, obj_cfgs=obj_cfgs
+    )
     print(opt)
 
     optimizer = torch.optim.Adam(opt.parameters(), lr=0.02)

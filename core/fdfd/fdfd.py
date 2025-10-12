@@ -6,11 +6,7 @@ import torch
 from torch import Tensor, nn
 from torch_sparse import spmm
 
-from core.utils import (
-    Slice,
-    get_flux,
-    print_stat,
-)
+from core.utils import Slice, get_flux, print_stat
 from thirdparty.ceviche import fdfd_ez as fdfd_ez_ceviche
 from thirdparty.ceviche import fdfd_hz as fdfd_hz_ceviche
 from thirdparty.ceviche.constants import *
@@ -287,9 +283,9 @@ class fdfd_ez(fdfd_ez_ceviche):
         self.neural_solver = neural_solver
         self.numerical_solver = numerical_solver
         if self.numerical_solver == "solve_direct":
-            assert self.neural_solver is None, (
-                "neural_solver is useless if numerical_solver is solve_direct"
-            )
+            assert (
+                self.neural_solver is None
+            ), "neural_solver is useless if numerical_solver is solve_direct"
         self.solver = SparseSolveTorch(
             shape=eps_r.shape,
             neural_solver=self.neural_solver,
@@ -642,9 +638,9 @@ class fdfd_hz(fdfd_hz_ceviche):
         self.neural_solver = neural_solver
         self.numerical_solver = numerical_solver
         if self.numerical_solver == "solve_direct":
-            assert self.neural_solver is None, (
-                "neural_solver is useless if numerical_solver is solve_direct"
-            )
+            assert (
+                self.neural_solver is None
+            ), "neural_solver is useless if numerical_solver is solve_direct"
         self.solver = SparseSolveTorch(
             shape=eps_r.shape,
             neural_solver=self.neural_solver,
@@ -1130,9 +1126,9 @@ class fdfd_hz(fdfd_hz_ceviche):
         self.neural_solver = neural_solver
         self.numerical_solver = numerical_solver
         if self.numerical_solver == "solve_direct":
-            assert self.neural_solver is None, (
-                "neural_solver is useless if numerical_solver is solve_direct"
-            )
+            assert (
+                self.neural_solver is None
+            ), "neural_solver is useless if numerical_solver is solve_direct"
         self.solver = SparseSolveTorch(
             shape=eps_r.shape,
             neural_solver=self.neural_solver,

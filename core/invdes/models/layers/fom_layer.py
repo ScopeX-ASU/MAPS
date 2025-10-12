@@ -24,7 +24,10 @@ class SimulatedFoM(nn.Module):
         self.adjoint_mode = adjoint_mode
 
     def forward(
-        self, permittivity_list: List[Tensor], resolution: int | None = None, custom_source: Tensor | None = None
+        self,
+        permittivity_list: List[Tensor],
+        resolution: int | None = None,
+        custom_source: Tensor | None = None,
     ) -> Tensor:
         if self.adjoint_mode == "ceviche":
             ## we need to use autograd, jacobian to calculate gradients

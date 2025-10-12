@@ -1,10 +1,11 @@
 from typing import Tuple
 
 import torch
-from .device_base import N_Ports
+from pyutils.general import logger
 
 from core.utils import material_fn_dict
-from pyutils.general import logger
+
+from .device_base import N_Ports
 
 __all__ = ["MetaCoupler"]
 
@@ -159,4 +160,9 @@ class MetaCoupler(N_Ports):
             solver=self.sim_cfg["solver"],
             plot=False,
         )
-        return norm_source_profiles, norm_refl_profiles_1, norm_refl_profiles_2, norm_monitor_profiles
+        return (
+            norm_source_profiles,
+            norm_refl_profiles_1,
+            norm_refl_profiles_2,
+            norm_monitor_profiles,
+        )

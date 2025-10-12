@@ -35,6 +35,6 @@ class LearnableFourierFeatures(nn.Module):
         F = torch.cat([torch.cos(XWr), torch.sin(XWr)], dim=-1) / self.div_term
         Y = self.mlp(F)
         # pos_enc = rearrange(Y, "b l g d -> b l (g d)")
-        pos_enc = Y.flatten(-1,-2)
+        pos_enc = Y.flatten(-1, -2)
 
         return pos_enc

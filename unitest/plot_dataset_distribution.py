@@ -10,8 +10,8 @@
 
 # def plot_distribution(dataset_path):
 #     """
-#     This function plots the distribution of forward_transmission as a histogram 
-#     and uses T-SNE to visualize the dataset with colors representing different 
+#     This function plots the distribution of forward_transmission as a histogram
+#     and uses T-SNE to visualize the dataset with colors representing different
 #     levels of forward_transmission.
 
 #     Parameters:
@@ -81,9 +81,9 @@
 
 #     # # Scatter plot with color representing forward_transmission
 #     # scatter = ax.scatter(
-#     #     tsne_results_3d[:, 0], 
-#     #     tsne_results_3d[:, 1], 
-#     #     tsne_results_3d[:, 2], 
+#     #     tsne_results_3d[:, 0],
+#     #     tsne_results_3d[:, 1],
+#     #     tsne_results_3d[:, 2],
 #     #     c=labels, cmap='viridis', s=10, alpha=0.8
 #     # )
 
@@ -108,9 +108,9 @@
 
 #     # # Scatter plot with color representing forward_transmission
 #     # ax.scatter(
-#     #     tsne_results_3d[:, 0], 
-#     #     tsne_results_3d[:, 1], 
-#     #     tsne_results_3d[:, 2], 
+#     #     tsne_results_3d[:, 0],
+#     #     tsne_results_3d[:, 1],
+#     #     tsne_results_3d[:, 2],
 #     #     c=labels, cmap='viridis', s=10, alpha=0.8
 #     # )
 
@@ -138,9 +138,9 @@
 
 #     # Scatter plot with color representing forward_transmission
 #     scatter = ax.scatter(
-#         tsne_results_3d[:, 0], 
-#         tsne_results_3d[:, 1], 
-#         tsne_results_3d[:, 2], 
+#         tsne_results_3d[:, 0],
+#         tsne_results_3d[:, 1],
+#         tsne_results_3d[:, 2],
 #         c=labels, cmap='viridis', s=10, alpha=0.8
 #     )
 
@@ -180,7 +180,6 @@
 #     plt.close(fig)  # Close the figure to reset
 
 
-
 # if __name__ == "__main__":
 
 #     dataset_dir = "./data/fdfd/bending/raw_opt_traj_ptb"
@@ -189,16 +188,17 @@
 #     plot_distribution(dataset_dir)
 
 
-
 import os
+
 import h5py
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
+import torch
+import torch.nn.functional as F
 from mpl_toolkits.mplot3d import Axes3D
 from sklearn.manifold import TSNE
 from sklearn.preprocessing import MinMaxScaler
-import torch
-import torch.nn.functional as F
+
 
 def plot_combined_tsne_3d(dataset_path1, dataset_path2):
     """
@@ -209,6 +209,7 @@ def plot_combined_tsne_3d(dataset_path1, dataset_path2):
     - dataset_path1 (str): Path to the first dataset folder.
     - dataset_path2 (str): Path to the second dataset folder.
     """
+
     def load_data(dataset_path):
         """Helper function to load data and labels from a dataset folder."""
         data = []
@@ -216,22 +217,38 @@ def plot_combined_tsne_3d(dataset_path1, dataset_path2):
         for filename in os.listdir(dataset_path):
             if filename.endswith(".h5"):
                 file_path = os.path.join(dataset_path, filename)
-                with h5py.File(file_path, 'r') as f:
+                with h5py.File(file_path, "r") as f:
                     target_size = (96, 96)
-                    design_region_x_start = f["design_region_mask-bending_region_x_start"][()]
-                    design_region_x_stop = f["design_region_mask-bending_region_x_stop"][()]
-                    design_region_y_start = f["design_region_mask-bending_region_y_start"][()]
-                    design_region_y_stop = f["design_region_mask-bending_region_y_stop"][()]
+                    design_region_x_start = f[
+                        "design_region_mask-bending_region_x_start"
+                    ][()]
+                    design_region_x_stop = f[
+                        "design_region_mask-bending_region_x_stop"
+                    ][()]
+                    design_region_y_start = f[
+                        "design_region_mask-bending_region_y_start"
+                    ][()]
+                    design_region_y_stop = f[
+                        "design_region_mask-bending_region_y_stop"
+                    ][()]
                     eps_map = np.array(f["eps_map"])[
                         design_region_x_start:design_region_x_stop,
-                        design_region_y_start:design_region_y_stop
+                        design_region_y_start:design_region_y_stop,
                     ]  # Load the 2D tensor
-                    eps_map = torch.tensor(eps_map, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-                    eps_map = F.interpolate(eps_map, size=target_size, mode='bilinear', align_corners=True)
+                    eps_map = (
+                        torch.tensor(eps_map, dtype=torch.float32)
+                        .unsqueeze(0)
+                        .unsqueeze(0)
+                    )
+                    eps_map = F.interpolate(
+                        eps_map, size=target_size, mode="bilinear", align_corners=True
+                    )
                     eps_map = eps_map.squeeze().numpy()
                     if "breakdown_fwd_trans_value" not in list(f.keys()):
                         continue
-                    forward_transmission = float(f[f"breakdown_fwd_trans_value"][()])  # Load the label
+                    forward_transmission = float(
+                        f[f"breakdown_fwd_trans_value"][()]
+                    )  # Load the label
                     data.append(eps_map.flatten())  # Flatten 2D tensor to 1D
                     labels.append(forward_transmission)
         return np.array(data), np.array(labels)
@@ -247,7 +264,9 @@ def plot_combined_tsne_3d(dataset_path1, dataset_path2):
 
     # Combine data for t-SNE
     combined_data = np.vstack([normalized_data1, normalized_data2])
-    dataset_labels = np.array([0] * len(data1) + [1] * len(data2))  # 0 for dataset1, 1 for dataset2
+    dataset_labels = np.array(
+        [0] * len(data1) + [1] * len(data2)
+    )  # 0 for dataset1, 1 for dataset2
 
     # Apply t-SNE (3D)
     tsne = TSNE(n_components=3, random_state=42, perplexity=30)
@@ -255,7 +274,7 @@ def plot_combined_tsne_3d(dataset_path1, dataset_path2):
 
     # Create a 3D scatter plot
     fig = plt.figure(figsize=(12, 8))
-    ax = fig.add_subplot(111, projection='3d')
+    ax = fig.add_subplot(111, projection="3d")
 
     # Plot dataset 1
     scatter1 = ax.scatter(
@@ -263,10 +282,10 @@ def plot_combined_tsne_3d(dataset_path1, dataset_path2):
         tsne_results[dataset_labels == 0, 1],
         tsne_results[dataset_labels == 0, 2],
         c=labels1,
-        cmap='viridis',
+        cmap="viridis",
         s=10,
         alpha=0.8,
-        label="Puerturbed Opt-Traj Sampling"
+        label="Puerturbed Opt-Traj Sampling",
     )
 
     # Plot dataset 2
@@ -275,16 +294,16 @@ def plot_combined_tsne_3d(dataset_path1, dataset_path2):
         tsne_results[dataset_labels == 1, 1],
         tsne_results[dataset_labels == 1, 2],
         c=labels2,
-        cmap='plasma',
+        cmap="plasma",
         s=10,
         alpha=0.8,
-        label="Random Sampling"
+        label="Random Sampling",
     )
 
     # Add legend, colorbars, and labels
-    cbar1 = plt.colorbar(scatter1, ax=ax, pad=0.1, location='left', shrink=0.6)
+    cbar1 = plt.colorbar(scatter1, ax=ax, pad=0.1, location="left", shrink=0.6)
     cbar1.set_label("Puerturbed Opt-Traj Sampling Transmission")
-    cbar2 = plt.colorbar(scatter2, ax=ax, pad=0.1, location='right', shrink=0.6)
+    cbar2 = plt.colorbar(scatter2, ax=ax, pad=0.1, location="right", shrink=0.6)
     cbar2.set_label("Random Sampling Forward Transmission")
 
     ax.set_title("3D t-SNE Visualization of Two Datasets")
@@ -296,6 +315,7 @@ def plot_combined_tsne_3d(dataset_path1, dataset_path2):
     # Save the plot
     combined_name = f"{dataset_path1.split('/')[-1]}_vs_{dataset_path2.split('/')[-1]}"
     plt.savefig(f"./figs/tsne_3d_combined_{combined_name}.png", dpi=300)
+
 
 if __name__ == "__main__":
     dataset_dir1 = "./data/fdfd/bending/raw_opt_traj_ptb"

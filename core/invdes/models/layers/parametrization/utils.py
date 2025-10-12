@@ -6,8 +6,7 @@ FilePath: /Metasurface-Opt/core/models/parametrization/utils.py
 """
 
 import torch
-from torch import nn
-from torch import Tensor
+from torch import Tensor, nn
 
 
 class ClipLayer(nn.Module):
@@ -243,12 +242,12 @@ class HeavisideProjection(nn.Module):
             if self.upper_limit.device != x.device:
                 self.upper_limit = self.upper_limit.to(x.device)
                 self.lower_limit = self.lower_limit.to(x.device)
-            
+
         elif self.mode.lower() == "ste":
             x = HeavisideProjectionLayer.apply(
                 x, beta, eta, self.fw_threshold, self.bw_threshold
             )  # STE
         x = self.clip_layer(
-                x, upper_limit=self.upper_limit, lower_limit=self.lower_limit
-            )
+            x, upper_limit=self.upper_limit, lower_limit=self.lower_limit
+        )
         return x

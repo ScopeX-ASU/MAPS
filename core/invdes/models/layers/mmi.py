@@ -1,13 +1,14 @@
+import copy
+import warnings
 from typing import Tuple
 
-import torch
 import numpy as np
-from .device_base import N_Ports
+import torch
+from pyutils.general import logger
 
 from core.utils import material_fn_dict
-from pyutils.general import logger
-import warnings
-import copy
+
+from .device_base import N_Ports
 
 __all__ = ["MMI"]
 
@@ -47,7 +48,9 @@ class MMI(N_Ports):
         # |                                |
         # |              [0]               |
         # ----------------------------------
-        assert box_size[1] - 2 * port_box_margin >= num_outports * port_width[1], "box_size[1] should be larger than num_outports * port_len[1]"
+        assert (
+            box_size[1] - 2 * port_box_margin >= num_outports * port_width[1]
+        ), "box_size[1] should be larger than num_outports * port_len[1]"
         self.num_outports = num_outports
         wl_cen = sim_cfg["wl_cen"]
         eps_r_fn = material_fn_dict[material_r]
@@ -176,7 +179,8 @@ class MMI(N_Ports):
                 # solver=self.sim_cfg["solver"],
                 solver="ceviche",
                 plot=True,
-            ) for i in range(1, self.num_outports + 1)
+            )
+            for i in range(1, self.num_outports + 1)
         ]
         # norm_monitor_profiles = self.build_norm_sources(
         #     source_modes=(1,),

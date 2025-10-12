@@ -6,9 +6,9 @@ LastEditors: Jiaqi Gu (jqgu@utexas.edu)
 LastEditTime: 2022-02-20 16:58:26
 """
 
-from torch import nn
 import torch
 from mmengine.registry import MODELS
+from torch import nn
 
 __all__ = ["SIREN"]
 
@@ -35,6 +35,7 @@ class Tanh3(nn.Module):
 
     def forward(self, input):
         return torch.tanh(input) * 3
+
 
 # ACTIVATION_REGISTRY = {
 #     "relu": nn.ReLU(),

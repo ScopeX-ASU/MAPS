@@ -1,20 +1,24 @@
 import argparse
 import os
 from typing import List
-import torch.cuda.amp as amp
+
 import mlflow
 import torch
+import torch.cuda.amp as amp
+import torch.fft
+import wandb
 from pyutils.config import configs
-from pyutils.general import AverageMeter, logger as lg
+from pyutils.general import AverageMeter
+from pyutils.general import logger as lg
 from pyutils.torch_train import (
     count_parameters,
     get_learning_rate,
     set_torch_deterministic,
 )
 from pyutils.typing import Criterion, Optimizer, Scheduler
-import torch.fft
+
 from core import builder
-import wandb
+
 
 def train_phc(
     model,
@@ -79,7 +83,7 @@ def train_phc(
         },
     )
 
-        # break
+    # break
     lr_scheduler.step()
     avg_regression_loss = distance_meter.avg
     lg.info(f"Train Regression Loss: {avg_regression_loss:.4e}")
@@ -100,6 +104,7 @@ def train_phc(
         filepath = os.path.join(dir_path, f"epoch_{epoch}_train.png")
         # plot the permittivity
     return None
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -136,7 +141,9 @@ def main():
         configs=configs.optimizer,
     )
     lr_scheduler = builder.make_scheduler(optimizer, config_file=configs.lr_scheduler)
-    temp_scheduler = builder.make_scheduler(optimizer, name="temperature", config_file=configs.temp_scheduler)
+    temp_scheduler = builder.make_scheduler(
+        optimizer, name="temperature", config_file=configs.temp_scheduler
+    )
 
     grad_scaler = amp.GradScaler(enabled=getattr(configs.run, "fp16", False))
     lg.info(f"Number of parameters: {count_parameters(model)}")
@@ -160,6 +167,7 @@ def main():
     grad_scaler.step(optimizer)
     grad_scaler.update()
     optimizer.zero_grad()
+
 
 if __name__ == "__main__":
     main()

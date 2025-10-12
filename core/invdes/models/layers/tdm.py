@@ -1,10 +1,11 @@
 from typing import Tuple
 
 import torch
-from .device_base import N_Ports
+from pyutils.general import logger
 
 from core.utils import material_fn_dict
-from pyutils.general import logger
+
+from .device_base import N_Ports
 
 __all__ = ["TDM"]
 
@@ -48,7 +49,7 @@ class TDM(N_Ports):
                 type="box",
                 direction="x",
                 # center=[(port_len[1] + box_size[0] / 2) / 2, 1*port_width[1]],
-                center=[(port_len[1] + box_size[0] / 2) / 2, box_size[1]/6],
+                center=[(port_len[1] + box_size[0] / 2) / 2, box_size[1] / 6],
                 size=[port_len[1] + box_size[0] / 2, port_width[1]],
                 eps=eps_r_fn(wl_cen),
             ),
@@ -56,7 +57,7 @@ class TDM(N_Ports):
                 type="box",
                 direction="x",
                 # center=[(port_len[1] + box_size[0] / 2) / 2, -1*port_width[1]],
-                center=[(port_len[1] + box_size[0] / 2) / 2, -box_size[1]/6],
+                center=[(port_len[1] + box_size[0] / 2) / 2, -box_size[1] / 6],
                 size=[port_len[1] + box_size[0] / 2, port_width[1]],
                 eps=eps_r_fn(wl_cen),
             ),

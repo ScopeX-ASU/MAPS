@@ -8,10 +8,12 @@ FilePath: /MAPS/core/invdes/models/layers/metamirror.py
 from typing import Tuple
 
 import torch
-from .device_base import N_Ports
+from pyutils.general import logger
 
 from core.utils import material_fn_dict
-from pyutils.general import logger
+
+from .device_base import N_Ports
+
 __all__ = ["MetaMirror"]
 
 
@@ -49,7 +51,7 @@ class MetaMirror(N_Ports):
             in_port_1=dict(
                 type="box",
                 direction="x",
-                center=[-port_len[0] / 2 + aperture/2 + mirror_size[0], 0],
+                center=[-port_len[0] / 2 + aperture / 2 + mirror_size[0], 0],
                 size=[port_len[0], port_width[0]],
                 eps=eps_r_fn(wl_cen),
             ),
@@ -58,7 +60,7 @@ class MetaMirror(N_Ports):
                 direction="y",
                 center=[
                     aperture / 2 + mirror_size[0] - port_width[1] / 2,
-                    -port_len[1] / 2 + port_width[0]/2,
+                    -port_len[1] / 2 + port_width[0] / 2,
                 ],
                 size=[port_width[1], port_len[1]],
                 eps=eps_r_fn(wl_cen),
@@ -81,7 +83,12 @@ class MetaMirror(N_Ports):
         design_region_cfgs = dict(
             design_region_1=dict(
                 type="box",
-                center=[0, port_width[0] / 2 - ridge_height_max / 2 - 1 / sim_cfg["resolution"]],
+                center=[
+                    0,
+                    port_width[0] / 2
+                    - ridge_height_max / 2
+                    - 1 / sim_cfg["resolution"],
+                ],
                 size=[aperture, ridge_height_max],
                 eps=eps_r_fn(wl_cen),
                 eps_bg=eps_bg_fn(wl_cen),
@@ -102,13 +109,22 @@ class MetaMirror(N_Ports):
         if verbose:
             logger.info("Start generating sources and monitors ...")
         src_slice = self.build_port_monitor_slice(
-            port_name="in_port_1", slice_name="in_slice_1", rel_loc=0.4, rel_width=rel_width
+            port_name="in_port_1",
+            slice_name="in_slice_1",
+            rel_loc=0.4,
+            rel_width=rel_width,
         )
         refl_slice = self.build_port_monitor_slice(
-            port_name="in_port_1", slice_name="refl_slice_1", rel_loc=0.41, rel_width=rel_width
+            port_name="in_port_1",
+            slice_name="refl_slice_1",
+            rel_loc=0.41,
+            rel_width=rel_width,
         )
         out_slice = self.build_port_monitor_slice(
-            port_name="out_port_1", slice_name="out_slice_1", rel_loc=0.6, rel_width=rel_width
+            port_name="out_port_1",
+            slice_name="out_slice_1",
+            rel_loc=0.6,
+            rel_width=rel_width,
         )
         self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=rel_width)
         radiation_monitor = self.build_radiation_monitor(monitor_name="rad_monitor")

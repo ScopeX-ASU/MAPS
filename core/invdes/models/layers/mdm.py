@@ -1,10 +1,11 @@
 from typing import Tuple
 
 import torch
-from .device_base import N_Ports
+from pyutils.general import logger
 
 from core.utils import material_fn_dict
-from pyutils.general import logger
+
+from .device_base import N_Ports
 
 __all__ = ["MDM"]
 
@@ -113,7 +114,13 @@ class MDM(N_Ports):
         )
         self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=rel_width)
         radiation_monitor = self.build_radiation_monitor(monitor_name="rad_slice")
-        return src_slice, refl_slice, mode1_out_slice, mode2_out_slice, radiation_monitor
+        return (
+            src_slice,
+            refl_slice,
+            mode1_out_slice,
+            mode2_out_slice,
+            radiation_monitor,
+        )
 
     def norm_run(self, verbose: bool = True):
         if verbose:

@@ -1,12 +1,13 @@
+import ceviche
+import h5py
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
-import h5py
-import ceviche
+
 
 def verify_adjoint_sources(filename):
-    with h5py.File(filename, 'r') as f:
-        adj_srcs = f['adj_src'][()]
+    with h5py.File(filename, "r") as f:
+        adj_srcs = f["adj_src"][()]
         print("this is the shape of the adjoint sources: ", adj_srcs.shape)
         print("this is the type of the adjoint sources: ", type(adj_srcs))
         print("this is the adjoint sources: ", adj_srcs)
@@ -27,5 +28,6 @@ def verify_adjoint_sources(filename):
         # print(torch.sum(data * adjoint_sources).item() - torch.sum(adjoint * data).item() < 1e-6)
         # assert torch.sum(data * adjoint_sources).item() - torch.sum(adjoint * data).item() < 1e-6
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     verify_adjoint_sources("./data/fdfd/metacoupler/metacoupler_opt_step_0.h5")

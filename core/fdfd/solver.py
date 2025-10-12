@@ -16,6 +16,7 @@ from torch import Tensor
 from core.utils import print_stat
 from thirdparty.ceviche.constants import *
 from thirdparty.ceviche.utils import make_sparse
+
 from .cudss_spsolve import spsolve_cudss
 
 try:
@@ -290,9 +291,9 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         ### eps_diag: For Ez diagonal of A, e.g., -omega**2 * epr_0 * eps_r
         ctx.use_autodiff = use_autodiff
         if use_autodiff:
-            assert numerical_solver == "none", (
-                f"numerical_solver {numerical_solver} is not supported when use_autodiff is True"
-            )
+            assert (
+                numerical_solver == "none"
+            ), f"numerical_solver {numerical_solver} is not supported when use_autodiff is True"
         Jz = b / (1j * omega)
         if isinstance(Jz, np.ndarray) and neural_solver is not None:
             if neural_solver["fwd_solver"] is not None:
@@ -348,7 +349,9 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                     if _solver_cache is not None:
                         _solver_cache["pSolve_fwd"] = pSolve
                         # print("now we cache the forward solver", flush=True)
-                if symmetry:  # only when A is symmetric after precondiction, we can reuse pSolve for adjoint
+                if (
+                    symmetry
+                ):  # only when A is symmetric after precondiction, we can reuse pSolve for adjoint
                     ctx.pSolve = pSolve
                 # print("forward x", np.max(x))
 
@@ -395,9 +398,9 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                 solver_type=solver_type,
                 neural_solver=fwd_solver,
                 eps=eps,
-                iterative_method="bicgstab"
-                if symmetry
-                else "lgmres",  # or other methods
+                iterative_method=(
+                    "bicgstab" if symmetry else "lgmres"
+                ),  # or other methods
                 symmetry=symmetry,
                 maxiter=1000,
                 rtol=1e-2,
@@ -613,7 +616,9 @@ class SparseSolveTorch(torch.nn.Module):
     def __init__(self, shape, neural_solver, numerical_solver, use_autodiff=False):
         super(SparseSolveTorch, self).__init__()
         self.shape = shape
-        self.adj_src = {}  # now the adj_src is a dictionary in which the key is (port_name, mode) with same wl, different wl have different simulation objects
+        self.adj_src = (
+            {}
+        )  # now the adj_src is a dictionary in which the key is (port_name, mode) with same wl, different wl have different simulation objects
         self.adj_field = {}
         self.gradient = {}
         self.neural_solver = neural_solver

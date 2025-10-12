@@ -1,7 +1,7 @@
 import logging
 import math
 import random
-from typing import TYPE_CHECKING, Any, Tuple
+from typing import TYPE_CHECKING, Any, Callable, List, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -13,9 +13,10 @@ import torch.nn.functional as F
 import torch.optim
 from torch import Tensor
 from torch_sparse import spmm
-from typing import Callable, List, Tuple
-from core.utils import get_eigenmode_coefficients, Slice, get_flux, _load_opt_cfgs
+
 from core.fdfd.fdfd import fdfd_ez
+from core.utils import (Slice, _load_opt_cfgs, get_eigenmode_coefficients,
+                        get_flux)
 
 if TYPE_CHECKING:
     from torch.optim.optimizer import _params_t
@@ -1046,10 +1047,10 @@ class MaxwellResidualLoss(torch.nn.modules.loss._Loss):
         super().__init__(size_average, reduce, reduction)
 
     def forward(
-            self, 
-            Ez: Tensor, 
-            source: Tensor, 
-            A, 
+            self,
+            Ez: Tensor,
+            source: Tensor,
+            A,
             transpose_A,
             wl,
             field_normalizer,
@@ -1210,7 +1211,7 @@ class SParamLoss(torch.nn.modules.loss._Loss):
         s_params_diff = s_params - target_s
         normalizeMSE = (s_params_diff.norm(p=2, dim=-1) / (target_s.norm(p=2, dim=-1)).mean() + 1e-9)
         return normalizeMSE
-    
+
 class DirectCompareSParam(torch.nn.modules.loss._Loss):
     '''
     There is no need to calculate the S from the field
@@ -1240,7 +1241,7 @@ class DirectCompareSParam(torch.nn.modules.loss._Loss):
 
         target_s = torch.cat(
             (
-                fwd_trans_GT[:, 0].unsqueeze(1), 
+                fwd_trans_GT[:, 0].unsqueeze(1),
                 ref_GT[:, 1].unsqueeze(1),
                 rad_xp_GT[:].unsqueeze(1),
                 rad_xm_GT[:].unsqueeze(1),
@@ -1312,7 +1313,7 @@ class GradientLoss(torch.nn.modules.loss._Loss):
             dr_masks = torch.stack(dr_masks, 0)
         else:
             dr_masks = torch.ones_like(gradient)
-        
+
         x = - EPSILON_0 * (2 * torch.pi * C_0 / (wl.unsqueeze(-1).unsqueeze(-1) * 1e-6))**2 * (gradient)
         y = target_gradient
         error_energy = torch.norm((x - y) * dr_masks, p=2, dim=(-1, -2))
@@ -1328,16 +1329,16 @@ class GradSimilarityLoss(torch.nn.modules.loss._Loss):
         self.reduce = reduce
 
     def forward(
-        self, 
+        self,
         forward_fields,
-        adjoint_fields,  
+        adjoint_fields,
         target_gradient,
         dr_mask = None,
     ):
         forward_fields_ez = forward_fields[:, -2:, :, :] # the forward fields has three components, we only need the Ez component
         forward_fields_ez = torch.view_as_complex(forward_fields_ez.permute(0, 2, 3, 1).contiguous())
         adjoint_fields = adjoint_fields[:, -2:, :, :] # the adjoint fields has three components, we only need the Ez component
-        adjoint_fields = torch.view_as_complex(adjoint_fields.permute(0, 2, 3, 1).contiguous()) # adjoint fields only Ez 
+        adjoint_fields = torch.view_as_complex(adjoint_fields.permute(0, 2, 3, 1).contiguous()) # adjoint fields only Ez
         gradient = (adjoint_fields*forward_fields_ez).real
         batch_size = gradient.shape[0]
         # Step 0: build one_mask from dr_mask
@@ -1381,5 +1382,5 @@ class GradSimilarityLoss(torch.nn.modules.loss._Loss):
             loss = 1 - cosine_similarity.sum()
         else:  # Default to no reduction
             loss = 1 - cosine_similarity
-        
+
         return loss

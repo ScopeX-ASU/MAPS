@@ -30,7 +30,9 @@ class NeurOLightConv2d(nn.Module):
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.n_modes = n_modes
-        self.n_mode_1, self.n_mode_2 = n_modes  # Number of Fourier modes to multiply, at most floor(N/2) + 1
+        self.n_mode_1, self.n_mode_2 = (
+            n_modes  # Number of Fourier modes to multiply, at most floor(N/2) + 1
+        )
         self.device = device
 
         self.scale = 1 / (in_channels * out_channels)
@@ -40,12 +42,19 @@ class NeurOLightConv2d(nn.Module):
     def build_parameters(self) -> None:
         self.weight_1 = nn.Parameter(
             self.scale
-            * torch.zeros([self.in_channels // 2, self.out_channels // 2, self.n_modes[0]], dtype=torch.cfloat)
+            * torch.zeros(
+                [self.in_channels // 2, self.out_channels // 2, self.n_modes[0]],
+                dtype=torch.cfloat,
+            )
         )
         self.weight_2 = nn.Parameter(
             self.scale
             * torch.zeros(
-                [self.in_channels - self.in_channels // 2, self.out_channels - self.out_channels // 2, self.n_modes[1]],
+                [
+                    self.in_channels - self.in_channels // 2,
+                    self.out_channels - self.out_channels // 2,
+                    self.n_modes[1],
+                ],
                 dtype=torch.cfloat,
             )
         )
@@ -65,9 +74,12 @@ class NeurOLightConv2d(nn.Module):
                 out_ft = torch.einsum("bixy,iox->boxy", x_ft, self.weight_1)
             else:
                 out_ft = self.get_zero_padding(
-                    [x.size(0), self.weight_1.size(1), x_ft.size(-2), x_ft.size(-1)], x.device
+                    [x.size(0), self.weight_1.size(1), x_ft.size(-2), x_ft.size(-1)],
+                    x.device,
                 )
-                out_ft[..., :n_mode, :] = torch.einsum("bixy,iox->boxy", x_ft[..., :n_mode, :], self.weight_1)
+                out_ft[..., :n_mode, :] = torch.einsum(
+                    "bixy,iox->boxy", x_ft[..., :n_mode, :], self.weight_1
+                )
             x = torch.fft.irfft(out_ft, n=x.size(-2), dim=-2, norm="ortho")
         elif dim == -1:
             x_ft = torch.fft.rfft(x, norm="ortho", dim=-1)
@@ -76,9 +88,12 @@ class NeurOLightConv2d(nn.Module):
                 out_ft = torch.einsum("bixy,ioy->boxy", x_ft, self.weight_2)
             else:
                 out_ft = self.get_zero_padding(
-                    [x.size(0), self.weight_2.size(1), x_ft.size(-2), x_ft.size(-1)], x.device
+                    [x.size(0), self.weight_2.size(1), x_ft.size(-2), x_ft.size(-1)],
+                    x.device,
                 )
-                out_ft[..., :n_mode] = torch.einsum("bixy,ioy->boxy", x_ft[..., :n_mode], self.weight_2)
+                out_ft[..., :n_mode] = torch.einsum(
+                    "bixy,ioy->boxy", x_ft[..., :n_mode], self.weight_2
+                )
             x = torch.fft.irfft(out_ft, n=x.size(-1), dim=-1, norm="ortho")
         return x
 

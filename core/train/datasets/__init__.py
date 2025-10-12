@@ -1,7 +1,7 @@
-from core.fdfd import *
-
 import importlib
 import os
+
+from core.fdfd import *
 
 # automatically import any Python files in this directory
 for file in sorted(os.listdir(os.path.dirname(__file__))):

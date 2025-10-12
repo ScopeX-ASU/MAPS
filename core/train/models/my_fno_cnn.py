@@ -11,9 +11,7 @@ from torch.functional import Tensor
 
 from core.fdfd.fdfd import fdfd_ez
 from core.train.utils import resize_to_targt_size
-from core.utils import (
-    Si_eps,
-)
+from core.utils import Si_eps
 from thirdparty.ceviche.constants import *
 
 from .model_base import ConvBlock, LinearBlock, ModelBase
@@ -471,44 +469,46 @@ class MyFNO2d(ModelBase):
                     act_cfg=None,
                     device=self.device,
                 ),
-                FNO(
-                    n_modes=(self.mode1, self.mode2),
-                    in_channels=hidden_dim,
-                    out_channels=hidden_dim,
-                    lifting_channels=hidden_dim,
-                    projection_channels=hidden_dim,
-                    hidden_channels=hidden_dim,
-                    n_layers=2,
-                    norm=None,
-                    factorization=None,
-                )
-                if not self.fno_block_only
-                else FNOBlocks(
-                    in_channels=hidden_dim,
-                    out_channels=hidden_dim,
-                    n_modes=(self.mode1, self.mode2),
-                    output_scaling_factor=None,
-                    use_mlp=False,
-                    mlp_dropout=0,
-                    mlp_expansion=0.5,
-                    non_linearity=F.gelu,
-                    stabilizer=None,
-                    norm=None,
-                    preactivation=False,
-                    fno_skip="linear",
-                    mlp_skip="soft-gating",
-                    max_n_modes=None,
-                    fno_block_precision="full",
-                    rank=1.0,
-                    fft_norm="forward",
-                    fixed_rank_modes=False,
-                    implementation="factorized",
-                    separable=False,
-                    factorization=None,
-                    decomposition_kwargs=dict(),
-                    joint_factorization=False,
-                    SpectralConv=SpectralConv,
-                    n_layers=2,
+                (
+                    FNO(
+                        n_modes=(self.mode1, self.mode2),
+                        in_channels=hidden_dim,
+                        out_channels=hidden_dim,
+                        lifting_channels=hidden_dim,
+                        projection_channels=hidden_dim,
+                        hidden_channels=hidden_dim,
+                        n_layers=2,
+                        norm=None,
+                        factorization=None,
+                    )
+                    if not self.fno_block_only
+                    else FNOBlocks(
+                        in_channels=hidden_dim,
+                        out_channels=hidden_dim,
+                        n_modes=(self.mode1, self.mode2),
+                        output_scaling_factor=None,
+                        use_mlp=False,
+                        mlp_dropout=0,
+                        mlp_expansion=0.5,
+                        non_linearity=F.gelu,
+                        stabilizer=None,
+                        norm=None,
+                        preactivation=False,
+                        fno_skip="linear",
+                        mlp_skip="soft-gating",
+                        max_n_modes=None,
+                        fno_block_precision="full",
+                        rank=1.0,
+                        fft_norm="forward",
+                        fixed_rank_modes=False,
+                        implementation="factorized",
+                        separable=False,
+                        factorization=None,
+                        decomposition_kwargs=dict(),
+                        joint_factorization=False,
+                        SpectralConv=SpectralConv,
+                        n_layers=2,
+                    )
                 ),
             )
         )

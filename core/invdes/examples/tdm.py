@@ -14,13 +14,11 @@ import torch
 from pyutils.config import Config
 
 from core.invdes import builder
-from core.invdes.models import (
-    TDMOptimization,
-)
+from core.invdes.invdesign import InvDesign
+from core.invdes.models import TDMOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import TDM
 from core.utils import set_torch_deterministic
-from core.invdes.invdesign import InvDesign
 
 sys.path.pop(0)
 if __name__ == "__main__":
@@ -61,7 +59,9 @@ if __name__ == "__main__":
             fom = fom + obj["weight"] * obj["value"]
 
         ## add extra temp mul
-        product = breakdown["temp1_trans"]["value"] * breakdown["temp2_trans"]["value"] * 5
+        product = (
+            breakdown["temp1_trans"]["value"] * breakdown["temp2_trans"]["value"] * 5
+        )
         fom = fom + product
         return fom, {"trans_product": {"weight": 5, "value": product}}
 

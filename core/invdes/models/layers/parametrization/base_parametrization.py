@@ -106,9 +106,7 @@ def _convert_resolution(
     ):
         assert (
             x.shape[-2] % target_size[0] == 0 and x.shape[-1] % target_size[1] == 0
-        ), (
-            f"source size should be multiples of target size, got {x.shape[-2:]} and {target_size}"
-        )
+        ), f"source size should be multiples of target size, got {x.shape[-2:]} and {target_size}"
         x = eps_bg + (eps_r - eps_bg) * x
         # x = 1 / x
         # avg_pool_stride = [int(round(s / r)) for s, r in zip(x.shape[-2:], target_size)]
@@ -251,7 +249,9 @@ def _blur(x, mfs, res, entire_eps, dr_mask, dim="xy"):
             entire_eps.unsqueeze(1),  # Add a channel dimension for conv1d
             mfs_kernel_1d.unsqueeze(0).unsqueeze(0),  # Shape (1, 1, kernel_size)
             padding=mfs_px // 2,
-        ).squeeze(1)  # Remove the channel dimension
+        ).squeeze(
+            1
+        )  # Remove the channel dimension
     elif dim == "y":
         # Blur along the "y" (rows)
         entire_eps = (
@@ -570,9 +570,9 @@ class BaseParametrization(nn.Module):
         else:
             raise ValueError(f"Unsupported permittivity denormalization mode: {mode}")
 
-        permittivity = (permittivity * (eps_r**exp - eps_bg**exp) + eps_bg**exp) ** (
-            1 / exp
-        )
+        permittivity = (
+            permittivity * (eps_r**exp - eps_bg**exp) + eps_bg**exp
+        ) ** (1 / exp)
 
         return permittivity
 

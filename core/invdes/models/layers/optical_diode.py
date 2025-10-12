@@ -2,10 +2,11 @@ from functools import partial
 from typing import Tuple
 
 import torch
-from .device_base import N_Ports
+from pyutils.general import logger
 
 from core.utils import material_fn_dict
-from pyutils.general import logger
+
+from .device_base import N_Ports
 
 __all__ = ["OpticalDiode"]
 

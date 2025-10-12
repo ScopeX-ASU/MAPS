@@ -9,14 +9,10 @@ import random
 import torch
 import torch.nn.functional as F
 
-from core.invdes.models import (
-    MDMOptimization,
-)
-from core.invdes.models.base_optimization import (
-    DefaultSimulationConfig,
-)
+from core.invdes.models import MDMOptimization
+from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import MDM
-from core.utils import set_torch_deterministic, SharpnessScheduler, DeterministicCtx
+from core.utils import DeterministicCtx, SharpnessScheduler, set_torch_deterministic
 from thirdparty.ceviche.constants import *
 
 
@@ -29,7 +25,13 @@ def compare_designs(design_regions_1, design_regions_2):
     return torch.mean(torch.stack(similarity)).item()
 
 
-def mdm_opt(device_id, operation_device, each_step=False, include_perturb=False, perturb_probs=[0.05, 0.1, 0.15]):
+def mdm_opt(
+    device_id,
+    operation_device,
+    each_step=False,
+    include_perturb=False,
+    perturb_probs=[0.05, 0.1, 0.15],
+):
     set_torch_deterministic(int(device_id))
     dump_data_path = f"./data/fdfd/mdm/raw_test_hz_branch"
     sim_cfg = DefaultSimulationConfig()
@@ -84,9 +86,7 @@ def mdm_opt(device_id, operation_device, each_step=False, include_perturb=False,
         optimizer, T_max=n_epoch, eta_min=0.0002
     )
     sharp_scheduler = SharpnessScheduler(
-        initial_sharp=1, 
-        final_sharp=256, 
-        total_steps=n_epoch
+        initial_sharp=1, final_sharp=256, total_steps=n_epoch
     )
 
     last_design_region_dict = None
@@ -195,7 +195,9 @@ def mdm_opt(device_id, operation_device, each_step=False, include_perturb=False,
                 for previous_breakdown in breakdown_history[:-1]
             ]
             if all(change < early_stop_threshold for change in changes):
-                print(f"Early stopping at step {step}: No significant changes in {patience} epochs.")
+                print(
+                    f"Early stopping at step {step}: No significant changes in {patience} epochs."
+                )
                 break
 
         if last_design_region_dict is None:

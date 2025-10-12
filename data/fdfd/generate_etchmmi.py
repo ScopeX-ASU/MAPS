@@ -3,9 +3,7 @@ import argparse
 import torch
 import torch.nn.functional as F
 
-from core.models import (
-    EtchMMIOptimization,
-)
+from core.models import EtchMMIOptimization
 from core.models.base_optimization import DefaultSimulationConfig
 from core.models.layers import EtchMMI
 from core.utils import set_torch_deterministic

@@ -19,9 +19,7 @@ from pyutils.general import logger
 from pyutils.torch_train import BestKModelSaver
 
 from core.invdes import builder
-from core.invdes.models import (
-    BendingOptimization,
-)
+from core.invdes.models import BendingOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import Bending
 from core.utils import set_torch_deterministic
@@ -153,9 +151,9 @@ class InvDesign:
         ## check cfgs
         plot_cfgs = self._cfg.plot_cfgs
         if plot_cfgs.plot:
-            assert plot_cfgs.plot_name is not None, (
-                "plot_name (filename) must be provided if plot"
-            )
+            assert (
+                plot_cfgs.plot_name is not None
+            ), "plot_name (filename) must be provided if plot"
             assert len(plot_cfgs.objs) > 0, "objs must be provided"
             assert len(plot_cfgs.field_keys) > 0, "field_keys must be provided"
             assert len(plot_cfgs.in_slice_names) > 0, "in_port_names must be provided"
@@ -164,13 +162,13 @@ class InvDesign:
 
         ckpt_cfgs = self._cfg.checkpoint_cfgs
         if ckpt_cfgs.save_model:
-            assert ckpt_cfgs.ckpt_name is not None, (
-                "ckpt_name must be provided if save model"
-            )
+            assert (
+                ckpt_cfgs.ckpt_name is not None
+            ), "ckpt_name must be provided if save model"
         if ckpt_cfgs.dump_gds:
-            assert ckpt_cfgs.gds_name is not None, (
-                "gds_name must be provided if dump gds"
-            )
+            assert (
+                ckpt_cfgs.gds_name is not None
+            ), "gds_name must be provided if dump gds"
 
     def _before_step_callbacks(self, feed_dict) -> Dict[str, Any]:
         return feed_dict
@@ -217,9 +215,11 @@ class InvDesign:
                     plot_filename=plot_filename + f"_{i}" + f"_{plot_cfgs.objs[j]}.jpg",
                     field_key=plot_cfgs.field_keys[j],
                     # field_component=pol,
-                    field_component=plot_cfgs.field_component
-                    if plot_cfgs.field_component is not None
-                    else pol,
+                    field_component=(
+                        plot_cfgs.field_component
+                        if plot_cfgs.field_component is not None
+                        else pol
+                    ),
                     in_slice_name=plot_cfgs.in_slice_names[j],
                     exclude_slice_names=plot_cfgs.exclude_slice_names[j],
                 )

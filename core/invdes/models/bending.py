@@ -141,7 +141,12 @@ class BendingOptimization(BaseOptimization):
                 rho_resolution=[25, 25],
                 transform=[
                     dict(type="transpose_symmetry", rot_k=3),
-                    dict(type="blur", mfs=0.1, resolutions=[hr_device.resolution, hr_device.resolution], dim="xy"),
+                    dict(
+                        type="blur",
+                        mfs=0.1,
+                        resolutions=[hr_device.resolution, hr_device.resolution],
+                        dim="xy",
+                    ),
                     # dict(type="binarize"),
                     # dict(type="litho", res=310),
                     dict(type="binarize"),

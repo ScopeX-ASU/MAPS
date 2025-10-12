@@ -1,12 +1,14 @@
-'''
+"""
 Date: 2024-06-14 03:02:52
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
 LastEditTime: 2024-06-14 03:15:08
 FilePath: /Robust-Inverse-Design/unitest/test_repara_phx_1x1_adjoint.py
-'''
+"""
+
+import torch
+
 ############ pytorch must be imported later
 from core.models import Repara_PhC_1x1
-import torch
 
 
 def test_adjoint_grad():

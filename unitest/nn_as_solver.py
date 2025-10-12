@@ -8,41 +8,40 @@ import os
 import sys
 
 # Add the project root to sys.path
-project_root = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../../MAPS")
-)
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../MAPS"))
 sys.path.insert(0, project_root)
+import argparse
+import csv
+
+import numpy as np
 import torch
 import torch.nn as nn
-from core.invdes.invdesign import InvDesign
-from core.invdes.models import (
-    BendingOptimization,
-)
 from pyutils.config import Config
 from pyutils.general import logger as lg
+from pyutils.torch_train import load_model, set_torch_deterministic
+
+from core.invdes.invdesign import InvDesign
+from core.invdes.models import BendingOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import Bending
-import argparse
-from core.utils import cal_total_field_adj_src_from_fwd_field, SharpnessScheduler
-from core.utils import train_configs as configs
 from core.train import builder
-from pyutils.torch_train import (
-    set_torch_deterministic,
-    load_model,
-)
-import csv
-import numpy as np
+from core.utils import SharpnessScheduler, cal_total_field_adj_src_from_fwd_field
+from core.utils import train_configs as configs
+
+
 class dual_predictor(nn.Module):
     def __init__(self, model_fwd, model_adj, switch_epoch):
         super(dual_predictor, self).__init__()
         self.model_fwd = model_fwd
         self.model_adj = model_adj
         self.switch_epoch = switch_epoch
-        print("will swith to predicted field from epoch: ", self.switch_epoch, flush=True)
+        print(
+            "will swith to predicted field from epoch: ", self.switch_epoch, flush=True
+        )
 
     def forward(
-        self, 
-        data, 
+        self,
+        data,
         epoch=1,
     ):
         eps = data["eps_map"]
@@ -53,7 +52,7 @@ class dual_predictor(nn.Module):
         in_slice_name = data["input_slice"]
         src = data["src_profile"]
         fwd_Ez_field = self.model_fwd(
-            eps, 
+            eps,
             src,
             monitor_slices=data["monitor_slices"],
             monitor_slice_list=None,
@@ -62,26 +61,34 @@ class dual_predictor(nn.Module):
             temp=temp,
         )
         with torch.enable_grad():
-            fwd_field, adj_source, monitor_slice_list = cal_total_field_adj_src_from_fwd_field(
-                Ez4adj=fwd_Ez_field if epoch >= self.switch_epoch else data["fwd_field"][:, -2:, ...],
-                Ez4fullfield=fwd_Ez_field,
-                # Ez=data["fwd_field"][:, -2:, ...],
-                eps=eps,
-                ht_ms=data["ht_m"], # this two only used for adjoint field calculation, we don't need it here in forward pass
-                et_ms=data["et_m"],
-                monitors=data["monitor_slices"],
-                pml_mask=self.model_fwd.pml_mask,
-                return_adj_src=True,
-                sim=self.model_fwd.sim,
-                opt_cfg_file_path=data['opt_cfg_file_path'],
-                wl=wl,
-                mode=mode,
-                temp=temp,
-                src_in_slice_name=in_slice_name,
+            fwd_field, adj_source, monitor_slice_list = (
+                cal_total_field_adj_src_from_fwd_field(
+                    Ez4adj=(
+                        fwd_Ez_field
+                        if epoch >= self.switch_epoch
+                        else data["fwd_field"][:, -2:, ...]
+                    ),
+                    Ez4fullfield=fwd_Ez_field,
+                    # Ez=data["fwd_field"][:, -2:, ...],
+                    eps=eps,
+                    ht_ms=data[
+                        "ht_m"
+                    ],  # this two only used for adjoint field calculation, we don't need it here in forward pass
+                    et_ms=data["et_m"],
+                    monitors=data["monitor_slices"],
+                    pml_mask=self.model_fwd.pml_mask,
+                    return_adj_src=True,
+                    sim=self.model_fwd.sim,
+                    opt_cfg_file_path=data["opt_cfg_file_path"],
+                    wl=wl,
+                    mode=mode,
+                    temp=temp,
+                    src_in_slice_name=in_slice_name,
+                )
             )
         adj_source = adj_source.detach()
         adj_Ez_field = self.model_adj(
-            eps, 
+            eps,
             adj_source,
             monitor_slices=data["monitor_slices"],
             monitor_slice_list=monitor_slice_list,
@@ -90,26 +97,27 @@ class dual_predictor(nn.Module):
             temp=temp,
         )
         adj_field, _, _ = cal_total_field_adj_src_from_fwd_field(
-                                        Ez4adj=adj_Ez_field,
-                                        Ez4fullfield=adj_Ez_field,
-                                        eps=eps,
-                                        ht_ms=data['ht_m'],
-                                        et_ms=data['et_m'],
-                                        monitors=data['monitor_slices'],
-                                        pml_mask=self.model_adj.pml_mask,
-                                        return_adj_src=False,
-                                        sim=self.model_adj.sim,
-                                        opt_cfg_file_path=data['opt_cfg_file_path'],
-                                        wl=wl,
-                                        mode=mode,
-                                        temp=temp,
-                                        src_in_slice_name=in_slice_name,
-                                    )
+            Ez4adj=adj_Ez_field,
+            Ez4fullfield=adj_Ez_field,
+            eps=eps,
+            ht_ms=data["ht_m"],
+            et_ms=data["et_m"],
+            monitors=data["monitor_slices"],
+            pml_mask=self.model_adj.pml_mask,
+            return_adj_src=False,
+            sim=self.model_adj.sim,
+            opt_cfg_file_path=data["opt_cfg_file_path"],
+            wl=wl,
+            mode=mode,
+            temp=temp,
+            src_in_slice_name=in_slice_name,
+        )
         return {
             "forward_field": fwd_field,
             "adjoint_field": adj_field,
             "adjoint_source": adj_source,
         }
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -120,16 +128,24 @@ if __name__ == "__main__":
     # Convert tuple strings to actual tuples
     if hasattr(configs.model_fwd, "mode_list"):
         if configs.model_fwd.type != "FNO2d":
-            assert hasattr(configs.model_fwd, "kernel_list"), "kernel_list should be defined if mode_list is defined"
-            configs['model_fwd']['mode_list'] = [(50, 50)] * len(configs['model_fwd']['kernel_list'])
+            assert hasattr(
+                configs.model_fwd, "kernel_list"
+            ), "kernel_list should be defined if mode_list is defined"
+            configs["model_fwd"]["mode_list"] = [(50, 50)] * len(
+                configs["model_fwd"]["kernel_list"]
+            )
         else:
-            configs['model_fwd']['mode_list'] = [(50, 50)] * 4
+            configs["model_fwd"]["mode_list"] = [(50, 50)] * 4
     if hasattr(configs.model_adj, "mode_list"):
         if configs.model_adj.type != "FNO2d":
-            assert hasattr(configs.model_adj, "kernel_list"), "kernel_list should be defined if mode_list is defined"
-            configs['model_adj']['mode_list'] = [(50, 50)] * len(configs['model_adj']['kernel_list'])
+            assert hasattr(
+                configs.model_adj, "kernel_list"
+            ), "kernel_list should be defined if mode_list is defined"
+            configs["model_adj"]["mode_list"] = [(50, 50)] * len(
+                configs["model_adj"]["kernel_list"]
+            )
         else:
-            configs['model_adj']['mode_list'] = [(50, 50)] * 4
+            configs["model_adj"]["mode_list"] = [(50, 50)] * 4
     if torch.cuda.is_available() and int(configs.run.use_cuda):
         torch.cuda.set_device(configs.run.gpu_id)
         device = torch.device("cuda:" + str(configs.run.gpu_id))
@@ -256,9 +272,7 @@ if __name__ == "__main__":
         optimizer, T_max=n_epoch, eta_min=0.0002
     )
     sharp_scheduler = SharpnessScheduler(
-        initial_sharp=1, 
-        final_sharp=256, 
-        total_steps=n_epoch
+        initial_sharp=1, final_sharp=256, total_steps=n_epoch
     )
     fwd_trans_NN = []
     fwd_trans_GT = []
@@ -288,7 +302,7 @@ if __name__ == "__main__":
         # copy the parameters to the gt model
         for p, p_gt in zip(opt.parameters(), opt_gt.parameters()):
             p_gt.data = p.data.clone().detach()
-        
+
         results_gt = opt_gt.forward(sharpness=sharpness)
         print(f"GT Step {step}:", end=" ")
         for k, obj in results_gt["breakdown"].items():
@@ -305,7 +319,6 @@ if __name__ == "__main__":
             exclude_slice_names=[],
         )
 
-        
         optimizer.step()
         scheduler.step()
         sharp_scheduler.step()
@@ -316,7 +329,7 @@ if __name__ == "__main__":
     fwd_trans_NN = np.array(fwd_trans_NN)
     file_path = "./unitest/nn_as_solver.csv"
     # Write to CSV using csv module
-    with open(file_path, mode='w', newline='') as file:
+    with open(file_path, mode="w", newline="") as file:
         writer = csv.writer(file)
         # Write header
         writer.writerow(["fwd_trans_GT", "fwd_trans_NN"])

@@ -1,24 +1,25 @@
+from copy import deepcopy
+
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spl
 
-from copy import deepcopy
-
 from .constants import *
-from .fdfd import compute_derivative_matrices#, Ez_to_Hx_Hy
+from .fdfd import compute_derivative_matrices  # , Ez_to_Hx_Hy
+
 
 def get_modes(eps_cross, omega, dL, npml, m=1, filtering=True):
-    """ Solve for the modes of a waveguide cross section
-        ARGUMENTS
-            eps_cross: the permittivity profile of the waveguide
-            omega:     angular frequency of the modes
-            dL:        grid size of the cross section
-            npml:      number of PML points on each side of the cross section
-            m:         number of modes to solve for
-            filtering: whether to filter out evanescent modes
-        RETURNS
-            vals:      array of effective indeces of the modes
-            vectors:   array containing the corresponding mode profiles
+    """Solve for the modes of a waveguide cross section
+    ARGUMENTS
+        eps_cross: the permittivity profile of the waveguide
+        omega:     angular frequency of the modes
+        dL:        grid size of the cross section
+        npml:      number of PML points on each side of the cross section
+        m:         number of modes to solve for
+        filtering: whether to filter out evanescent modes
+    RETURNS
+        vals:      array of effective indeces of the modes
+        vectors:   array containing the corresponding mode profiles
     """
 
     k0 = omega / C_0
@@ -61,33 +62,33 @@ def insert_mode(omega, dx, x, y, epsr, target=None, npml=0, m=1, filtering=False
 
     epsr_cross = epsr[x, y]
     _, mode_field = get_modes(epsr_cross, omega, dx, npml, m=m, filtering=filtering)
-    target[x, y] = np.atleast_2d(mode_field)[:,m-1].squeeze()
+    target[x, y] = np.atleast_2d(mode_field)[:, m - 1].squeeze()
 
     return target
 
 
 def solver_eigs(A, Neigs, guess_value=1.0):
-    """ solves for `Neigs` eigenmodes of A
-            A:            sparse linear operator describing modes
-            Neigs:        number of eigenmodes to return
-            guess_value:  estimate for the eigenvalues
-        For more info, see https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.eigs.html
+    """solves for `Neigs` eigenmodes of A
+        A:            sparse linear operator describing modes
+        Neigs:        number of eigenmodes to return
+        guess_value:  estimate for the eigenvalues
+    For more info, see https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.eigs.html
     """
 
-    values, vectors = spl.eigs(A, k=Neigs, sigma=guess_value, v0=None, which='LM')
+    values, vectors = spl.eigs(A, k=Neigs, sigma=guess_value, v0=None, which="LM")
 
     return values, vectors
 
 
 def filter_modes(values, vectors, filters=None):
-    """ Generic Filtering Function
-        ARGUMENTS
-            values: array of effective index values
-            vectors: array of mode profiles
-            filters: list of functions of `values` that return True for modes satisfying the desired filter condition
-        RETURNS
-            vals:      array of filtered effective indeces of the modes
-            vectors:   array containing the corresponding, filtered mode profiles
+    """Generic Filtering Function
+    ARGUMENTS
+        values: array of effective index values
+        vectors: array of mode profiles
+        filters: list of functions of `values` that return True for modes satisfying the desired filter condition
+    RETURNS
+        vals:      array of filtered effective indeces of the modes
+        vectors:   array containing the corresponding, filtered mode profiles
     """
 
     # if no filters, just return
@@ -109,17 +110,17 @@ def filter_modes(values, vectors, filters=None):
 
 
 def normalize_modes(vectors):
-    """ Normalize each `vec` in `vectors` such that `sum(|vec|^2)=1`
-            vectors: array with shape (n_points, n_vectors)
-        NOTE: eigs already normalizes for you, so you technically dont need this function
+    """Normalize each `vec` in `vectors` such that `sum(|vec|^2)=1`
+        vectors: array with shape (n_points, n_vectors)
+    NOTE: eigs already normalizes for you, so you technically dont need this function
     """
     powers = np.sum(np.square(np.abs(vectors)), axis=0)
 
     return vectors / np.sqrt(powers)
 
+
 def Ez_to_H(Ez, omega, dL, npml):
-    """ Converts the Ez output of mode solver to Hx and Hy components
-    """
+    """Converts the Ez output of mode solver to Hx and Hy components"""
 
     N = Ez.size
     matrices = compute_derivative_matrices(omega, (N, 1), [npml, 0], dL=dL)
@@ -127,35 +128,39 @@ def Ez_to_H(Ez, omega, dL, npml):
 
     # save to a dictionary for convenience passing to primitives
     info_dict = {}
-    info_dict['Dxf'] = Dxf
-    info_dict['Dxb'] = Dxb
-    info_dict['Dyf'] = Dyf
-    info_dict['Dyb'] = Dyb
+    info_dict["Dxf"] = Dxf
+    info_dict["Dxb"] = Dxb
+    info_dict["Dyf"] = Dyf
+    info_dict["Dyb"] = Dyb
 
     Hx, Hy = Ez_to_Hx_Hy(Ez)
 
     return Hx, Hy
 
-if __name__ == '__main__':
 
-    """ Test on a simple ridge waveguide """
+if __name__ == "__main__":
 
-    from thirdparty.ceviche.fdfd import fdfd_ez as fdfd
+    """Test on a simple ridge waveguide"""
+
     import matplotlib.pylab as plt
 
-    lambda0 = 1.550e-6                         # free space wavelength (m)
+    from thirdparty.ceviche.fdfd import fdfd_ez as fdfd
+
+    lambda0 = 1.550e-6  # free space wavelength (m)
     dL = lambda0 / 100
-    npml = int(lambda0 / dL)                              # number of grid points in PML
-    omega_0 = 2 * np.pi * C_0 / lambda0        # angular frequency (rad/s)
+    npml = int(lambda0 / dL)  # number of grid points in PML
+    omega_0 = 2 * np.pi * C_0 / lambda0  # angular frequency (rad/s)
 
-    Lx = lambda0 * 10                          # length in horizontal direction (m)
+    Lx = lambda0 * 10  # length in horizontal direction (m)
 
-    Nx = int(Lx/dL)
+    Nx = int(Lx / dL)
 
     wg_perm = 4
 
     wg_width = lambda0
-    wg_points = np.arange(Nx//2 - int(wg_width/dL/2), Nx//2 + int(wg_width/dL/2))
+    wg_points = np.arange(
+        Nx // 2 - int(wg_width / dL / 2), Nx // 2 + int(wg_width / dL / 2)
+    )
 
     eps_wg = np.ones((Nx,))
     eps_wg[wg_points] = wg_perm
@@ -163,7 +168,6 @@ if __name__ == '__main__':
     vals, vecs = get_modes(eps_wg, omega_0, dL, npml=10, m=10)
 
     plt.plot(np.linspace(-Lx, Lx, Nx) / 2 / lambda0, np.abs(vecs))
-    plt.xlabel('x position ($\lambda_0$)')
-    plt.ylabel('mode profile (normalized)')
+    plt.xlabel("x position ($\lambda_0$)")
+    plt.ylabel("mode profile (normalized)")
     plt.show()
-

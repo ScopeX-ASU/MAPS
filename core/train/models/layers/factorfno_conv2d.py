@@ -16,6 +16,7 @@ from torch.types import Device
 
 __all__ = ["FactorFNOConv2d"]
 
+
 @MODELS.register_module()
 class FactorFNOConv2d(nn.Module):
     def __init__(
@@ -30,7 +31,9 @@ class FactorFNOConv2d(nn.Module):
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.n_modes = n_modes
-        self.n_mode_1, self.n_mode_2 = n_modes  # Number of Fourier modes to multiply, at most floor(N/2) + 1
+        self.n_mode_1, self.n_mode_2 = (
+            n_modes  # Number of Fourier modes to multiply, at most floor(N/2) + 1
+        )
         self.device = device
 
         self.scale = 1 / (in_channels * out_channels)
@@ -39,10 +42,18 @@ class FactorFNOConv2d(nn.Module):
 
     def build_parameters(self) -> None:
         self.weight_1 = nn.Parameter(
-            self.scale * torch.zeros([self.in_channels, self.out_channels, self.n_modes[0]], dtype=torch.cfloat)
+            self.scale
+            * torch.zeros(
+                [self.in_channels, self.out_channels, self.n_modes[0]],
+                dtype=torch.cfloat,
+            )
         )
         self.weight_2 = nn.Parameter(
-            self.scale * torch.zeros([self.in_channels, self.out_channels, self.n_modes[1]], dtype=torch.cfloat)
+            self.scale
+            * torch.zeros(
+                [self.in_channels, self.out_channels, self.n_modes[1]],
+                dtype=torch.cfloat,
+            )
         )
 
     def reset_parameters(self) -> None:
@@ -52,17 +63,20 @@ class FactorFNOConv2d(nn.Module):
     def get_zero_padding(self, size, device):
         return torch.zeros(*size, dtype=torch.cfloat, device=device)
 
-    def _factorfno_forward(self, x, dim = -2):
+    def _factorfno_forward(self, x, dim=-2):
         if dim == -2:
             x_ft = torch.fft.rfft(x, norm="ortho", dim=-2)
             n_mode = self.n_mode_1
-            if n_mode == x_ft.size(-2): # full mode
+            if n_mode == x_ft.size(-2):  # full mode
                 out_ft = torch.einsum("bixy,iox->boxy", x_ft, self.weight_1)
             else:
-                out_ft = self.get_zero_padding([x.size(0), self.weight_1.size(1), x_ft.size(-2), x_ft.size(-1)], x.device)
- 
-                out_ft[..., : n_mode, :] = torch.einsum(
-                "bixy,iox->boxy", x_ft[..., : n_mode, :], self.weight_1
+                out_ft = self.get_zero_padding(
+                    [x.size(0), self.weight_1.size(1), x_ft.size(-2), x_ft.size(-1)],
+                    x.device,
+                )
+
+                out_ft[..., :n_mode, :] = torch.einsum(
+                    "bixy,iox->boxy", x_ft[..., :n_mode, :], self.weight_1
                 )
             x = torch.fft.irfft(out_ft, n=x.size(-2), dim=-2, norm="ortho")
         elif dim == -1:
@@ -71,10 +85,13 @@ class FactorFNOConv2d(nn.Module):
             if n_mode == x_ft.size(-1):
                 out_ft = torch.einsum("bixy,ioy->boxy", x_ft, self.weight_2)
             else:
-                out_ft = self.get_zero_padding([x.size(0), self.weight_2.size(1), x_ft.size(-2), x_ft.size(-1)], x.device)
+                out_ft = self.get_zero_padding(
+                    [x.size(0), self.weight_2.size(1), x_ft.size(-2), x_ft.size(-1)],
+                    x.device,
+                )
 
                 out_ft[..., :n_mode] = torch.einsum(
-                "bixy,ioy->boxy", x_ft[..., : n_mode], self.weight_2
+                    "bixy,ioy->boxy", x_ft[..., :n_mode], self.weight_2
                 )
             x = torch.fft.irfft(out_ft, n=x.size(-1), dim=-1, norm="ortho")
         return x

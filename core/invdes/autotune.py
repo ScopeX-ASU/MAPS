@@ -105,9 +105,9 @@ class AutoTune(object):
             guess_list = [guess_list]
         for guess in guess_list:
             check = [(key, key in self.distributions) for key in guess]
-            assert all(state[1] for state in check), (
-                f"Guess contains invalid parameters {list(filter(lambda x: not x[1], check))}"
-            )
+            assert all(
+                state[1] for state in check
+            ), f"Guess contains invalid parameters {list(filter(lambda x: not x[1], check))}"
             self.study.enqueue_trial(guess)
 
     def init_cache(self):
@@ -185,7 +185,9 @@ class AutoTune(object):
             disable=not progress_bar,
             colour="green",
         ):
-            trial, cached_obj = self.sample_unique_trial(iter=i, max_try=max_resample_try)
+            trial, cached_obj = self.sample_unique_trial(
+                iter=i, max_try=max_resample_try
+            )
             trial.set_user_attr("iter", i)
             log = f"Autotune Step {i:3d} trying params: {trial.params}....."
             self.logger.info(log)

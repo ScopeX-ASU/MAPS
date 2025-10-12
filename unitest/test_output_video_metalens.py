@@ -3,10 +3,10 @@ import datetime
 import os
 from typing import List
 
+import matplotlib.pyplot as plt
 import torch
 import torch.cuda.amp as amp
 import torch.fft
-import matplotlib.pyplot as plt
 from pyutils.config import configs
 from pyutils.general import AverageMeter
 from pyutils.general import logger as lg
@@ -59,9 +59,13 @@ if __name__ == "__main__":
 
     # Check if the two sets are the same
     if params_from_parameters == params_from_named_parameters:
-        lg.info("The sets of parameters from model.parameters() and model.named_parameters() are the same.")
+        lg.info(
+            "The sets of parameters from model.parameters() and model.named_parameters() are the same."
+        )
     else:
-        raise ValueError("The sets of parameters from model.parameters() and model.named_parameters() are different.")
+        raise ValueError(
+            "The sets of parameters from model.parameters() and model.named_parameters() are different."
+        )
 
     criterion = builder.make_criterion(configs.criterion.name, configs.criterion).to(
         device
@@ -71,7 +75,6 @@ if __name__ == "__main__":
         for name, config in configs.aux_criterion.items()
         if float(config.weight) > 0
     }
-
 
     optimizer = builder.make_optimizer(
         [p for p in model.parameters() if p.requires_grad],
@@ -117,7 +120,10 @@ if __name__ == "__main__":
             )
         else:
             lg.info("No checkpoint to restore, output the initial model video")
-        model.output_video(path=configs.plot.output_video_path + ".h5", sharpness=configs.sharp_scheduler.lr_max)
+        model.output_video(
+            path=configs.plot.output_video_path + ".h5",
+            sharpness=configs.sharp_scheduler.lr_max,
+        )
 
     except KeyboardInterrupt:
         lg.warning("Ctrl-C Stopped")

@@ -1,14 +1,14 @@
-'''
+"""
 Date: 2024-06-14 02:38:39
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
 LastEditTime: 2024-06-14 02:56:48
 FilePath: /Robust-Inverse-Design/unitest/test_phc_1x1_adjoint.py
-'''
+"""
 
+import torch
 
 ############ pytorch must be imported later
 from core.models.layers.phc_1x1_fdtd import PhC_1x1
-import torch
 
 eps_sio2 = 1.44**2
 eps_si = 3.48**2

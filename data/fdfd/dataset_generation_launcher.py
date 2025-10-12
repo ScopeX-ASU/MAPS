@@ -1,35 +1,40 @@
 import os
-from multiprocessing import Pool, Queue, Manager
 import subprocess
+from multiprocessing import Manager, Pool, Queue
 
-script = 'data/fdfd/generate_mdm.py'
+script = "data/fdfd/generate_mdm.py"
+
 
 def metacoupler_launcher(queue):
     # While there are tasks in the queue, each process will fetch and execute one
     while not queue.empty():
         try:
-            rand_seed, gpu_id, each_step, include_perturb = queue.get_nowait()  # Get task in order from the queue
+            rand_seed, gpu_id, each_step, include_perturb = (
+                queue.get_nowait()
+            )  # Get task in order from the queue
             print("this is the random seed: ", rand_seed, flush=True)
             print("this is the gpu id: ", gpu_id, flush=True)
             print("this is the each step: ", each_step, flush=True)
             print("this is the include perturb: ", include_perturb, flush=True)
             env = os.environ.copy()
-            env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+            env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 
-            pres = ['python3', script]
+            pres = ["python3", script]
             exp = [
-                f"--random_seed={rand_seed}", 
-                f"--gpu_id={gpu_id}", 
+                f"--random_seed={rand_seed}",
+                f"--gpu_id={gpu_id}",
                 f"--each_step={each_step}",
-                f"--include_perturb={include_perturb}"
+                f"--include_perturb={include_perturb}",
             ]
             subprocess.call(pres + exp)
         except Exception as e:
             print(f"Error fetching task from queue: {e}")
 
+
 # Wrapper function to allow passing `queue` without using a lambda
 def worker_process(queue):
     metacoupler_launcher(queue)
+
 
 if __name__ == "__main__":
     num_gpus = 4  # Number of GPUs

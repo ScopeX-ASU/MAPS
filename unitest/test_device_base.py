@@ -16,8 +16,6 @@ from copy import deepcopy
 import numpy as np
 import scipy.sparse as sp
 import torch
-from thirdparty.ceviche import fdfd_ez as ceviche_fdfd_ez
-from thirdparty.ceviche.constants import *
 from pyutils.general import TimerCtx, print_stat
 from torch_sparse import spspmm
 
@@ -37,6 +35,8 @@ from core.invdes.models.layers import Isolator, MetaCoupler, MetaLens, MetaMirro
 from core.invdes.models.layers.device_base import N_Ports, Si_eps
 from core.invdes.models.layers.utils import plot_eps_field
 from core.utils import set_torch_deterministic
+from thirdparty.ceviche import fdfd_ez as ceviche_fdfd_ez
+from thirdparty.ceviche.constants import *
 
 
 def test_device_base():
@@ -402,7 +402,8 @@ def test_fdtd_ez_torch():
         -1
         / MU_0
         * (
-            sim.Dxf.coalesce() @ sim.Dxb.coalesce()
+            sim.Dxf.coalesce()
+            @ sim.Dxb.coalesce()
             # torch_sparse_to_scipy_sparse(sim.Dxf).dot(torch_sparse_to_scipy_sparse(sim.Dxb))
             #    + torch.sparse.mm(sim.Dyf, sim.Dyb)
         )
@@ -412,7 +413,8 @@ def test_fdtd_ez_torch():
         -1
         / MU_0
         * (
-            c_sim.Dxf @ c_sim.Dxb
+            c_sim.Dxf
+            @ c_sim.Dxb
             # + c_sim.Dyf.dot(c_sim.Dyb)
         )
     ).tocoo()
@@ -444,7 +446,7 @@ def test_metalens_opt():
         device="cuda:0",
         port_len=(1.5, 4),
         substrate_depth=0.75,
-        ridge_height_max=0.75
+        ridge_height_max=0.75,
     )
     hr_device = device.copy(resolution=50)
     print(device)

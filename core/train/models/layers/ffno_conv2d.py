@@ -16,6 +16,7 @@ from torch.types import Device
 
 __all__ = ["FFNOConv2d", "FFNOConv3d"]
 
+
 @MODELS.register_module()
 class FFNOConv2d(nn.Module):
     def __init__(

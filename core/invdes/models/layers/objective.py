@@ -8,9 +8,7 @@ import torch
 from autograd import numpy as npa
 from torch import Tensor
 
-from core.fdfd.near2far import (
-    get_farfields_GreenFunction,
-)
+from core.fdfd.near2far import get_farfields_GreenFunction
 from core.utils import (
     get_eigenmode_coefficients,
     get_flux,
@@ -152,12 +150,16 @@ class EigenmodeObjective(object):
                         self.s_params[
                             (in_slice_name, out_slice_name, out_mode, wl, in_mode, temp)
                         ] = {
-                            "s_p": s_p / norm_power
-                            if self.energy
-                            else s_p / norm_power**0.5,  # normalized by input power
-                            "s_m": s_m / norm_power
-                            if self.energy
-                            else s_m / norm_power**0.5,  # normalized by input power
+                            "s_p": (
+                                s_p / norm_power
+                                if self.energy
+                                else s_p / norm_power**0.5
+                            ),  # normalized by input power
+                            "s_m": (
+                                s_m / norm_power
+                                if self.energy
+                                else s_m / norm_power**0.5
+                            ),  # normalized by input power
                         }
         if isinstance(s_list[0], Tensor):
             return torch.mean(torch.stack(s_list))
@@ -258,9 +260,11 @@ class FluxNear2FarObjective(object):
                         )
                     else:
                         extended_farfield_slice_info["xs"] = np.concatenate(
-                            [xs[0:1] - grid_step, xs]
-                            if pol == "Ez"
-                            else [xs, xs[-1:] + grid_step],
+                            (
+                                [xs[0:1] - grid_step, xs]
+                                if pol == "Ez"
+                                else [xs, xs[-1:] + grid_step]
+                            ),
                             axis=0,
                         )
                 elif direction[0] == "y":
@@ -273,9 +277,11 @@ class FluxNear2FarObjective(object):
                         )
                     else:
                         extended_farfield_slice_info["ys"] = np.concatenate(
-                            [ys[0:1] - grid_step, ys]
-                            if pol == "Ez"
-                            else [ys, ys[-1:] + grid_step],
+                            (
+                                [ys[0:1] - grid_step, ys]
+                                if pol == "Ez"
+                                else [ys, ys[-1:] + grid_step]
+                            ),
                             axis=0,
                         )
                 if out_slice_name == "total_farfield_region":

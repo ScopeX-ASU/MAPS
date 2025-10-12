@@ -14,9 +14,7 @@ import torch
 from autograd.numpy import array as npa
 
 from core.invdes.invdesign import InvDesign
-from core.invdes.models import (
-    MMIOptimization,
-)
+from core.invdes.models import MMIOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import MMI
 from core.utils import set_torch_deterministic

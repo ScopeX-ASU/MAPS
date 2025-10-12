@@ -10,6 +10,7 @@ import os
 from functools import lru_cache
 from typing import Tuple
 
+import matplotlib.pyplot as plt
 import meep as mp
 import numpy as np
 import torch
@@ -19,13 +20,7 @@ from pyutils.general import ensure_dir
 from core.fdfd import fdfd_ez as fdfd_ez_torch
 from core.fdfd import fdfd_hz as fdfd_hz_torch
 from core.invdes.models.layers.utils import modulation_fn_dict
-from core.utils import (
-    Si_eps,
-    SiO2_eps,
-    Slice,
-    get_eigenmode_coefficients,
-    get_flux,
-)
+from core.utils import Si_eps, SiO2_eps, Slice, get_eigenmode_coefficients, get_flux
 from thirdparty.ceviche import fdfd_ez, fdfd_hz
 from thirdparty.ceviche.constants import C_0, MICRON_UNIT
 
@@ -36,7 +31,7 @@ from .utils import (
     insert_mode_spins,
     plot_eps_field,
 )
-import matplotlib.pyplot as plt
+
 __all__ = ["BaseDevice", "N_Ports"]
 
 
@@ -245,7 +240,9 @@ class N_Ports(BaseDevice):
 
         self.port_monitor_slices = {}  # {port_name: Slice or mask}
         self.port_monitor_slices_info = {}  # {port_name: dict of slice info}
-        self.port_sources_dict = {}  # {slice_name: {(wl, mode): (profile, ht_m, et_m, norm_power)}}
+        self.port_sources_dict = (
+            {}
+        )  # {slice_name: {(wl, mode): (profile, ht_m, et_m, norm_power)}}
 
     def add_geometries(self, cfgs):
         for name, cfg in cfgs.items():
@@ -450,10 +447,10 @@ class N_Ports(BaseDevice):
         size: Tuple[int, int],
         direction: str | None = None,
     ):
-        '''
+        """
         the center is the center of the slice in um within the coordinate system where the center is (0, 0)
         the size is in the unit of um
-        '''
+        """
         assert size[0] == 0 or size[1] == 0, "Only 1D slice is supported"
         if direction is None:
             direction = "x" if size[0] == 0 else "y"
@@ -490,12 +487,14 @@ class N_Ports(BaseDevice):
         xs = (-(self.Nx - 1) / 2 + monitor_slice.x) * self.grid_step
         ys = (-(self.Ny - 1) / 2 + monitor_slice.y) * self.grid_step
         self.port_monitor_slices[slice_name] = monitor_slice
-        self.port_monitor_slices_info[slice_name] = dict( # please note that the radiation monitor info can only use the direction
-            center=center,
-            size=size,
-            xs=xs,
-            ys=ys,
-            direction=direction,
+        self.port_monitor_slices_info[slice_name] = (
+            dict(  # please note that the radiation monitor info can only use the direction
+                center=center,
+                size=size,
+                xs=xs,
+                ys=ys,
+                direction=direction,
+            )
         )
 
         return monitor_slice
@@ -662,8 +661,8 @@ class N_Ports(BaseDevice):
 
     def build_radiation_monitor(
         self, monitor_name: str = "rad_slice", distance_to_PML=[0.2, 0.2]
-    ):  
-        '''
+    ):
+        """
         Currently, the way to build the radiation monitor is through
         1. build a zeros_like epsilon map
         2. set the surrounding region of the epsilon map to 1
@@ -671,48 +670,91 @@ class N_Ports(BaseDevice):
         so the radiation monitor is a 2D boolean array, not like other monitors which are the Slice object
 
         we need to make the monitor uniform, the radiation monitor should be a Slice object too
-        '''
+        """
         xp_slice_name = monitor_name + "_xp"
-        xp_center = (self.cell_size[0] / 2 - self.sim_cfg["PML"][0] - distance_to_PML[0], 0)
-        monitor_size_x = [0, self.cell_size[1] - 2 * distance_to_PML[1] - 2 * self.sim_cfg["PML"][1]]
+        xp_center = (
+            self.cell_size[0] / 2 - self.sim_cfg["PML"][0] - distance_to_PML[0],
+            0,
+        )
+        monitor_size_x = [
+            0,
+            self.cell_size[1] - 2 * distance_to_PML[1] - 2 * self.sim_cfg["PML"][1],
+        ]
         radiation_monitor_xp = self.add_monitor_slice(
-            xp_slice_name, xp_center, monitor_size_x, "x", 
+            xp_slice_name,
+            xp_center,
+            monitor_size_x,
+            "x",
         )
         xm_slice_name = monitor_name + "_xm"
-        xm_center = (-self.cell_size[0] / 2 + self.sim_cfg["PML"][0] + distance_to_PML[0], 0)
+        xm_center = (
+            -self.cell_size[0] / 2 + self.sim_cfg["PML"][0] + distance_to_PML[0],
+            0,
+        )
         radiation_monitor_xm = self.add_monitor_slice(
-            xm_slice_name, xm_center, monitor_size_x, "x",
+            xm_slice_name,
+            xm_center,
+            monitor_size_x,
+            "x",
         )
         yp_slice_name = monitor_name + "_yp"
-        yp_center = (0, self.cell_size[1] / 2 - self.sim_cfg["PML"][1] - distance_to_PML[1])
-        monitor_size_y = [self.cell_size[0] - 2 * distance_to_PML[0] - 2 * self.sim_cfg["PML"][0], 0]
+        yp_center = (
+            0,
+            self.cell_size[1] / 2 - self.sim_cfg["PML"][1] - distance_to_PML[1],
+        )
+        monitor_size_y = [
+            self.cell_size[0] - 2 * distance_to_PML[0] - 2 * self.sim_cfg["PML"][0],
+            0,
+        ]
         radiation_monitor_yp = self.add_monitor_slice(
-            yp_slice_name, yp_center, monitor_size_y, "y",
+            yp_slice_name,
+            yp_center,
+            monitor_size_y,
+            "y",
         )
         ym_slice_name = monitor_name + "_ym"
-        ym_center = (0, -self.cell_size[1] / 2 + self.sim_cfg["PML"][1] + distance_to_PML[1])
-        radiation_monitor_ym = self.add_monitor_slice(
-            ym_slice_name, ym_center, monitor_size_y, "y",
+        ym_center = (
+            0,
+            -self.cell_size[1] / 2 + self.sim_cfg["PML"][1] + distance_to_PML[1],
         )
+        radiation_monitor_ym = self.add_monitor_slice(
+            ym_slice_name,
+            ym_center,
+            monitor_size_y,
+            "y",
+        )
+
         # quit()
         def exclude_ports(slice_obj):
             if slice_obj.x.size > 1:  # x is a range, y is a single value
                 y_coord = int(slice_obj.y)  # Fixed y coordinate
-                x_filtered = np.array([x for x in slice_obj.x if not self.ports_regions[x, y_coord]])
+                x_filtered = np.array(
+                    [x for x in slice_obj.x if not self.ports_regions[x, y_coord]]
+                )
                 y_filtered = slice_obj.y  # y remains unchanged
             elif slice_obj.y.size > 1:  # y is a range, x is a single value
                 x_coord = int(slice_obj.x)  # Fixed x coordinate
-                y_filtered = np.array([y for y in slice_obj.y if not self.ports_regions[x_coord, y]])
+                y_filtered = np.array(
+                    [y for y in slice_obj.y if not self.ports_regions[x_coord, y]]
+                )
                 x_filtered = slice_obj.x  # x remains unchanged
             else:
                 raise ValueError("Both x and y are single values")
 
             return Slice(x=x_filtered, y=y_filtered)
 
-        self.port_monitor_slices[xp_slice_name] = exclude_ports(self.port_monitor_slices[xp_slice_name])
-        self.port_monitor_slices[xm_slice_name] = exclude_ports(self.port_monitor_slices[xm_slice_name])
-        self.port_monitor_slices[yp_slice_name] = exclude_ports(self.port_monitor_slices[yp_slice_name])
-        self.port_monitor_slices[ym_slice_name] = exclude_ports(self.port_monitor_slices[ym_slice_name])
+        self.port_monitor_slices[xp_slice_name] = exclude_ports(
+            self.port_monitor_slices[xp_slice_name]
+        )
+        self.port_monitor_slices[xm_slice_name] = exclude_ports(
+            self.port_monitor_slices[xm_slice_name]
+        )
+        self.port_monitor_slices[yp_slice_name] = exclude_ports(
+            self.port_monitor_slices[yp_slice_name]
+        )
+        self.port_monitor_slices[ym_slice_name] = exclude_ports(
+            self.port_monitor_slices[ym_slice_name]
+        )
         return (
             self.port_monitor_slices[xp_slice_name],
             self.port_monitor_slices[xm_slice_name],
@@ -906,7 +948,7 @@ class N_Ports(BaseDevice):
                 # since the eps is only modulated at active region
                 # current_eps = get_temp_related_eps(eps, wl, temp)
                 omega = 2 * np.pi * C_0 / (wl * MICRON_UNIT)
-             
+
                 ht_m, et_m, _, mode = insert_mode(
                     omega, dl, slice.x, slice.y, eps, m=source_mode
                 )
@@ -958,7 +1000,12 @@ class N_Ports(BaseDevice):
                     source[:, slice.y] = 1 if custom_source is None else custom_source
                     if lib == torch:
                         source[:, slice.y + offset] = lib.exp(
-                            torch.tensor([-1j * 2 * lib.pi / wl_cen * grid_step - 1j * lib.pi,], device=source.device)
+                            torch.tensor(
+                                [
+                                    -1j * 2 * lib.pi / wl_cen * grid_step - 1j * lib.pi,
+                                ],
+                                device=source.device,
+                            )
                         ) * (1 if custom_source is None else custom_source)
                     else:
                         source[:, slice.y + offset] = lib.exp(
@@ -968,7 +1015,12 @@ class N_Ports(BaseDevice):
                     source[slice.x, :] = 1 if custom_source is None else custom_source
                     if lib == torch:
                         source[slice.x + offset, :] = lib.exp(
-                            torch.tensor([-1j * 2 * lib.pi / wl_cen * grid_step - 1j * lib.pi,], device=source.device)
+                            torch.tensor(
+                                [
+                                    -1j * 2 * lib.pi / wl_cen * grid_step - 1j * lib.pi,
+                                ],
+                                device=source.device,
+                            )
                         ) * (1 if custom_source is None else custom_source)
                     else:
                         source[slice.x + offset, :] = lib.exp(
@@ -1041,7 +1093,9 @@ class N_Ports(BaseDevice):
 
         if hasattr(simulation, "solver"):  # which means that it is a torch simulation
             with torch.no_grad():
-                Fx, Fy, Fz = simulation.solve(source, slice_name="Norm", mode="Norm", temp="Norm")
+                Fx, Fy, Fz = simulation.solve(
+                    source, slice_name="Norm", mode="Norm", temp="Norm"
+                )
         else:
             Fx, Fy, Fz = simulation.solve(source)
 

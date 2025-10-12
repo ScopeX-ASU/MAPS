@@ -1,4 +1,4 @@
-'''
+"""
 this file should only include the following functions that used to
 1. build the model
 2. build the optimizer
@@ -9,42 +9,43 @@ that will be used in training the model
 As for the dataloader, I think we should put it in the datasets submodules
 we only request the train_loader, valid_loader and test_loader in the training process
 and the dataloader should be returned by the datasets submodules
-'''
+"""
 
 import random
 from typing import Tuple
 
 import torch
 import torch.nn as nn
-from core.utils import train_configs as configs
+from mmengine.registry import MODELS
 from pyutils.datasets import get_dataset
 from pyutils.lr_scheduler.warmup_cosine_restart import CosineAnnealingWarmupRestarts
 from pyutils.optimizer.sam import SAM
 from pyutils.typing import DataLoader, Optimizer, Scheduler
 from torch.types import Device
-from mmengine.registry import MODELS
-from .models import *
-from .datasets import *
 
+from core.utils import train_configs as configs
+
+from .datasets import *
+from .models import *
 from .utils import (
-    DAdaptAdam,
-    DistanceLoss,
-    NL2NormLoss,
-    NormalizedMSELoss,
-    TemperatureScheduler,
-    SharpnessScheduler,
-    ResolutionScheduler,
-    maskedNL2NormLoss,
-    maskedNMSELoss,
-    fab_penalty_ls_curve,
-    fab_penalty_ls_gap,
     AspectRatioLoss,
-    MaxwellResidualLoss,
+    ComplexL1Loss,
+    DAdaptAdam,
+    DirectCompareSParam,
+    DistanceLoss,
     GradientLoss,
     GradSimilarityLoss,
+    MaxwellResidualLoss,
+    NL2NormLoss,
+    NormalizedMSELoss,
+    ResolutionScheduler,
+    SharpnessScheduler,
     SParamLoss,
-    DirectCompareSParam,
-    ComplexL1Loss,
+    TemperatureScheduler,
+    fab_penalty_ls_curve,
+    fab_penalty_ls_gap,
+    maskedNL2NormLoss,
+    maskedNMSELoss,
 )
 
 __all__ = [
@@ -56,6 +57,7 @@ __all__ = [
     "make_scheduler",
     "make_criterion",
 ]
+
 
 def make_dataloader(
     name: str = None,
@@ -83,14 +85,14 @@ def make_dataloader(
         )
         if hasattr(configs, "test_dataset"):
             test_dataset = FDFDDataset(
-                        device_type=configs.test_dataset.device_type,
-                        root=configs.test_dataset.root,
-                        data_dir=configs.test_dataset.data_dir,
-                        split="test",
-                        test_ratio=configs.test_dataset.test_ratio,
-                        train_valid_split_ratio=configs.test_dataset.train_valid_split_ratio,
-                        processed_dir=configs.test_dataset.processed_dir,
-                    )
+                device_type=configs.test_dataset.device_type,
+                root=configs.test_dataset.root,
+                data_dir=configs.test_dataset.data_dir,
+                split="test",
+                test_ratio=configs.test_dataset.test_ratio,
+                train_valid_split_ratio=configs.test_dataset.train_valid_split_ratio,
+                processed_dir=configs.test_dataset.processed_dir,
+            )
     else:
         train_dataset, test_dataset = get_dataset(
             name,
@@ -133,6 +135,7 @@ def make_dataloader(
 
     return train_loader, validation_loader, test_loader
 
+
 def make_model(random_state: int = None, **kwargs) -> nn.Module:
     device = kwargs.get("device", "cpu")
     if device == "cpu":
@@ -140,6 +143,7 @@ def make_model(random_state: int = None, **kwargs) -> nn.Module:
     model = MODELS.build(kwargs).to(device)
     model.reset_parameters(random_state)
     return model
+
 
 def make_optimizer(params, name: str = None, configs=None) -> Optimizer:
     if name == "sgd":

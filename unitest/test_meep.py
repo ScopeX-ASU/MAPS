@@ -1,14 +1,13 @@
 # %%
-'''
-Description: 
+"""
+Description:
 Author: Jiaqi Gu (jiaqigu@asu.edu)
 Date: 2023-10-03 12:12:40
 LastEditors: ScopeX-ASU jiaqigu@asu.edu
 LastEditTime: 2023-10-07 18:02:18
-'''
-import meep as mp
+"""
 import matplotlib.pyplot as plt
-
+import meep as mp
 import numpy as np
 from IPython.display import Video
 
@@ -26,23 +25,22 @@ c1 = mp.Cylinder(radius=r + w, material=mp.Medium(index=n))
 c2 = mp.Cylinder(radius=r)
 wg_ycenter = -(r + w + wg_gap + w / 2)
 c3 = mp.Block(
-        mp.Vector3(mp.inf, w, mp.inf),
-        center=mp.Vector3(y=wg_ycenter),
-        material=mp.Medium(index=n),
-    )
+    mp.Vector3(mp.inf, w, mp.inf),
+    center=mp.Vector3(y=wg_ycenter),
+    material=mp.Medium(index=n),
+)
 
 # %%
-fcen = 1/1.55  # pulse center frequency
+fcen = 1 / 1.55  # pulse center frequency
 # df = fcen - 0.05  # pulse frequency width
-df = 1/1.5 - 1/1.6  # pulse frequency width
+df = 1 / 1.5 - 1 / 1.6  # pulse frequency width
 src = mp.EigenModeSource(
-            src=mp.GaussianSource(fcen, fwidth=df),
-            center=mp.Vector3(-sxy/2+dpml, wg_ycenter),
-            size=(0, w, 0),
-            eig_match_freq=True,
-            eig_parity=mp.ODD_Z + mp.EVEN_Y,
-        )
-
+    src=mp.GaussianSource(fcen, fwidth=df),
+    center=mp.Vector3(-sxy / 2 + dpml, wg_ycenter),
+    size=(0, w, 0),
+    eig_match_freq=True,
+    eig_parity=mp.ODD_Z + mp.EVEN_Y,
+)
 
 
 # %%
@@ -93,7 +91,8 @@ sim = mp.Simulation(
 nfreq = 400  # number of frequencies at which to compute flux
 # transmitted flux
 inp_fr = mp.FluxRegion(
-    center=mp.Vector3(-0.5 * sxy + dpml + 0.5, wg_ycenter, 0), size=mp.Vector3(0, 2 * w, 0)
+    center=mp.Vector3(-0.5 * sxy + dpml + 0.5, wg_ycenter, 0),
+    size=mp.Vector3(0, 2 * w, 0),
 )
 tran_fr = mp.FluxRegion(
     center=mp.Vector3(0.5 * sxy - dpml, wg_ycenter, 0), size=mp.Vector3(0, 2 * w, 0)
@@ -106,7 +105,7 @@ sim.plot2D()
 plt.show()
 
 # %%
-pt = mp.Vector3(sxy/2-dpml, wg_ycenter)
+pt = mp.Vector3(sxy / 2 - dpml, wg_ycenter)
 f = plt.figure(dpi=150)
 Animate = mp.Animate2D(fields=mp.Ez, f=f, realtime=False, normalize=True)
 
@@ -114,7 +113,9 @@ sim.run(
     mp.at_beginning(Animate),
     # mp.at_beginning(mp.output_epsilon),
     mp.after_sources(mp.Harminv(mp.Ez, pt, fcen, df)),
-    mp.at_every(0.3, Animate), # 0.3 times unit = 0.3*20 = 6 timestep = 6 * 0.16666 fs = 1 fs
+    mp.at_every(
+        0.3, Animate
+    ),  # 0.3 times unit = 0.3*20 = 6 timestep = 6 * 0.16666 fs = 1 fs
     # mp.at_every(0.6, Animate), # 0.6 times unit = 0.6*20 = 12 timestep = 12 * 0.16666 fs = 2 fs
     until_after_sources=2000,
     # until_after_sources=mp.stop_when_fields_decayed(50, mp.Ez, mp.Vector3(r+0.2), 1e-3),
@@ -136,7 +137,6 @@ Video(filename)
 # %%
 from matplotlib import markers
 
-
 wl = []
 Rs = []
 Ts = []
@@ -155,7 +155,7 @@ for i in range(nfreq):
 if mp.am_master():
     # plt.figure(dpi=150, figsize=(9,3))
     xlim = [1.5, 1.6]
-    fig, axes = plt.subplots(1, 3, figsize=(16,5))
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
     # plt.plot(wl, Ts, "ro-", label="transmittance")
     axes[0].plot(wl, Is, "go-", label="input", markersize=1)
     axes[0].set(xlim=xlim, ylim=[0, 800])
@@ -177,6 +177,3 @@ if mp.am_master():
 
 
 # %%
-
-
-

@@ -17,17 +17,15 @@ import sys
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 )
+import h5py
 import torch
 from pyutils.config import Config
 
 from core.invdes.invdesign import InvDesign
-from core.invdes.models import (
-    MetaLensOptimization,
-)
+from core.invdes.models import MetaLensOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import MetaLens
 from core.utils import set_torch_deterministic
-import h5py
 
 sys.path.pop(0)
 if __name__ == "__main__":
@@ -70,7 +68,7 @@ if __name__ == "__main__":
             PML=[0.5, 0.5],
             resolution=100,
             wl_cen=wl,
-            plot_root = f"./figs/metalens_{'init_try_ff'}",
+            plot_root=f"./figs/metalens_{'init_try_ff'}",
             # plot_root="./figs/metalens_near2far_FL30_init",
             # plot_root="./figs/metalens_near2far_FL50",
             # plot_root="./figs/metalens_near2far_FL60",
@@ -157,7 +155,9 @@ if __name__ == "__main__":
         objs=["near_field_phase_record"],
         field_keys=[("in_slice_1", wl, "Hz1", 300)],
         in_slice_names=["in_slice_1"],
-        exclude_slice_names=[["farfield_region", "in_slice_1", "nearfield_1", "refl_slice_1"]],
+        exclude_slice_names=[
+            ["farfield_region", "in_slice_1", "nearfield_1", "refl_slice_1"]
+        ],
         field_component="Hz",
     )
     # # save the eps_map to a h5 file

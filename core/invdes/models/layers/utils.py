@@ -1,8 +1,10 @@
 import math
 import os
 from typing import Callable, List, Tuple
+
 import matplotlib
-matplotlib.use('Agg')  # Set non-interactive backend
+
+matplotlib.use("Agg")  # Set non-interactive backend
 import matplotlib.patches as patches
 import matplotlib.pylab as plt
 import numpy as np
@@ -12,15 +14,10 @@ import torch
 from autograd import numpy as npa
 from pyutils.general import ensure_dir, logger
 from scipy.ndimage import zoom
-from spins.fdfd_solvers.waveguide_mode import (
-    solve_waveguide_mode,
-)
+from spins.fdfd_solvers.waveguide_mode import solve_waveguide_mode
 from torch import Tensor
 
-from core.utils import (
-    Slice,
-    get_eigenmode_coefficients,
-)
+from core.utils import Slice, get_eigenmode_coefficients
 from thirdparty.ceviche import constants
 from thirdparty.ceviche.fdfd import compute_derivative_matrices
 from thirdparty.ceviche.modes import filter_modes, normalize_modes
@@ -693,7 +690,9 @@ def plot_eps_field(
         if stat == "abs":
             plot_abs(field, outline=None, ax=ax[i], cbar=True, font_size=label_fontsize)
         elif stat == "real":
-            plot_real(field, outline=None, ax=ax[i], cbar=True, font_size=label_fontsize)
+            plot_real(
+                field, outline=None, ax=ax[i], cbar=True, font_size=label_fontsize
+            )
         elif stat == "intensity":
             plot_abs(
                 np.abs(field) ** 2,
@@ -714,27 +713,39 @@ def plot_eps_field(
                 if isinstance(m[0], Slice):
                     m_slice, color = m
                     if len(m_slice.x.shape) == 0:  # x is a single value
-                        xs = m_slice.x * np.ones(len(m_slice.y), dtype=float)  # Create a constant x array
+                        xs = m_slice.x * np.ones(
+                            len(m_slice.y), dtype=float
+                        )  # Create a constant x array
                         ys = m_slice.y.astype(float)  # Convert y to float to handle NaN
 
                         # Identify discontinuities in `ys`
-                        gaps = np.where(np.diff(ys) > 1)[0]  # Find indices where gaps occur in `ys`
+                        gaps = np.where(np.diff(ys) > 1)[
+                            0
+                        ]  # Find indices where gaps occur in `ys`
                         if gaps.size > 0:
                             # Insert NaNs to break the line at gaps
-                            for gap_idx in reversed(gaps):  # Reverse to avoid shifting indices
+                            for gap_idx in reversed(
+                                gaps
+                            ):  # Reverse to avoid shifting indices
                                 xs = np.insert(xs, gap_idx + 1, np.nan)
                                 ys = np.insert(ys, gap_idx + 1, np.nan)
-                        
+
                         ax[i].plot(xs, ys, color, alpha=0.5)
                     elif len(m_slice.y.shape) == 0:  # y is a single value
                         xs = m_slice.x.astype(float)  # Convert to float to handle NaN
-                        ys = (m_slice.y * np.ones(len(m_slice.x))).astype(float)  # Convert to float
-                        
+                        ys = (m_slice.y * np.ones(len(m_slice.x))).astype(
+                            float
+                        )  # Convert to float
+
                         # Identify discontinuities in `xs`
-                        gaps = np.where(np.diff(xs) > 1)[0]  # Find indices where gaps occur
+                        gaps = np.where(np.diff(xs) > 1)[
+                            0
+                        ]  # Find indices where gaps occur
                         if gaps.size > 0:
                             # Insert NaNs to break the line at gaps
-                            for gap_idx in reversed(gaps):  # Reverse to avoid shifting indices
+                            for gap_idx in reversed(
+                                gaps
+                            ):  # Reverse to avoid shifting indices
                                 xs = np.insert(xs, gap_idx + 1, np.nan)
                                 ys = np.insert(ys, gap_idx + 1, np.nan)
                         ax[i].plot(xs, ys, color, alpha=0.5)
@@ -831,12 +842,12 @@ def plot_eps_field(
         # begin to plot the gif
         plot_real(field, outline=None, ax=ax_gif, cbar=False, font_size=label_fontsize)
         plot_abs(
-                eps.astype(np.float64),
-                ax=ax_gif,
-                cmap="Greys",
-                alpha=0.2,
-                font_size=label_fontsize,
-            )
+            eps.astype(np.float64),
+            ax=ax_gif,
+            cmap="Greys",
+            alpha=0.2,
+            font_size=label_fontsize,
+        )
         ## draw shaddow with NPML border
         ## left
         rect = patches.Rectangle(
@@ -906,9 +917,11 @@ def plot_eps_field(
 
         eps = zoom(eps, zoom_eps_factor)
         eps = eps[
-            zoom_eps_center_ind[0] - size[0] // 2 : zoom_eps_center_ind[0]
+            zoom_eps_center_ind[0]
+            - size[0] // 2 : zoom_eps_center_ind[0]
             + size[0] // 2,
-            zoom_eps_center_ind[1] - size[1] // 2 : zoom_eps_center_ind[1]
+            zoom_eps_center_ind[1]
+            - size[1] // 2 : zoom_eps_center_ind[1]
             + size[1] // 2,
         ]
     else:
@@ -1133,7 +1146,7 @@ def get_modes(
         )
 
     # n_max = np.sqrt(np.max(eps_cross)) * 0.92
-    n_max = np.sqrt(np.max(eps_cross)) # why 0.92???
+    n_max = np.sqrt(np.max(eps_cross))  # why 0.92???
     vals, vecs = solver_eigs(A, m, guess_value=n_max**2)
 
     if pol == "Hz":

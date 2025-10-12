@@ -1,10 +1,11 @@
 import autograd.numpy as npa
-from numpy import indices
-import scipy.sparse as sp
 import numpy as np
+import scipy.sparse as sp
+from numpy import indices
+
 from .constants import *
-from .primitives import sp_solve, sp_mult, spsp_mult
 from .derivatives import compute_derivative_matrices
+from .primitives import sp_mult, sp_solve, spsp_mult
 from .utils import get_entries_indices
 
 # notataion is similar to that used in: https://www.jpier.org/ac_api/download.php?id=11092006
@@ -22,8 +23,10 @@ class fdfd:
         bloch_{x,y} phase difference across {x,y} boundaries for bloch periodic boundary conditions (default = 0 = periodic)
         """
 
-        self.omega = omega# * 1e6 # if convert to nm, numerical value in A is much smaller
-        self.dL = dL# * 1e6
+        self.omega = (
+            omega  # * 1e6 # if convert to nm, numerical value in A is much smaller
+        )
+        self.dL = dL  # * 1e6
         self.npml = npml
 
         self._setup_bloch_phases(bloch_phases)
@@ -97,7 +100,7 @@ class fdfd:
         )
 
         # stores the raw sparse matrices
-        self.Dxf, self.Dxb, self.Dyf, self.Dyb, self.Dzf, self.Dzb = derivs        
+        self.Dxf, self.Dxb, self.Dyf, self.Dyb, self.Dzf, self.Dzb = derivs
 
         # store the entries and elements
         self.entries_Dxf, self.indices_Dxf = get_entries_indices(self.Dxf)

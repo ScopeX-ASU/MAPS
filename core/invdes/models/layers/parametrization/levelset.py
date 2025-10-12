@@ -372,9 +372,9 @@ class LeveSetParameterization(BaseParametrization):
     ):
         init_file_path = param_cfg.get("initialization_file", None)
         if init_file_path is not None:
-            assert init_method == "grating_1d", (
-                "Only grating_1d init method is supported with given initialization file"
-            )
+            assert (
+                init_method == "grating_1d"
+            ), "Only grating_1d init method is supported with given initialization file"
             with h5py.File(init_file_path, "r") as f:
                 level_set_knots = f["Si_width"][:]
                 level_set_knots = (
@@ -541,13 +541,15 @@ class LeveSetParameterization(BaseParametrization):
             weight = weight_dict["ls_knots"]
             weight.data.fill_(-0.2)
             weight.data[
-                weight.shape[0] // 2 - half_wg_width_x : weight.shape[0] // 2
+                weight.shape[0] // 2
+                - half_wg_width_x : weight.shape[0] // 2
                 + half_wg_width_x,
                 :,
             ] = 0.05
             weight.data[
                 :,
-                weight.shape[1] // 2 - half_wg_width_y : weight.shape[1] // 2
+                weight.shape[1] // 2
+                - half_wg_width_y : weight.shape[1] // 2
                 + half_wg_width_y,
             ] = 0.05
             weight.data += torch.randn_like(weight) * 0.01
@@ -558,9 +560,9 @@ class LeveSetParameterization(BaseParametrization):
         self, weights, rho, phi, n_phi, sharpness: float, ls_knots=None
     ):
         if ls_knots is not None:
-            assert ls_knots.shape == weights["ls_knots"].shape, (
-                f"the shape of ls_knots {ls_knots.shape} should be the same as the shape of ls_knots in weights {weights['ls_knots'].shape}"
-            )
+            assert (
+                ls_knots.shape == weights["ls_knots"].shape
+            ), f"the shape of ls_knots {ls_knots.shape} should be the same as the shape of ls_knots in weights {weights['ls_knots'].shape}"
         sigma = getattr(self.cfgs, "sigma", 1 / max(self.cfgs["rho_resolution"]))
         interpolation = getattr(self.cfgs, "interpolation", "gaussian")
         design_param = weights["ls_knots"] if ls_knots is None else ls_knots

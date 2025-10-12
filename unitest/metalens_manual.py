@@ -6,8 +6,8 @@ FilePath: /MAPS/unitest/metalens_manual.py
 """
 
 import h5py
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
 data = h5py.File(

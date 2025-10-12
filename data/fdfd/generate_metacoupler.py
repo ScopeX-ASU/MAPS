@@ -16,9 +16,7 @@ import argparse
 import torch
 import torch.nn.functional as F
 
-from core.models import (
-    MetaCouplerOptimization,
-)
+from core.models import MetaCouplerOptimization
 from core.models.base_optimization import DefaultSimulationConfig
 from core.models.layers import MetaCoupler
 from core.utils import set_torch_deterministic

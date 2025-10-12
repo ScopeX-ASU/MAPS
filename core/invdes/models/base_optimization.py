@@ -13,27 +13,29 @@ from typing import List, Tuple
 import gdsfactory as gf
 import h5py
 import numpy as np
+import ryaml
 import torch
 import yaml
-import ryaml
 from autograd.numpy.numpy_boxes import ArrayBox
 from pyutils.config import Config
-from pyutils.general import logger
+from pyutils.general import ensure_dir, logger
 from torch import Tensor, nn
 from torch.types import Device
 
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 )
-from thirdparty.ceviche.constants import C_0, MICRON_UNIT
+import matplotlib.pyplot as plt
+
 from core.utils import print_stat
+from thirdparty.ceviche.constants import C_0, MICRON_UNIT
 
 from .layers.device_base import N_Ports
 from .layers.fom_layer import SimulatedFoM
 from .layers.objective import ObjectiveFunc
 from .layers.parametrization import parametrization_builder
 from .layers.utils import plot_eps_field
-import matplotlib.pyplot as plt
+
 sys.path.pop(0)
 
 __all__ = [
@@ -206,7 +208,7 @@ class BaseOptimization(nn.Module):
         design_region_eps_dict = {}
         hr_design_region_eps_dict = {}
         ### we need to fill in the permittivity of each design region to the whole device eps_map
-        eps_map = self.epsilon_map.data.clone() # why clone here?
+        eps_map = self.epsilon_map.data.clone()  # why clone here?
         hr_eps_map = self.hr_eps_map
 
         for region_name, design_region in self.design_region_param_dict.items():
@@ -215,7 +217,9 @@ class BaseOptimization(nn.Module):
             if ls_knots is None:
                 hr_region, region = design_region(sharpness, hr_eps_map, hr_region_mask)
             else:
-                hr_region, region = design_region(sharpness, hr_eps_map, hr_region_mask, ls_knots[region_name])
+                hr_region, region = design_region(
+                    sharpness, hr_eps_map, hr_region_mask, ls_knots[region_name]
+                )
             design_region_eps_dict[region_name] = region
             hr_design_region_eps_dict[region_name] = hr_region
 
@@ -273,7 +277,9 @@ class BaseOptimization(nn.Module):
         ## Any change that can affect matrix A, we need to create new simulation, e.g., (wl, pol, temp)
         ## why: because we need this sim instance to cache solver state to reuse the solver, requiring the shared matrix A.
         wl_cen, wl_width, n_wl = sim_cfg["wl_cen"], sim_cfg["wl_width"], sim_cfg["n_wl"]
-        simulations = {}  # different polarization and wavelength requires different simulation instances
+        simulations = (
+            {}
+        )  # different polarization and wavelength requires different simulation instances
 
         temperatures = []
         for _, cfg in self.obj_cfgs.items():
@@ -340,16 +346,24 @@ class BaseOptimization(nn.Module):
         return total_value
 
     def _cal_obj_grad_ceviche(
-        self, need_item, permittivity_list: List[np.ndarray | Tensor], custom_source, *args
+        self,
+        need_item,
+        permittivity_list: List[np.ndarray | Tensor],
+        custom_source,
+        *args,
     ):
         ## here permittivity_list is a list of tensors (no grad required, since it is from autograd.Function)
         permittivity = permittivity_list[0]
 
         if need_item == "need_value":
-            total_value = self.objective(permittivity, custom_source=custom_source, mode="forward")
+            total_value = self.objective(
+                permittivity, custom_source=custom_source, mode="forward"
+            )
         elif need_item == "need_gradient":
             ### this is explicitly called for autograd, not needed for torch autodiff
-            raise NotImplementedError("ceviche adjoint mode is deprecated, please use ceviche_torch")
+            raise NotImplementedError(
+                "ceviche adjoint mode is deprecated, please use ceviche_torch"
+            )
             total_value = self.objective(
                 permittivity,
                 self.device.epsilon_map.shape,
@@ -422,7 +436,9 @@ class BaseOptimization(nn.Module):
             eps_map.detach().cpu().numpy(),
             filepath=os.path.join(self.sim_cfg["plot_root"], plot_filename),
             monitors=monitors,
-            x_width=self.device.cell_size[0] + (extended_Ez.shape[0] if extended_Ez is not None else 0) * self.device.grid_step,
+            x_width=self.device.cell_size[0]
+            + (extended_Ez.shape[0] if extended_Ez is not None else 0)
+            * self.device.grid_step,
             y_height=self.device.cell_size[1],
             NPML=self.device.NPML,
             # title=f"|{field_component}|^2: {field_key}, FoM: {obj:.3f}",
@@ -437,9 +453,14 @@ class BaseOptimization(nn.Module):
 
     def dump_gds_files(self, filename):
         design_region_mask_list = []
-        for design_region_name, design_region_mask in self.device.design_region_masks.items():
+        for (
+            design_region_name,
+            design_region_mask,
+        ) in self.device.design_region_masks.items():
             design_region_mask_list.append(design_region_mask)
-        assert len(design_region_mask_list) == 1, "Only support one design region for now"
+        assert (
+            len(design_region_mask_list) == 1
+        ), "Only support one design region for now"
         design_region_mask = design_region_mask_list[0]
         if isinstance(self._eps_map, Tensor) or isinstance(self._eps_map, np.ndarray):
             max_permittivity = self._eps_map[design_region_mask].max().item()
@@ -453,11 +474,13 @@ class BaseOptimization(nn.Module):
         plt.figure()
         plt.imshow(final_design_eps, cmap="jet")
         plt.colorbar()
-        plt.savefig(os.path.join(self.sim_cfg["plot_root"], "final_design_eps" + ".png"))
+        plt.savefig(
+            os.path.join(self.sim_cfg["plot_root"], "final_design_eps" + ".png")
+        )
         plt.close()
         eps_conponent = gf.read.from_np(
             final_design_eps,
-            nm_per_pixel=1000/self.sim_cfg["resolution"],
+            nm_per_pixel=1000 / self.sim_cfg["resolution"],
             threshold=(max_permittivity + min_permittivity) / 2,
         )
 
@@ -465,7 +488,7 @@ class BaseOptimization(nn.Module):
         eps_conponent.write_gds(
             gdspath=os.path.join(self.sim_cfg["plot_root"], filename)
         )
-        
+
     def dump_data(self, filename_h5, filename_yml, step):
         """
         switch to another different dump_data function
@@ -481,12 +504,23 @@ class BaseOptimization(nn.Module):
         # print("grad of self._eps_map", self._eps_map.grad)
         complex_type = [torch.complex64, torch.complex32, torch.complex128]
         filename_base = filename_h5[:-3]
+        dir_path = os.path.dirname(filename_h5)
+        ensure_dir(dir_path)
         with torch.no_grad():
-            adj_srcs, fields_adj, field_adj_normalizer = self.objective.obtain_adj_srcs()
+            adj_srcs, fields_adj, field_adj_normalizer = (
+                self.objective.obtain_adj_srcs()
+            )
             gradients = self.objective.read_gradient()
             # the for loop shoul according to the keys of the solutions
-            for (SliceName, WaveLen, SrcMode, Temperture), fields in self.objective.solutions.items():
-                filename = filename_base + f"-{SliceName}-{WaveLen}-{SrcMode}-{Temperture}.h5"
+            for (
+                SliceName,
+                WaveLen,
+                SrcMode,
+                Temperture,
+            ), fields in self.objective.solutions.items():
+                filename = (
+                    filename_base + f"-{SliceName}-{WaveLen}-{SrcMode}-{Temperture}.h5"
+                )
                 with h5py.File(filename, "w") as f:
                     # eps
                     f.create_dataset(
@@ -522,18 +556,26 @@ class BaseOptimization(nn.Module):
                                 src_mode = profile[0]._value
                                 ht_m = profile[1]._value
                                 et_m = profile[2]._value
-                            if slice_name == SliceName and wl == WaveLen and mode == SrcMode:
+                            if (
+                                slice_name == SliceName
+                                and wl == WaveLen
+                                and mode == SrcMode
+                            ):
                                 f.create_dataset(
                                     f"source_profile",
                                     data=src_mode,
                                 )
                             f.create_dataset(
-                                f"ht_m-wl-{wl}-slice-{slice_name}-mode-{mode}", data=ht_m
+                                f"ht_m-wl-{wl}-slice-{slice_name}-mode-{mode}",
+                                data=ht_m,
                             )
                             f.create_dataset(
-                                f"et_m-wl-{wl}-slice-{slice_name}-mode-{mode}", data=et_m
+                                f"et_m-wl-{wl}-slice-{slice_name}-mode-{mode}",
+                                data=et_m,
                             )
-                    fields = self.objective.solutions[(SliceName, WaveLen, SrcMode, Temperture)]
+                    fields = self.objective.solutions[
+                        (SliceName, WaveLen, SrcMode, Temperture)
+                    ]
                     store_fields = {}
                     for key, field in fields.items():
                         if isinstance(fields[key], Tensor):
@@ -567,7 +609,14 @@ class BaseOptimization(nn.Module):
                     f.create_dataset(f"A-entries_a", data=Alist[0])
                     f.create_dataset(f"A-indices_a", data=Alist[1])
                     # save all the s_params
-                    for (input_slice_name, slice_name, obj_type, wl, in_mode, temp), s_params in self.objective.s_params.items():
+                    for (
+                        input_slice_name,
+                        slice_name,
+                        obj_type,
+                        wl,
+                        in_mode,
+                        temp,
+                    ), s_params in self.objective.s_params.items():
                         # if wl != WaveLen or temp != Temperture or input_slice_name != SliceName or in_mode != SrcMode:
                         #     continue
                         # the obj_type is a string, if it is an integer, it implys the eigenmode type and the value is the mode index
@@ -586,7 +635,8 @@ class BaseOptimization(nn.Module):
                         else:
                             store_s_params = store_s_params["s"]
                         f.create_dataset(
-                            f"s_params-obj_slice_name-{slice_name}-type-{obj_type}-in_slice_name-{input_slice_name}-wl-{wl}-in_mode-{in_mode}-temp-{temp}", data=store_s_params
+                            f"s_params-obj_slice_name-{slice_name}-type-{obj_type}-in_slice_name-{input_slice_name}-wl-{wl}-in_mode-{in_mode}-temp-{temp}",
+                            data=store_s_params,
                         )  # 3d numpy array
                     # only the adj_src I care
                     adj_src = adj_srcs[(WaveLen, SrcMode[:2])]
@@ -598,11 +648,11 @@ class BaseOptimization(nn.Module):
                         J_adj = J_adj.detach().cpu().numpy()
                     if isinstance(J_adj, ArrayBox):
                         J_adj = J_adj._value
-                    f.create_dataset(
-                        f"adj_src", data=J_adj
-                    )
+                    f.create_dataset(f"adj_src", data=J_adj)
                     # only the fields_adj I care
-                    field = fields_adj[(WaveLen, SrcMode[:2])][(SliceName, SrcMode, Temperture)]
+                    field = fields_adj[(WaveLen, SrcMode[:2])][
+                        (SliceName, SrcMode, Temperture)
+                    ]
                     store_fields = {}
                     for components_key, component in field.items():
                         if isinstance(component, Tensor):
@@ -626,7 +676,9 @@ class BaseOptimization(nn.Module):
                         data=store_fields,
                     )  # 3d numpy array
                     # only the field_adj_normalizer I care
-                    normalizer = field_adj_normalizer[(WaveLen, SrcMode[:2])][(SliceName, SrcMode, Temperture)]
+                    normalizer = field_adj_normalizer[(WaveLen, SrcMode[:2])][
+                        (SliceName, SrcMode, Temperture)
+                    ]
                     if isinstance(normalizer, Tensor):
                         if normalizer.dtype in complex_type:
                             normalizer = normalizer.to(torch.complex64)
@@ -638,7 +690,10 @@ class BaseOptimization(nn.Module):
                         data=normalizer,
                     )  # 2d numpy array
                     # all the design region mask
-                    for (design_region_name, design_region_mask) in self.design_region_masks.items():
+                    for (
+                        design_region_name,
+                        design_region_mask,
+                    ) in self.design_region_masks.items():
                         f.create_dataset(
                             f"design_region_mask-{design_region_name}_x_start",
                             data=design_region_mask.x.start,
@@ -655,17 +710,27 @@ class BaseOptimization(nn.Module):
                             f"design_region_mask-{design_region_name}_y_stop",
                             data=design_region_mask.y.stop,
                         )
-                    # store the total gradient 
+                    # store the total gradient
                     f.create_dataset(
                         "total_gradient", data=self._eps_map.grad.detach().cpu().numpy()
                     )
                     # only the gradient I care
                     # not the total gradient, but the gradient from this specific forward simulation
-                    if isinstance(gradients[(WaveLen, SrcMode[:2])][(SliceName, SrcMode, Temperture)], torch.Tensor):
-                        grad = gradients[(WaveLen, SrcMode[:2])][(SliceName, SrcMode, Temperture)].detach().cpu().numpy()
-                    f.create_dataset(
-                        "gradient", data=grad
-                    )
+                    if isinstance(
+                        gradients[(WaveLen, SrcMode[:2])][
+                            (SliceName, SrcMode, Temperture)
+                        ],
+                        torch.Tensor,
+                    ):
+                        grad = (
+                            gradients[(WaveLen, SrcMode[:2])][
+                                (SliceName, SrcMode, Temperture)
+                            ]
+                            .detach()
+                            .cpu()
+                            .numpy()
+                        )
+                    f.create_dataset("gradient", data=grad)
                     # we don't store the breakdown of the objective for now since we don't need to plot the distribution
                     # # for bending, we still save the fom:
                     # for name, item in self.objective.breakdown.items(): # store the breakdown of the objective
@@ -723,7 +788,7 @@ class BaseOptimization(nn.Module):
         self.current_sharpness = sharpness
         eps_map, design_region_eps_dict, hr_eps_map, hr_design_region_eps_dict = (
             self.build_device(sharpness, ls_knots)
-        ) # eps_map = outpt = model.forward(input)
+        )  # eps_map = outpt = model.forward(input)
         self._design_region_eps_dict = design_region_eps_dict
         ## need to create objective layer during forward, because all Simulations need to know the latest permittivity_list
 
@@ -731,7 +796,9 @@ class BaseOptimization(nn.Module):
         if self._eps_map.requires_grad:
             self._eps_map.retain_grad()
         self._hr_eps_map = hr_eps_map
-        obj = self.objective_layer([eps_map], custom_source=custom_source) # loss = loss_function(output, target)
+        obj = self.objective_layer(
+            [eps_map], custom_source=custom_source
+        )  # loss = loss_function(output, target)
         self._obj = obj
         results = {"obj": obj, "breakdown": self.objective.breakdown}
         ## return design region epsilons and the final epsilon map for other penalty loss calculation

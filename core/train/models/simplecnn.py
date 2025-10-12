@@ -1,6 +1,6 @@
-'''
+"""
 this is just a simple model to build the training flow
-'''
+"""
 
 import copy
 import math
@@ -22,20 +22,27 @@ from torch.types import Device
 
 __all__ = ["simpleCNN"]
 
+
 class convBlock(nn.Module):
     def __init__(
-            self, 
-            in_channels: int, 
-            out_channels: int, 
-            kernel_size: int = 3, 
-            stride: int = 1, 
-            padding: int = 1,
-            enable_residual: bool = True,
-            enable_bn: bool = True,
-            enable_act: bool = True,
-        ):
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int = 3,
+        stride: int = 1,
+        padding: int = 1,
+        enable_residual: bool = True,
+        enable_bn: bool = True,
+        enable_act: bool = True,
+    ):
         super(convBlock, self).__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding)
+        self.conv = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+        )
         self.bn = nn.BatchNorm2d(out_channels)
         self.relu = nn.ReLU()
         self.enable_residual = enable_residual
@@ -55,11 +62,17 @@ class convBlock(nn.Module):
 
 
 class simpleCNN(nn.Module):
-    '''
+    """
     this model takes a two channel input and outputs a single channel output
     two channel input is the eps and the adjoint source, maybe three channel since the adjoint source is complex
-    '''
-    def __init__(self, in_channels: int = 3, out_channels: int = 1, device: Device = torch.device("cuda:0")):
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 3,
+        out_channels: int = 1,
+        device: Device = torch.device("cuda:0"),
+    ):
         super(simpleCNN, self).__init__()
         self.device = device
         self.in_channels = in_channels
@@ -83,10 +96,10 @@ class simpleCNN(nn.Module):
         )
 
     def forward(
-            self, 
-            eps_map, 
-            adj_src, 
-        ):
+        self,
+        eps_map,
+        adj_src,
+    ):
         adj_src = adj_src.permute(0, 4, 2, 3, 1).squeeze(-1)
         x = torch.cat([eps_map, adj_src], dim=1)
         predict_grad = self.predictor(x)

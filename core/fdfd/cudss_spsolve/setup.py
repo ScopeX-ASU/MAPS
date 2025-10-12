@@ -4,6 +4,7 @@ LastEditors: Jiaqi Gu && jiaqigu@asu.edu
 LastEditTime: 2025-03-02 23:48:46
 FilePath: /MAPS/core/fdfd/cudss_spsolve/setup.py
 """
+
 import os
 from distutils import log
 from distutils.dir_util import remove_tree
@@ -11,7 +12,12 @@ from distutils.dir_util import remove_tree
 import torch
 import torch.cuda
 from setuptools import find_packages, setup
-from torch.utils.cpp_extension import CUDA_HOME, BuildExtension, CppExtension, CUDAExtension
+from torch.utils.cpp_extension import (
+    CUDA_HOME,
+    BuildExtension,
+    CppExtension,
+    CUDAExtension,
+)
 from torchonn import __version__
 
 here = os.path.abspath(os.path.dirname(__file__))
@@ -24,6 +30,7 @@ torch_minor_version = "-DTORCH_MINOR_VERSION=%d" % (int(tokens[1]))
 
 def add_prefix(filename):
     return os.path.join(".", filename)
+
 
 CUDSS_DIR = os.environ.get("CUDSS_DIR", None)
 if CUDSS_DIR is None:

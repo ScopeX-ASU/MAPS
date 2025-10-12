@@ -1,16 +1,21 @@
-import sys
 import os
+import sys
 
 # Add the project root to sys.path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../MAPS"))
+project_root = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "../../../../MAPS")
+)
 sys.path.insert(0, project_root)
 
-from core.utils import train_configs as configs
-import torch
-import torch.nn as nn
-import torch.amp as amp
-from pyutils.general import logger as lg
 import argparse
+import copy
+
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+import torch.amp as amp
+import torch.nn as nn
+from pyutils.general import logger as lg
 from pyutils.torch_train import (
     BestKModelSaver,
     count_parameters,
@@ -18,14 +23,14 @@ from pyutils.torch_train import (
     load_model,
     set_torch_deterministic,
 )
+
 from core.train import builder
-from core.utils import cal_total_field_adj_src_from_fwd_field
 from core.train.models.utils import from_Ez_to_Hx_Hy
 from core.train.trainer import PredTrainer
-import copy
-import matplotlib.pyplot as plt
-import numpy as np
+from core.utils import cal_total_field_adj_src_from_fwd_field
+from core.utils import train_configs as configs
 from thirdparty.ceviche.ceviche.constants import C_0
+
 
 class dual_predictor(nn.Module):
     def __init__(self, model_fwd, model_adj, switch_epoch):
@@ -41,33 +46,35 @@ class dual_predictor(nn.Module):
         self.model_fwd = model_fwd
         self.model_adj = model_adj
         self.switch_epoch = switch_epoch
-        print("will swith to predicted field from epoch: ", self.switch_epoch, flush=True)
+        print(
+            "will swith to predicted field from epoch: ", self.switch_epoch, flush=True
+        )
 
     def forward(
-        self, 
-        data, 
+        self,
+        data,
         epoch=1,
     ):
-    # return_dict = {
-    #     "eps_map": eps_map,
-    #     "adj_src": adj_src,
-    #     "gradient": gradient,
-    #     "fwd_field": fwd_field,
-    #     "s_params": s_params,
-    #     "src_profile": src_profile,
-    #     "adj_field": adj_field,
-    #     "field_normalizer": field_adj_normalizer,
-    #     "design_region_mask": design_region_mask,
-    #     "ht_m": ht_m,
-    #     "et_m": et_m,
-    #     "monitor_slices": monitor_slices,
-    #     "A": A,
-    #     "opt_cfg_file_path": opt_cfg_file_path,
-    #     "input_slice": input_slice,
-    #     "wavelength": wavelength,
-    #     "mode": mode,
-    #     "temp": temp,
-    # }
+        # return_dict = {
+        #     "eps_map": eps_map,
+        #     "adj_src": adj_src,
+        #     "gradient": gradient,
+        #     "fwd_field": fwd_field,
+        #     "s_params": s_params,
+        #     "src_profile": src_profile,
+        #     "adj_field": adj_field,
+        #     "field_normalizer": field_adj_normalizer,
+        #     "design_region_mask": design_region_mask,
+        #     "ht_m": ht_m,
+        #     "et_m": et_m,
+        #     "monitor_slices": monitor_slices,
+        #     "A": A,
+        #     "opt_cfg_file_path": opt_cfg_file_path,
+        #     "input_slice": input_slice,
+        #     "wavelength": wavelength,
+        #     "mode": mode,
+        #     "temp": temp,
+        # }
         eps = data["eps_map"]
         src = {}
         wl = data["wavelength"]
@@ -76,7 +83,7 @@ class dual_predictor(nn.Module):
         in_slice_name = data["input_slice"]
         src = data["src_profile"]
         fwd_Ez_field = self.model_fwd(
-            eps, 
+            eps,
             src,
             monitor_slices=data["monitor_slices"],
             monitor_slice_list=None,
@@ -85,22 +92,30 @@ class dual_predictor(nn.Module):
             temp=temp,
         )
         with torch.enable_grad():
-            fwd_field, adj_source, monitor_slice_list = cal_total_field_adj_src_from_fwd_field(
-                Ez4adj=fwd_Ez_field if epoch >= self.switch_epoch else data["fwd_field"][:, -2:, ...],
-                Ez4fullfield=fwd_Ez_field,
-                # Ez=data["fwd_field"][:, -2:, ...],
-                eps=eps,
-                ht_ms=data["ht_m"], # this two only used for adjoint field calculation, we don't need it here in forward pass
-                et_ms=data["et_m"],
-                monitors=data["monitor_slices"],
-                pml_mask=self.model_fwd.pml_mask,
-                return_adj_src=True,
-                sim=self.model_fwd.sim,
-                opt_cfg_file_path=data['opt_cfg_file_path'],
-                wl=wl,
-                mode=mode,
-                temp=temp,
-                src_in_slice_name=in_slice_name,
+            fwd_field, adj_source, monitor_slice_list = (
+                cal_total_field_adj_src_from_fwd_field(
+                    Ez4adj=(
+                        fwd_Ez_field
+                        if epoch >= self.switch_epoch
+                        else data["fwd_field"][:, -2:, ...]
+                    ),
+                    Ez4fullfield=fwd_Ez_field,
+                    # Ez=data["fwd_field"][:, -2:, ...],
+                    eps=eps,
+                    ht_ms=data[
+                        "ht_m"
+                    ],  # this two only used for adjoint field calculation, we don't need it here in forward pass
+                    et_ms=data["et_m"],
+                    monitors=data["monitor_slices"],
+                    pml_mask=self.model_fwd.pml_mask,
+                    return_adj_src=True,
+                    sim=self.model_fwd.sim,
+                    opt_cfg_file_path=data["opt_cfg_file_path"],
+                    wl=wl,
+                    mode=mode,
+                    temp=temp,
+                    src_in_slice_name=in_slice_name,
+                )
             )
         # the adjoint source calculated with the one that stored in the dataset have a scale factor difference since we want to normalize the adjoint source power to be 1e-8
         adj_source = adj_source.detach()
@@ -117,7 +132,7 @@ class dual_predictor(nn.Module):
         # print(f"normalized L2 norm of adjoint source: {normalized_L2norm.item()}")
         # quit()
         adj_Ez_field = self.model_adj(
-            eps, 
+            eps,
             adj_source,
             monitor_slices=data["monitor_slices"],
             monitor_slice_list=monitor_slice_list,
@@ -126,26 +141,27 @@ class dual_predictor(nn.Module):
             temp=temp,
         )
         adj_field, _, _ = cal_total_field_adj_src_from_fwd_field(
-                                        Ez4adj=adj_Ez_field,
-                                        Ez4fullfield=adj_Ez_field,
-                                        eps=eps,
-                                        ht_ms=data['ht_m'],
-                                        et_ms=data['et_m'],
-                                        monitors=data['monitor_slices'],
-                                        pml_mask=self.model_adj.pml_mask,
-                                        return_adj_src=False,
-                                        sim=self.model_adj.sim,
-                                        opt_cfg_file_path=data['opt_cfg_file_path'],
-                                        wl=wl,
-                                        mode=mode,
-                                        temp=temp,
-                                        src_in_slice_name=in_slice_name,
-                                    )
+            Ez4adj=adj_Ez_field,
+            Ez4fullfield=adj_Ez_field,
+            eps=eps,
+            ht_ms=data["ht_m"],
+            et_ms=data["et_m"],
+            monitors=data["monitor_slices"],
+            pml_mask=self.model_adj.pml_mask,
+            return_adj_src=False,
+            sim=self.model_adj.sim,
+            opt_cfg_file_path=data["opt_cfg_file_path"],
+            wl=wl,
+            mode=mode,
+            temp=temp,
+            src_in_slice_name=in_slice_name,
+        )
         return {
             "forward_field": fwd_field,
             "adjoint_field": adj_field,
             "adjoint_source": adj_source,
         }
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -209,7 +225,7 @@ def main():
     grad_scaler = amp.GradScaler(enabled=getattr(configs.run, "fp16", False))
     lg.info(f"Number of NN parameters: {count_parameters(model)}")
 
-    model_name = 'dual_predictor'
+    model_name = "dual_predictor"
     checkpoint = f"./checkpoint/{configs.checkpoint.checkpoint_dir}/{model_name}_{configs.checkpoint.model_comment}.pt"
     lg.info(f"Current fwd NN checkpoint: {checkpoint}")
 
@@ -218,41 +234,39 @@ def main():
             "train": train_loader,
             "val": validation_loader,
             "test": test_loader,
-        }, 
-        model=model, 
+        },
+        model=model,
         criterion=criterion,
         aux_criterion=aux_criterions,
-        log_criterion=log_criterions, 
-        optimizer=optimizer, 
-        scheduler=scheduler, 
+        log_criterion=log_criterions,
+        optimizer=optimizer,
+        scheduler=scheduler,
         saver=saver,
         grad_scaler=grad_scaler,
-        device=device, 
+        device=device,
     )
     # trainer.single_batch_check()
     for epoch in range(1, int(configs.run.n_epochs) + 1):
         trainer.train(
             data_loader=train_loader,
-            task='train',
+            task="train",
             epoch=epoch,
             n_sample=int(configs.run.n_train),
         )
         trainer.train(
             data_loader=validation_loader,
-            task='val',
+            task="val",
             epoch=epoch,
         )
         if epoch > int(configs.run.n_epochs) - 21:
             trainer.train(
                 data_loader=test_loader,
-                task='test',
+                task="test",
                 epoch=epoch,
                 n_sample=int(configs.run.n_test),
             )
-            trainer.save_model(
-                epoch=epoch,
-                checkpoint_path=checkpoint
-            )
+            trainer.save_model(epoch=epoch, checkpoint_path=checkpoint)
+
 
 if __name__ == "__main__":
     main()

@@ -1,7 +1,11 @@
 import numpy as np
 
-def generate_lhs_samples(n_samples, n_dimensions, lower_bounds=None, upper_bounds=None, seed=None):
+
+def generate_lhs_samples(
+    n_samples, n_dimensions, lower_bounds=None, upper_bounds=None, seed=None
+):
     from scipy.stats import qmc
+
     """
     Generate Latin Hypercube Samples (LHS) with specified dimensions and sample size.
 
@@ -32,6 +36,7 @@ def generate_lhs_samples(n_samples, n_dimensions, lower_bounds=None, upper_bound
 
     return samples
 
+
 # Example usage
 n_samples = 123  # Number of samples
 n_dimensions = 2000  # Number of dimensions
@@ -39,6 +44,8 @@ lower_bounds = [-0.2] * n_dimensions  # Lower bounds for each dimension
 upper_bounds = [0.2] * n_dimensions  # Upper bounds for each dimension
 seed = 42  # Seed for reproducibility
 
-lhs_samples = generate_lhs_samples(n_samples, n_dimensions, lower_bounds, upper_bounds, seed)
+lhs_samples = generate_lhs_samples(
+    n_samples, n_dimensions, lower_bounds, upper_bounds, seed
+)
 print(lhs_samples.shape)
 print(lhs_samples)

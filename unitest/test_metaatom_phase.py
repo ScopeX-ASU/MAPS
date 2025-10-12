@@ -1,30 +1,28 @@
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../"))
-)
-import torch
-
-from core.invdes.invdesign import InvDesign
-from core.invdes.models import (
-    MetaLensOptimization,
-)
-from core.invdes.models.base_optimization import DefaultSimulationConfig
-from core.invdes.models.layers import MetaLens
-from core.utils import set_torch_deterministic
-from pyutils.config import Config
-import h5py
-from core.invdes import builder
-from core.utils import print_stat
-import numpy as np
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../")))
 import csv
 import math
 
+import h5py
+import numpy as np
+import torch
+from pyutils.config import Config
+
+from core.invdes import builder
+from core.invdes.invdesign import InvDesign
+from core.invdes.models import MetaLensOptimization
+from core.invdes.models.base_optimization import DefaultSimulationConfig
+from core.invdes.models.layers import MetaLens
+from core.utils import print_stat, set_torch_deterministic
+
 sys.path.pop(0)
 
+
 def get_mid_weight(l, w, period=0.3):
-    return (w*l)/(period-w)
+    return (w * l) / (period - w)
+
 
 if __name__ == "__main__":
     gpu_id = 0
@@ -104,8 +102,16 @@ if __name__ == "__main__":
 
         results = opt.forward(sharpness=256)
         w.append(round(i.item(), 3))
-        phase_std.append(opt.objective.phase_shift[('in_slice_1', 'nearfield_1', 0.85, "Hz1", 300)]["phase_std"].item())
-        phase_mean.append(opt.objective.phase_shift[('in_slice_1', 'nearfield_1', 0.85, "Hz1", 300)]["phase_mean"].item())
+        phase_std.append(
+            opt.objective.phase_shift[("in_slice_1", "nearfield_1", 0.85, "Hz1", 300)][
+                "phase_std"
+            ].item()
+        )
+        phase_mean.append(
+            opt.objective.phase_shift[("in_slice_1", "nearfield_1", 0.85, "Hz1", 300)][
+                "phase_mean"
+            ].item()
+        )
         opt.plot(
             eps_map=opt._eps_map,
             obj=None,
@@ -120,7 +126,7 @@ if __name__ == "__main__":
     phase_mean = (phase_mean[0] - phase_mean) % (2 * np.pi)
     phase_std = np.array(phase_std)
     # save them to csv
-    with open('./unitest/metaatom_phase.csv', mode='w') as file:
+    with open("./unitest/metaatom_phase.csv", mode="w") as file:
         writer = csv.writer(file)
         writer.writerow(["width", "phase_mean", "phase_std"])
         for i in range(len(w)):

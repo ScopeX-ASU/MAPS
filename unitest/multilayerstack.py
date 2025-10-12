@@ -16,14 +16,13 @@ https://meep.readthedocs.io/en/latest/Python_Tutorials/Adjoint_Solver/#shape-opt
 import copy
 from typing import Callable, List, Tuple
 
-from autograd.extend import primitive, defvjp
-from autograd import numpy as npa
-from autograd import tensor_jacobian_product
 import meep as mp
 import meep.adjoint as mpa
 import nlopt
 import numpy as np
-
+from autograd import numpy as npa
+from autograd import tensor_jacobian_product
+from autograd.extend import defvjp, primitive
 
 RESOLUTION_UM = 800
 AIR_UM = 1.0

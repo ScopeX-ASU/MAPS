@@ -1,15 +1,19 @@
-'''
+"""
 Date: 2024-10-10 13:30:26
 LastEditors: Jiaqi Gu && jiaqigu@asu.edu
 LastEditTime: 2024-11-16 01:16:24
 FilePath: /MAPS/unitest/test_pypardiso.py
-'''
+"""
+
 import time
-import pypardiso
+
 import numpy as np
+import pypardiso
 import scipy.sparse as sp
+
 # from core.models.fdfd.solver import sparse_solve
 import torch
+
 try:
     from pyMKL import pardisoSolver
 except:
@@ -36,19 +40,23 @@ def pypardiso_spsolve_complex(A, b):
     print(x.shape)
     return x
 
+
 def pardiso_spsolve(A, b, mtypes=13):
-    pSolve = pardisoSolver(A, mtype=mtypes) # Matrix is complex unsymmetric due to SC-PML
+    pSolve = pardisoSolver(
+        A, mtype=mtypes
+    )  # Matrix is complex unsymmetric due to SC-PML
     pSolve.factor()
     x = pSolve.solve(b)
     pSolve.clear()
     return x
+
 
 # def cupy_spsolve(A, b):
 #     x = sparse_solve(A, b) # Matrix is complex unsymmetric due to SC-PML
 #     return x
 
 A = sp.rand(100, 100, density=0.5, format="csr", dtype=np.complex128)
-A = A + A.T + A*0.001
+A = A + A.T + A * 0.001
 # b = np.random.rand(100)
 # x = pypardiso.spsolve(A, b)
 # print(x)
@@ -59,24 +67,24 @@ b = np.random.rand(A.shape[0], 1).astype(np.complex128)
 beg = time.time()
 x_scipy = sp.linalg.spsolve(A, b, use_umfpack=True)
 end = time.time()
-print("Scipy Complex:", end-beg, "seconds")
+print("Scipy Complex:", end - beg, "seconds")
 
 beg = time.time()
 x_pypardiso = pypardiso_spsolve_complex(A, b)
 end = time.time()
-print("Pypardiso Real:", end-beg, "seconds")
+print("Pypardiso Real:", end - beg, "seconds")
 # print(x)
 # print(A@x)
 # print(b)
 beg = time.time()
 x_pardiso = pardiso_spsolve(A, b)
 end = time.time()
-print("Pardiso Complex:", end-beg, "seconds")
+print("Pardiso Complex:", end - beg, "seconds")
 
 beg = time.time()
 x_pardiso_sym = pardiso_spsolve(A, b, mtypes=6)
 end = time.time()
-print("Pardiso Complex(sym):", end-beg, "seconds")
+print("Pardiso Complex(sym):", end - beg, "seconds")
 
 print(x_pardiso)
 print(x_pardiso_sym)

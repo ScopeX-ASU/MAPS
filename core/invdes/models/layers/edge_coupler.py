@@ -1,12 +1,13 @@
+import copy
+import warnings
 from typing import Tuple
 
 import torch
-from .device_base import N_Ports
+from pyutils.general import logger
 
 from core.utils import material_fn_dict
-from pyutils.general import logger
-import warnings
-import copy
+
+from .device_base import N_Ports
 
 __all__ = ["EdgeCoupler"]
 
@@ -72,7 +73,12 @@ class EdgeCoupler(N_Ports):
             pad=dict(
                 type="box",
                 center=[(box_size[0] + port_len[1]) / 2, 0],
-                size=[port_len[1], box_size[1] + sim_cfg["border_width"][2] + sim_cfg["border_width"][3]],
+                size=[
+                    port_len[1],
+                    box_size[1]
+                    + sim_cfg["border_width"][2]
+                    + sim_cfg["border_width"][3],
+                ],
                 eps=material_fn_dict["Air"](wl_cen),
             )
         )

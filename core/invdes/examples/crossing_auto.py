@@ -18,16 +18,14 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 )
 import torch
+from pyutils.config import Config
 
+from core.invdes.autotune import AutoTune
 from core.invdes.invdesign import InvDesign
-from core.invdes.models import (
-    CrossingOptimization,
-)
+from core.invdes.models import CrossingOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import Crossing
 from core.utils import set_torch_deterministic
-from core.invdes.autotune import AutoTune
-from pyutils.config import Config
 
 sys.path.pop(0)
 

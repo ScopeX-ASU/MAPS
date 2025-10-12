@@ -46,9 +46,7 @@ def train(
         os.makedirs(dir_path, exist_ok=True)
         # filepath = os.path.join(dir_path, f"epoch_{epoch - 1}_train.png")
         with torch.no_grad():
-            results = model(
-                configs.sharp_scheduler.final_sharp
-            )
+            results = model(configs.sharp_scheduler.final_sharp)
             opt_obj = results["obj"]
             log = "Train Epoch: {} | Loss: {:.4e}".format(
                 epoch - 1,
@@ -65,7 +63,7 @@ def train(
                 plot_filename=f"metacoupler_opt_step_{epoch-1}_fwd.png",
                 field_key=("in_port_1", 1.55, 1),
                 field_component="Ez",
-                in_port_name = "in_port_1",
+                in_port_name="in_port_1",
                 exclude_port_names=["refl_port_2"],
             )
             if "coupler" in configs.model.name.lower():
@@ -75,7 +73,7 @@ def train(
                     plot_filename=f"metacoupler_opt_step_{epoch-1}_bwd.png",
                     field_key=("out_port_1", 1.55, 1),
                     field_component="Ez",
-                    in_port_name = "out_port_1",
+                    in_port_name="out_port_1",
                     exclude_port_names=["refl_port_1"],
                 )
 
@@ -87,7 +85,6 @@ def train(
         loss = (
             -opt_obj
         )  # it should be minus fom, so that the gradient descent on loss could be the gradient ascent on fom
-
 
     grad_scaler.scale(loss).backward(retain_graph=True)
     # # print the gradient of the parameters
@@ -139,7 +136,7 @@ def train(
             plot_filename=f"metacoupler_opt_step_{epoch}_fwd.png",
             field_key=("in_port_1", 1.55, 1),
             field_component="Ez",
-            in_port_name = "in_port_1",
+            in_port_name="in_port_1",
             exclude_port_names=["refl_port_2"],
         )
         if "coupler" in configs.model.name:
@@ -149,7 +146,7 @@ def train(
                 plot_filename=f"metacoupler_opt_step_{epoch}_bwd.png",
                 field_key=("out_port_1", 1.55, 1),
                 field_component="Ez",
-                in_port_name = "out_port_1",
+                in_port_name="out_port_1",
                 exclude_port_names=["refl_port_1"],
             )
 
@@ -219,9 +216,9 @@ def test(
     mlflow.log_metrics({"train_loss": loss.item()}, step=step)
     wandb.log(
         {
-            "FoM_test": eval_obj.item()
-            if isinstance(eval_obj, torch.Tensor)
-            else eval_obj,
+            "FoM_test": (
+                eval_obj.item() if isinstance(eval_obj, torch.Tensor) else eval_obj
+            ),
             "Ref_test": ref_power.item(),
             "Aux_loss_Test": aux_loss.item() if aux_loss is not None else 0,
             "sharpness": sharpness,
@@ -290,14 +287,16 @@ def main() -> None:
 
     if int(configs.run.deterministic) == True:
         set_torch_deterministic(int(configs.run.random_state))
-        
+
     device = builder.make_device(
         device=operation_device,
     )
 
     model = builder.make_model(
         device=operation_device,
-        random_state=int(configs.run.random_state) if int(configs.run.deterministic) else None,
+        random_state=(
+            int(configs.run.random_state) if int(configs.run.deterministic) else None
+        ),
         optDevice=device,
     )
     lg.info(model)

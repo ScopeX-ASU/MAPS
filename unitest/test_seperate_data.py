@@ -1,20 +1,21 @@
-'''
+"""
 read the forward field and adjoint field from the data
 compare the calculated gradient and the gt gradient
-'''
+"""
+
 import os
 import sys
 
 # Add the project root to sys.path
-project_root = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../../MAPS")
-)
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../MAPS"))
 sys.path.insert(0, project_root)
 import h5py
-import torch
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
+import torch
+
 from core.utils import print_stat
+
 
 def test_gradient(filepath1, filepath2):
     # open the file
@@ -41,7 +42,7 @@ def test_gradient(filepath1, filepath2):
         # plt.title("Adjoint Field")
         # plt.savefig("./figs/adjoint_field.png")
         # plt.close()
-        
+
         # plt.figure()
         # plt.imshow(np.rot90(gradient.real), cmap="RdBu")
         # plt.colorbar()
@@ -55,7 +56,6 @@ def test_gradient(filepath1, filepath2):
         # plt.title("Source")
         # plt.savefig("./figs/source.png")
         # plt.close()
-
 
         # plt.figure()
 
@@ -84,7 +84,7 @@ def test_gradient(filepath1, filepath2):
         # print_stat(calculated_gradient)
         # print_stat(gradient)
         # quit()
-        
+
         plt.figure()
         plt.imshow(calculated_gradient_1.cpu().detach().numpy(), cmap="RdBu")
         plt.colorbar()
@@ -116,7 +116,7 @@ def test_gradient(filepath1, filepath2):
         # print_stat(calculated_gradient)
         # print_stat(gradient)
         # quit()
-        
+
         plt.figure()
         plt.imshow(calculated_gradient_2.cpu().detach().numpy(), cmap="RdBu")
         plt.colorbar()
@@ -144,6 +144,7 @@ def test_gradient(filepath1, filepath2):
         plt.title("Calculated Gradient")
         plt.savefig("./figs/grad_total.png")
         plt.close()
+
 
 if __name__ == "__main__":
     filepath1 = "/home/pingchua/projects/MAPS/data/fdfd/mdm/raw_test_hz_branch/mdm_id-0_opt_step_0-in_slice_1-1.55-Ez1-300.h5"

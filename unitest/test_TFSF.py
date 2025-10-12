@@ -2,8 +2,8 @@ nosf_path = "figs/metalens_TF_fsdx-0.3_wl-0.85_p-0.3_mat-Si/transfer_matrix_NOSF
 tfsf_path = "figs/metalens_TF_fsdx-0.3_wl-0.85_p-0.3_mat-Si/transfer_matrix_TFSF.h5"
 
 import h5py
-import torch
 import numpy
+import torch
 
 # open the h5py file
 with h5py.File(nosf_path, "r") as f:

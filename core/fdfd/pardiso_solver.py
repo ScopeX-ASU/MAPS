@@ -1,16 +1,15 @@
-from __future__ import unicode_literals
-from __future__ import print_function
-from __future__ import division
-from __future__ import absolute_import
+from __future__ import absolute_import, division, print_function, unicode_literals
+
 from future import standard_library
+
 standard_library.install_aliases()
 from builtins import object
+from ctypes import POINTER, byref, c_int, c_longlong
 
-from pyMKL import pardisoinit, pardiso, mkl_get_version
-from ctypes import POINTER, byref, c_longlong, c_int
 import numpy as np
 import scipy.sparse as sp
 from numpy import ctypeslib
+from pyMKL import mkl_get_version, pardiso, pardisoinit
 
 """
 mtype options
@@ -39,10 +38,12 @@ phase options
  -1 -> Release all internal memory for all matrices
 """
 
+
 class pardisoSolver(object):
-    """Wrapper class for Intel MKL Pardiso solver. """
+    """Wrapper class for Intel MKL Pardiso solver."""
+
     def __init__(self, A, mtype=11, double: bool = True, verbose=False):
-        '''
+        """
         Parameters
         ----------
         A : scipy.sparse.csr.csr_matrix
@@ -66,7 +67,7 @@ class pardisoSolver(object):
         -------
         None
 
-        '''
+        """
 
         self.mtype = mtype
         if mtype in [1, 3]:
@@ -77,7 +78,6 @@ class pardisoSolver(object):
         else:
             msg = "Invalid mtype: mtype={}".format(mtype)
             raise ValueError(msg)
-            
 
         self.n = A.shape[0]
 
@@ -95,9 +95,9 @@ class pardisoSolver(object):
                 self.dtype = np.float32
         self.ctypes_dtype = ctypeslib.ndpointer(self.dtype)
 
-        # If A is symmetric, store only the upper triangular portion 
+        # If A is symmetric, store only the upper triangular portion
         if mtype in [2, -2, 4, -4, 6]:
-            A = sp.triu(A, format='csr')
+            A = sp.triu(A, format="csr")
         elif mtype in [11, 13]:
             A = A.tocsr()
 
@@ -135,21 +135,21 @@ class pardisoSolver(object):
 
         verstring = mkl_get_version()
         # Set iparm
-        if '11.3.3' in verstring:
-            self.iparm[1] = 0 
+        if "11.3.3" in verstring:
+            self.iparm[1] = 0
         else:
-            self.iparm[1] = 3 # Use parallel nested dissection for reordering
-        self.iparm[23] = 1 # Use parallel factorization
-        self.iparm[34] = 1 # Zero base indexing
+            self.iparm[1] = 3  # Use parallel nested dissection for reordering
+        self.iparm[23] = 1  # Use parallel factorization
+        self.iparm[34] = 1  # Zero base indexing
         if double:
             self.iparm[27] = 0
         else:
             self.iparm[27] = 1
 
     def clear(self):
-        '''
+        """
         Clear the memory allocated from the solver.
-        '''
+        """
         self.run_pardiso(phase=-1)
 
     def factor(self):
@@ -160,7 +160,7 @@ class pardisoSolver(object):
         return x
 
     def run_pardiso(self, phase, rhs=None, transposed: bool = False):
-        '''
+        """
         Run specified phase of the Pardiso solver.
 
         Parameters
@@ -190,7 +190,7 @@ class pardisoSolver(object):
             Solution of the system `A x = rhs`, if `rhs` is provided. Is either
             a vector or a column matrix.
 
-        '''
+        """
 
         if rhs is None:
             nrhs = 0
@@ -202,11 +202,13 @@ class pardisoSolver(object):
             elif rhs.ndim == 2:
                 nrhs = rhs.shape[1]
             else:
-                msg = "Right hand side must either be a 1 or 2 dimensional "+\
-                      "array. Higher order right hand sides are not supported."
+                msg = (
+                    "Right hand side must either be a 1 or 2 dimensional "
+                    + "array. Higher order right hand sides are not supported."
+                )
                 raise NotImplementedError(msg)
-            rhs = rhs.astype(self.dtype).flatten(order='f')
-            x = np.zeros(nrhs*self.n, dtype=self.dtype)
+            rhs = rhs.astype(self.dtype).flatten(order="f")
+            x = np.zeros(nrhs * self.n, dtype=self.dtype)
 
         if transposed:
             self._MKL_iparm[11] = 2
@@ -216,23 +218,25 @@ class pardisoSolver(object):
         MKL_x = x.ctypes.data_as(self.ctypes_dtype)
         ERR = 0
 
-        pardiso(self._MKL_pt,               # pt
-                byref(c_int(self.maxfct)),  # maxfct
-                byref(c_int(self.mnum)),    # mnum
-                byref(c_int(self.mtype)),   # mtype
-                byref(c_int(phase)),        # phase
-                byref(c_int(self.n)),       # n
-                self._MKL_a,                # a
-                self._MKL_ia,               # ia
-                self._MKL_ja,               # ja
-                byref(c_int(self.perm)),    # perm
-                byref(c_int(nrhs)),         # nrhs
-                self._MKL_iparm,            # iparm
-                byref(c_int(self.msglvl)),  # msglvl
-                MKL_rhs,                    # b
-                MKL_x,                      # x
-                byref(c_int(ERR)))          # error
+        pardiso(
+            self._MKL_pt,  # pt
+            byref(c_int(self.maxfct)),  # maxfct
+            byref(c_int(self.mnum)),  # mnum
+            byref(c_int(self.mtype)),  # mtype
+            byref(c_int(phase)),  # phase
+            byref(c_int(self.n)),  # n
+            self._MKL_a,  # a
+            self._MKL_ia,  # ia
+            self._MKL_ja,  # ja
+            byref(c_int(self.perm)),  # perm
+            byref(c_int(nrhs)),  # nrhs
+            self._MKL_iparm,  # iparm
+            byref(c_int(self.msglvl)),  # msglvl
+            MKL_rhs,  # b
+            MKL_x,  # x
+            byref(c_int(ERR)),
+        )  # error
 
         if nrhs > 1:
-            x = x.reshape((self.n, nrhs), order='f')
+            x = x.reshape((self.n, nrhs), order="f")
         return x

@@ -19,9 +19,7 @@ from torch.functional import Tensor
 from torch.types import Device, _size
 from torch.utils.checkpoint import checkpoint
 
-from core.utils import (
-    Si_eps,
-)
+from core.utils import Si_eps
 from thirdparty.ceviche.constants import *
 
 from .fno_cnn import LearnableFourierFeatures
@@ -530,19 +528,24 @@ class NeurOLight2d(ModelBase):
         wl=None,
         temp=None,
     ):
-        src = src / (torch.abs(src).amax(dim=(1, 2), keepdim=True) + 1e-6) # B, H, W
+        src = src / (torch.abs(src).amax(dim=(1, 2), keepdim=True) + 1e-6)  # B, H, W
         if self.incident_field:
             incident_field = self.calculate_incident_light_field(
-                                                        source=src,
-                                                        monitor_slices=monitor_slices,
-                                                        monitor_slice_list=monitor_slice_list,
-                                                        in_slice_name=in_slice_name,
-                                                        wl=wl,
-                                                        temp=temp,
-                                                    ) # Bs, 2, H, W
-        temp_multiplier = self._get_temp_multiplier(temp).unsqueeze(-1).unsqueeze(-1)  # B, 1, 1
+                source=src,
+                monitor_slices=monitor_slices,
+                monitor_slice_list=monitor_slice_list,
+                in_slice_name=in_slice_name,
+                wl=wl,
+                temp=temp,
+            )  # Bs, 2, H, W
+        temp_multiplier = (
+            self._get_temp_multiplier(temp).unsqueeze(-1).unsqueeze(-1)
+        )  # B, 1, 1
         eps_min = torch.amin(eps, dim=(-1, -2), keepdim=True)
-        eps = (eps - torch.amin(eps, dim=(-1, -2), keepdim=True)) / (torch.amax(eps, dim=(-1, -2), keepdim=True) - torch.amin(eps, dim=(-1, -2), keepdim=True))
+        eps = (eps - torch.amin(eps, dim=(-1, -2), keepdim=True)) / (
+            torch.amax(eps, dim=(-1, -2), keepdim=True)
+            - torch.amin(eps, dim=(-1, -2), keepdim=True)
+        )
         # now it is normalized to [0, 1]
         eps = (eps * temp_multiplier + eps_min) / 12.11
         eps = eps.unsqueeze(1)  # B, 1, H, W
@@ -572,7 +575,7 @@ class NeurOLight2d(ModelBase):
         if self.incident_field:
             x = torch.cat((eps_enc_fwd, incident_field), dim=1)
         else:
-            src = torch.view_as_real(src).permute(0, 3, 1, 2) # B, 2, H, W
+            src = torch.view_as_real(src).permute(0, 3, 1, 2)  # B, 2, H, W
             x = torch.cat((eps_enc_fwd, src), dim=1)
 
         # positional encoding
@@ -581,7 +584,8 @@ class NeurOLight2d(ModelBase):
             x.device,
             mode=self.pos_encoding,
             epsilon=eps * 12.11,
-            wavelength=wl.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) * 1e-6, # B, 1, 1, 1
+            wavelength=wl.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+            * 1e-6,  # B, 1, 1, 1
             grid_step=1 / self.img_res * 1e-6,
         )  # [bs, 2 or 4 or 8, h, w] real
         if grid is not None:
@@ -591,7 +595,7 @@ class NeurOLight2d(ModelBase):
         x = self.features(x)
 
         forward_Ez_field = self.head(x)  # 1x1 conv
-        
+
         if self.output_sparam:
             assert hasattr(self, "sparam_head"), "sparam_head is not defined"
             s_parameter = self.sparam_head(forward_Ez_field)

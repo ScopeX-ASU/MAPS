@@ -15,13 +15,11 @@ import torch
 from pyutils.config import Config
 
 from core.invdes import builder
-from core.invdes.models import (
-    ModeMuxOptimization,
-)
+from core.invdes.invdesign import InvDesign
+from core.invdes.models import ModeMuxOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import ModeMux
 from core.utils import set_torch_deterministic
-from core.invdes.invdesign import InvDesign
 
 sys.path.pop(0)
 if __name__ == "__main__":
@@ -55,6 +53,7 @@ if __name__ == "__main__":
             use_autodiff=False,
         )
     )
+
     def fom_func(breakdown):
         ## maximization fom
         fom = 0

@@ -4,8 +4,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.types import Device
 import torch.utils.checkpoint as checkpoint
+from torch.types import Device
 
 
 class Kernel:

@@ -11,19 +11,19 @@ from copy import deepcopy
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 )
+import csv
+import math
+
 import numpy as np
 import torch
+from pyutils.config import Config
 
 from core.invdes.invdesign import InvDesign
-from core.invdes.models import (
-    CrossingOptimization,
-)
+from core.invdes.models import CrossingOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import Crossing
 from core.utils import set_torch_deterministic
-from pyutils.config import Config
-import csv
-import math
+
 sys.path.pop(0)
 if __name__ == "__main__":
     gpu_id = 0
@@ -432,7 +432,7 @@ if __name__ == "__main__":
         test_ls_knots["crossing_region"] = param.data
     with torch.no_grad():
         _ = test_opt(
-            sharpness=256, 
+            sharpness=256,
             ls_knots=test_ls_knots,
         )
     fwd_trans_list = []
@@ -444,18 +444,57 @@ if __name__ == "__main__":
     for (wl, pol), _ in test_opt.objective.sims.items():
         wl_list.append(wl)
     for wl in wl_list:
-        fwd_trans_list.append(10*math.log10(s_params[('in_slice_1', 'out_slice_1', 'Ez1', wl, 'Ez1', 300)]["s_p"].item()))
-        refl_trans_list.append(10*math.log10(s_params[('in_slice_1', 'refl_slice_1', 'Ez1', wl, 'Ez1', 300)]["s_m"].item()))
-        top_cross_talk_list.append(10*math.log10(s_params[('in_slice_1', 'top_slice', 'Ez1', wl, 'Ez1', 300)]["s_p"].item()))
-        bot_cross_talk_list.append(10*math.log10(s_params[('in_slice_1', 'bot_slice', 'Ez1', wl, 'Ez1', 300)]["s_m"].item()))
+        fwd_trans_list.append(
+            10
+            * math.log10(
+                s_params[("in_slice_1", "out_slice_1", "Ez1", wl, "Ez1", 300)][
+                    "s_p"
+                ].item()
+            )
+        )
+        refl_trans_list.append(
+            10
+            * math.log10(
+                s_params[("in_slice_1", "refl_slice_1", "Ez1", wl, "Ez1", 300)][
+                    "s_m"
+                ].item()
+            )
+        )
+        top_cross_talk_list.append(
+            10
+            * math.log10(
+                s_params[("in_slice_1", "top_slice", "Ez1", wl, "Ez1", 300)][
+                    "s_p"
+                ].item()
+            )
+        )
+        bot_cross_talk_list.append(
+            10
+            * math.log10(
+                s_params[("in_slice_1", "bot_slice", "Ez1", wl, "Ez1", 300)][
+                    "s_m"
+                ].item()
+            )
+        )
     # Store these lists to CSV file
-    csv_filename = f"./figs/coupler4_{'port4'}_s{crossing_region_size[0]}x{crossing_region_size[1]}_c-{exp_comment}" + '/split_ratio.csv'
-    with open(csv_filename, mode='w', newline='') as csv_file:
+    csv_filename = (
+        f"./figs/coupler4_{'port4'}_s{crossing_region_size[0]}x{crossing_region_size[1]}_c-{exp_comment}"
+        + "/split_ratio.csv"
+    )
+    with open(csv_filename, mode="w", newline="") as csv_file:
         csv_writer = csv.writer(csv_file)
         # Write the header
-        csv_writer.writerow(['Wavelength', 'S31', 'S11', 'S21', 'S41'])
+        csv_writer.writerow(["Wavelength", "S31", "S11", "S21", "S41"])
         # Write the data row by row
         for i, wl in enumerate(wl_list):
-            csv_writer.writerow([wl, fwd_trans_list[i], refl_trans_list[i], top_cross_talk_list[i], bot_cross_talk_list[i]])
+            csv_writer.writerow(
+                [
+                    wl,
+                    fwd_trans_list[i],
+                    refl_trans_list[i],
+                    top_cross_talk_list[i],
+                    bot_cross_talk_list[i],
+                ]
+            )
 
     print(f"Data successfully written to {csv_filename}")

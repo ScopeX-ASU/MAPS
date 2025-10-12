@@ -1,7 +1,7 @@
 import torch
+from pyutils.config import Config
 
 from .base_optimization import BaseOptimization, DefaultOptimizationConfig
-from pyutils.config import Config
 
 
 class DefaultConfig(DefaultOptimizationConfig):
@@ -37,7 +37,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                         out_modes=(
                             1,
                         ),  # can evaluate on multiple output modes and get average transmission
-                        type="eigenmode", # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
+                        type="eigenmode",  # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
                         direction="y+",
                     ),
                     refl_trans=dict(
@@ -125,8 +125,11 @@ class EtchMMIOptimization(BaseOptimization):
             design_region_param_cfgs[region_name] = dict(
                 method="levelset",
                 rho_resolution=[5, 5],
-                transform=[dict(type="transpose_symmetry", flag=True), dict(type="blur", mfs=0.1, resolutions=[310, 310])],
-                init_method="random", # this can only converge to fwd transmission ~ 25% in TE1 mode
+                transform=[
+                    dict(type="transpose_symmetry", flag=True),
+                    dict(type="blur", mfs=0.1, resolutions=[310, 310]),
+                ],
+                init_method="random",  # this can only converge to fwd transmission ~ 25% in TE1 mode
                 # init_method="ring",
                 binary_projection=dict(
                     fw_threshold=100,

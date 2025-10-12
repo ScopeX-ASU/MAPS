@@ -152,14 +152,18 @@ class MetaMirrorOptimization(BaseOptimization):
         sim_cfg: dict = dict(),
         obj_cfgs=dict(),
         operation_device=torch.device("cuda:0"),
-    ):  
+    ):
         design_region_param_cfgs_copy = design_region_param_cfgs.copy()
         design_region_param_cfgs = dict()
         for region_name in device.design_region_cfgs.keys():
             design_region_param_cfgs[region_name] = dict(
                 method=design_region_param_cfgs_copy.get("method", "levelset"),
-                rho_resolution=design_region_param_cfgs_copy.get("rho_resolution", [50, 0]),
-                interpolation=design_region_param_cfgs_copy.get("interpolation", "bilinear"),
+                rho_resolution=design_region_param_cfgs_copy.get(
+                    "rho_resolution", [50, 0]
+                ),
+                interpolation=design_region_param_cfgs_copy.get(
+                    "interpolation", "bilinear"
+                ),
                 transform=design_region_param_cfgs_copy.get("transform", []),
                 init_method=design_region_param_cfgs_copy.get("init_method", "random"),
                 binary_projection=design_region_param_cfgs_copy.get(
@@ -171,7 +175,7 @@ class MetaMirrorOptimization(BaseOptimization):
                     ),
                 ),
             )
-            
+
         cfgs = DefaultConfig()  ## this is default configurations
         ## here we accept new configurations and update the default configurations
         cfgs.update(

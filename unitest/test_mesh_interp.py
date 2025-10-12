@@ -18,9 +18,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import torch
 
 from core.invdes.invdesign import InvDesign
-from core.invdes.models import (
-    BendingOptimization,
-)
+from core.invdes.models import BendingOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import Bending
 from core.utils import set_torch_deterministic
@@ -106,30 +104,34 @@ if __name__ == "__main__":
             ]
         )
         Ezs.append(Ez)
-    
+
     ## downsample to the same lowest resolution
     for i in range(1, len(Ezs)):
         n = Ezs[i].shape[0] // Ezs[0].shape[0]
-        
+
         # Ezs[i] = Ezs[i][n//2-1::n,n//2-1::n]
-        Ezs[i] = Ezs[i][0::n,0::n]
+        Ezs[i] = Ezs[i][0::n, 0::n]
 
     ## we want to compare the Ez with the highesst resolution one with MSE error
-    for i in range(0, len(Ezs)-1):
+    for i in range(0, len(Ezs) - 1):
         # n = Ezs[-1].shape[0] // Ezs[i].shape[0]
         Ez = torch.view_as_real(Ezs[i])
         Ez_t = torch.view_as_real(Ezs[-1])
-        print(f"MSE between resolution {res_list[-1]} and resolution {res_list[0] * 2 ** i}: {torch.nn.functional.mse_loss(Ez, Ez_t)}")
-    
+        print(
+            f"MSE between resolution {res_list[-1]} and resolution {res_list[0] * 2 ** i}: {torch.nn.functional.mse_loss(Ez, Ez_t)}"
+        )
+
     ## we want to compare the Ez with the highesst resolution one with MSE error
-    for i in range(0, len(Ezs)-1):
-       
+    for i in range(0, len(Ezs) - 1):
+
         Ez1 = torch.view_as_real(Ezs[i])
-        Ez2 = torch.view_as_real(Ezs[i+1])
+        Ez2 = torch.view_as_real(Ezs[i + 1])
         Ez_t = torch.view_as_real(Ezs[-1])
         ### Richardson Extrapolation
-        Ez_interp = -1/3 * Ez1 + 4/3 * Ez2
-        print(f"MSE between resolution {res_list[-1]} and extrapolated resolution ({res_list[0] * 2 ** i},{25 * 2 ** (i+1)}): {torch.nn.functional.mse_loss(Ez_interp, Ez_t)}")
+        Ez_interp = -1 / 3 * Ez1 + 4 / 3 * Ez2
+        print(
+            f"MSE between resolution {res_list[-1]} and extrapolated resolution ({res_list[0] * 2 ** i},{25 * 2 ** (i+1)}): {torch.nn.functional.mse_loss(Ez_interp, Ez_t)}"
+        )
 
     # invdesign.optimize(
     #     plot=True,
