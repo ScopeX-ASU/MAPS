@@ -224,6 +224,10 @@ class N_Ports(BaseDevice):
             self.resolution,
             self.eps_bg,
         )
+        # self.epsilon_map_unique_count = int(np.unique(self.epsilon_map).size)
+        # print(
+        #     f"Initial epsilon_map unique values: {self.epsilon_map_unique_count}"
+        # )
 
         self.Nx, self.Ny, self.Nz = [
             int(round(i * self.resolution)) for i in self.cell_size

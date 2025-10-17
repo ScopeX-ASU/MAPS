@@ -8,6 +8,7 @@ FilePath: /MAPS/core/invdes/models/base_optimization.py
 import copy
 import os
 import sys
+from pathlib import Path
 from typing import List, Tuple
 
 import gdsfactory as gf
@@ -34,6 +35,7 @@ from .layers.device_base import N_Ports
 from .layers.fom_layer import SimulatedFoM
 from .layers.objective import ObjectiveFunc
 from .layers.parametrization import parametrization_builder
+from .layers.parametrization.base_parametrization import _convert_resolution
 from .layers.utils import plot_eps_field
 
 sys.path.pop(0)
@@ -489,7 +491,15 @@ class BaseOptimization(nn.Module):
             gdspath=os.path.join(self.sim_cfg["plot_root"], filename)
         )
 
-    def dump_data(self, filename_h5, filename_yml, step):
+    def dump_data(
+        self,
+        filename_h5,
+        filename_yml,
+        step,
+        *,
+        use_high_res_eps: bool = False,
+        binarize_eps: bool = False,
+    ):
         """
         switch to another different dump_data function
         for multiple times of shining the source
@@ -507,6 +517,61 @@ class BaseOptimization(nn.Module):
         dir_path = os.path.dirname(filename_h5)
         ensure_dir(dir_path)
         with torch.no_grad():
+            eps_tensor = self._hr_eps_map if use_high_res_eps else self._eps_map
+            if isinstance(eps_tensor, Tensor):
+                eps_tensor = eps_tensor.detach().clone()
+            elif isinstance(eps_tensor, np.ndarray):
+                eps_tensor = torch.from_numpy(np.array(eps_tensor, copy=True))
+            elif isinstance(eps_tensor, ArrayBox):
+                eps_tensor = torch.from_numpy(np.array(eps_tensor._value, copy=True))
+            else:
+                raise TypeError(f"Unsupported eps map type: {type(eps_tensor)}")
+
+            if binarize_eps:
+                eps_bg_global = getattr(self.device, "eps_bg", None)
+                if eps_bg_global is None:
+                    raise AttributeError(
+                        "Device is missing attribute 'eps_bg' required for binarization."
+                    )
+                eps_bg_global = float(
+                    eps_bg_global.item()
+                    if isinstance(eps_bg_global, torch.Tensor)
+                    else eps_bg_global
+                )
+
+                eps_high_candidates = []
+                for region_cfg in self.device.design_region_cfgs.values():
+                    eps_eff = region_cfg.get("eps_eff", region_cfg.get("eps", None))
+                    if eps_eff is None:
+                        raise KeyError(
+                            "'eps_eff' or 'eps' not found in design region configuration."
+                        )
+                    eps_high_candidates.append(
+                        float(
+                            eps_eff.item()
+                            if isinstance(eps_eff, torch.Tensor)
+                            else eps_eff
+                        )
+                    )
+
+                if not eps_high_candidates:
+                    raise ValueError(
+                        "Unable to determine high permittivity value for binarization."
+                    )
+
+                eps_high_global = max(eps_high_candidates)
+                global_threshold = 0.5 * (eps_high_global + eps_bg_global)
+                hi_global = torch.tensor(
+                    eps_high_global, dtype=eps_tensor.dtype, device=eps_tensor.device
+                )
+                lo_global = torch.tensor(
+                    eps_bg_global, dtype=eps_tensor.dtype, device=eps_tensor.device
+                )
+                eps_tensor = torch.where(
+                    eps_tensor >= global_threshold, hi_global, lo_global
+                )
+
+            eps_dump = eps_tensor.detach().cpu().numpy()
             adj_srcs, fields_adj, field_adj_normalizer = (
                 self.objective.obtain_adj_srcs()
             )
@@ -524,8 +589,11 @@ class BaseOptimization(nn.Module):
                 with h5py.File(filename, "w") as f:
                     # eps
                     f.create_dataset(
-                        "eps_map", data=self._eps_map.detach().cpu().numpy()
+                        "eps_map", data=eps_dump
                     )  # 2d numpy array
+                    # eps_unique_count = np.unique(eps_dump).size
+                    # f.attrs["eps_map_unique_count"] = int(eps_unique_count)
+                    # print(f"eps_map unique values: {eps_unique_count}")
                     # all the slices
                     for slice_name, slice in self.device.port_monitor_slices.items():
                         if isinstance(slice, np.ndarray):
@@ -805,4 +873,104 @@ class BaseOptimization(nn.Module):
         results.update(design_region_eps_dict)
         results.update({"eps_map": eps_map})
 
+        return results
+    
+    def evaluation(self, image_path):
+        """Evaluate a layout supplied as a PNG image or an HDF5 eps_map."""
+        if len(self.device.design_region_masks) != 1:
+            raise NotImplementedError(
+                "Image-based evaluation currently supports a single design region."
+            )
+
+        image_path = Path(image_path)
+        if not image_path.is_file():
+            raise FileNotFoundError(f"Image file not found: {image_path}")
+
+        region_name, region_mask = next(iter(self.device.design_region_masks.items()))
+        region_cfg = self.device.design_region_cfgs[region_name]
+        eps_lo = torch.tensor(
+            float(region_cfg["eps_bg"]),
+            dtype=self.epsilon_map.dtype,
+            device=self.operation_device,
+        )
+        eps_hi = torch.tensor(
+            float(region_cfg["eps"]),
+            dtype=self.epsilon_map.dtype,
+            device=self.operation_device,
+        )
+
+        if image_path.suffix.lower() == ".h5":
+            with h5py.File(image_path, "r") as handle:
+                if "eps_map" not in handle:
+                    raise KeyError(f"Dataset 'eps_map' not found in {image_path}.")
+                eps_map = np.array(handle["eps_map"])
+            if eps_map.ndim != 2:
+                raise ValueError(
+                    f"Expected a 2D eps_map from {image_path}, received shape {eps_map.shape}."
+                )
+            if np.iscomplexobj(eps_map):
+                eps_map = np.abs(eps_map)
+            full_map = torch.from_numpy(
+                eps_map.astype(np.float32, copy=False)
+            ).to(device=self.operation_device, dtype=self.epsilon_map.dtype)
+            # Clamp to the physically valid permittivity range if numerical noise exists.
+            min_eps = float(eps_lo.detach().cpu().item())
+            max_eps = float(eps_hi.detach().cpu().item())
+            full_map = full_map.clamp(min=min_eps, max=max_eps)
+        else:
+            from PIL import Image
+
+            img = Image.open(image_path).convert("L")
+            density = np.asarray(img, dtype=np.float32) / 255.0
+            density_tensor = torch.from_numpy(density).to(
+                device=self.operation_device, dtype=self.epsilon_map.dtype
+            )
+            full_map = eps_lo + density_tensor * (eps_hi - eps_lo)
+
+
+        hr_eps_fullmap = full_map
+        target_size = (
+            region_mask.x.stop - region_mask.x.start,
+            region_mask.y.stop - region_mask.y.start,
+        )
+        if min(target_size) <= 0:
+            raise ValueError(f"Invalid target size derived from region mask: {target_size}")
+
+        eps_span = eps_hi - eps_lo
+        if torch.allclose(eps_span, torch.zeros_like(eps_span)):
+            raise ValueError("High and low permittivity values are identical; cannot normalize.")
+
+        hr_region_mask = self.hr_device.design_region_masks[region_name]
+        normalized = ((hr_eps_fullmap - eps_lo) / eps_span).clamp(0.0, 1.0)[hr_region_mask]
+        src_res = int(self.hr_device.sim_cfg["resolution"])
+        tar_res = int(round(1000 / src_res)) * src_res
+        hr_size = [
+            max(1, int(round(dim * tar_res / src_res))) for dim in normalized.shape[-2:]
+        ]
+        hr_size = [
+            max(1, int(round(size / tgt) * tgt)) if tgt != 0 else size
+            for size, tgt in zip(hr_size, target_size)
+        ]
+
+        normalized = _convert_resolution(
+            normalized,
+            intplt_mode="nearest",
+            target_size=hr_size,
+        )
+        normalized = _convert_resolution(
+            normalized,
+            subpixel_smoothing=True,
+            eps_r=float(eps_hi.detach().cpu().item()),
+            eps_bg=float(eps_lo.detach().cpu().item()),
+            target_size=target_size,
+        )
+        low_res_region = eps_lo + normalized * eps_span
+
+        eps_map = self.epsilon_map.clone()
+        eps_map[region_mask] = low_res_region
+
+        with torch.no_grad():
+            obj = self.objective_layer([eps_map])
+
+        results = {"obj": obj, "breakdown": self.objective.breakdown}
         return results

@@ -2,7 +2,12 @@ import os
 import subprocess
 from multiprocessing import Manager, Pool, Queue
 
-script = "data/fdfd/generate_mdm.py"
+# script = "data/fdfd/generate_mdm.py"
+# script = "data/fdfd/generate_wdm.py"
+# script = "data/fdfd/generate_tdm.py"
+# script = "data/fdfd/generate_bending.py"
+# script = "data/fdfd/generate_crossing.py"
+script = "data/fdfd/generate_od.py"
 
 
 def metacoupler_launcher(queue):

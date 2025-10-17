@@ -76,7 +76,8 @@ def optical_diode_opt(
         port_width=(input_port_width, output_port_width),
         device=operation_device,
     )
-    hr_device = device.copy(resolution=310)
+    # hr_device = device.copy(resolution=310)
+    hr_device = device.copy(resolution=1000)
     print(device)
     opt = OpticalDiodeOptimization(
         device=device,
@@ -235,9 +236,19 @@ def optical_diode_opt(
             cosine_similarity = compare_designs(
                 last_design_region_dict, current_design_region_dict
             )
-            if cosine_similarity < 0.996 or step == n_epoch - 1 or each_step:
+            if (
+                cosine_similarity < 0.998
+                or step == n_epoch - 1
+                or each_step
+                or step % 5 == 0
+            ):
+                # if cosine_similarity < 0.996 or step == n_epoch - 1 or each_step:
                 opt.dump_data(
-                    filename_h5=filename_h5, filename_yml=filename_yml, step=step
+                    filename_h5=filename_h5,
+                    filename_yml=filename_yml,
+                    step=step,
+                    use_high_res_eps=True,
+                    binarize_eps=True,
                 )
                 last_design_region_dict = current_design_region_dict
                 dumped_data = True

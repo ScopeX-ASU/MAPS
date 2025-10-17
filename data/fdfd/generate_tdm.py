@@ -49,9 +49,9 @@ def tdm_opt(
         round((target_cell_size - 2 * port_len) * resolution) / resolution,
         round((target_cell_size - 2 * port_len) * resolution) / resolution,
     ]
-    assert (
-        round(tdm_region_size[0] + 2 * port_len, 2) == target_cell_size
-    ), f"right hand side: {tdm_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
+    assert round(tdm_region_size[0] + 2 * port_len, 2) == target_cell_size, (
+        f"right hand side: {tdm_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
+    )
 
     input_port_width = 0.48
     output_port_width = 0.48
@@ -76,7 +76,9 @@ def tdm_opt(
         port_width=(input_port_width, output_port_width),
         device=operation_device,
     )
-    hr_device = device.copy(resolution=310)
+    # hr_device = device.copy(resolution=50)
+    hr_device = device.copy(resolution=1000)
+    # hr_device = device.copy(resolution=310)
     print(device)
     opt = TDMOptimization(
         device=device,
@@ -86,7 +88,7 @@ def tdm_opt(
     ).to(operation_device)
     print(opt)
     n_epoch = 100
-    optimizer = torch.optim.Adam(opt.parameters(), lr=0.02)
+    optimizer = torch.optim.Adam(opt.parameters(), lr=0.01)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=n_epoch, eta_min=0.0002
     )
@@ -175,7 +177,7 @@ def tdm_opt(
         print(f"Step {step}:", end=" ")
         for k, obj in results["breakdown"].items():
             print(f"{k}: {obj['value']:.3f}", end=", ")
-        print()
+        print(f"sharpness: {sharpness:.3f}")
 
         (-results["obj"]).backward()
         current_design_region_dict = opt.get_design_region_eps_dict()
@@ -203,6 +205,7 @@ def tdm_opt(
                 print(
                     f"Early stopping at step {step}: No significant changes in {patience} epochs."
                 )
+                # pass
                 break
 
         if last_design_region_dict is None:
@@ -231,9 +234,19 @@ def tdm_opt(
             cosine_similarity = compare_designs(
                 last_design_region_dict, current_design_region_dict
             )
-            if cosine_similarity < 0.996 or step == n_epoch - 1 or each_step:
+            if (
+                cosine_similarity < 0.998
+                or step == n_epoch - 1
+                or each_step
+                or step % 5 == 0
+            ):
+                # if cosine_similarity < 0.996 or step == n_epoch - 1 or each_step:
                 opt.dump_data(
-                    filename_h5=filename_h5, filename_yml=filename_yml, step=step
+                    filename_h5=filename_h5,
+                    filename_yml=filename_yml,
+                    step=step,
+                    use_high_res_eps=True,
+                    binarize_eps=True,
                 )
                 last_design_region_dict = current_design_region_dict
                 dumped_data = True

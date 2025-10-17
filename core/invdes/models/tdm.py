@@ -260,12 +260,12 @@ class TDMOptimization(BaseOptimization):
                 method="levelset",
                 rho_resolution=[25, 25],
                 transform=[
-                    dict(
-                        type="blur",
-                        mfs=0.1,
-                        resolutions=[hr_device.resolution, hr_device.resolution],
-                        dim="xy",
-                    ),
+                    # dict(
+                    #     type="blur",
+                    #     mfs=0.1,
+                    #     resolutions=[hr_device.resolution, hr_device.resolution],
+                    #     dim="xy",
+                    # ),
                     dict(type="binarize"),
                 ],  # there is no symmetry in this design region
                 init_method="ones",
@@ -274,7 +274,8 @@ class TDMOptimization(BaseOptimization):
                 binary_projection=dict(
                     fw_threshold=100,
                     bw_threshold=100,
-                    mode="regular",
+                    mode="ste",
+                    # mode="regular",
                 ),
             )
         cfgs = DefaultConfig()  ## this is default configurations

@@ -9,7 +9,8 @@ __pycache__/
 *.jpg
 *.gds
 *.out
-data/*
+# data/*
+# !data/fdfd/*.py
 
 # Distribution / packaging
 .Python

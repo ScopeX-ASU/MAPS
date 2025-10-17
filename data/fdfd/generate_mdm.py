@@ -16,6 +16,9 @@ from core.utils import DeterministicCtx, SharpnessScheduler, set_torch_determini
 from thirdparty.ceviche.constants import *
 
 
+# torch.set_printoptions(profile="full")
+
+
 def compare_designs(design_regions_1, design_regions_2):
     similarity = []
     for k, v in design_regions_1.items():
@@ -44,9 +47,9 @@ def mdm_opt(
         round((target_cell_size - 2 * port_len) * resolution) / resolution,
         round((target_cell_size - 2 * port_len) * resolution) / resolution,
     ]
-    assert (
-        round(mdm_region_size[0] + 2 * port_len, 2) == target_cell_size
-    ), f"right hand side: {mdm_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
+    assert round(mdm_region_size[0] + 2 * port_len, 2) == target_cell_size, (
+        f"right hand side: {mdm_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
+    )
 
     input_port_width = 0.8
     output_port_width = 0.8
@@ -71,7 +74,9 @@ def mdm_opt(
         port_width=(input_port_width, output_port_width),
         device=operation_device,
     )
-    hr_device = device.copy(resolution=310)
+    # hr_device = device.copy(resolution=50)
+    # hr_device = device.copy(resolution=310)
+    hr_device = device.copy(resolution=1000)
     print(device)
     opt = MDMOptimization(
         device=device,
@@ -226,9 +231,18 @@ def mdm_opt(
             cosine_similarity = compare_designs(
                 last_design_region_dict, current_design_region_dict
             )
-            if cosine_similarity < 0.996 or step == n_epoch - 1 or each_step:
+            if (
+                cosine_similarity < 0.996
+                or step == n_epoch - 1
+                or each_step
+                or step % 5 == 0
+            ):
                 opt.dump_data(
-                    filename_h5=filename_h5, filename_yml=filename_yml, step=step
+                    filename_h5=filename_h5,
+                    filename_yml=filename_yml,
+                    step=step,
+                    use_high_res_eps=True,
+                    binarize_eps=True,
                 )
                 last_design_region_dict = current_design_region_dict
                 dumped_data = True

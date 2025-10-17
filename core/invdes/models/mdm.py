@@ -278,12 +278,12 @@ class MDMOptimization(BaseOptimization):
                 method="levelset",
                 rho_resolution=[25, 25],
                 transform=[
-                    dict(
-                        type="blur",
-                        mfs=0.1,
-                        resolutions=[hr_device.resolution, hr_device.resolution],
-                        dim="xy",
-                    ),
+                    # dict(
+                    #     type="blur",
+                    #     mfs=0.1,
+                    #     resolutions=[hr_device.resolution, hr_device.resolution],
+                    #     dim="xy",
+                    # ),
                     dict(type="binarize"),
                 ],
                 init_method="random",
