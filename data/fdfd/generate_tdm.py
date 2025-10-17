@@ -86,7 +86,7 @@ def tdm_opt(
     ).to(operation_device)
     print(opt)
     n_epoch = 100
-    optimizer = torch.optim.Adam(opt.parameters(), lr=0.02)
+    optimizer = torch.optim.Adam(opt.parameters(), lr=0.01)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=n_epoch, eta_min=0.0002
     )

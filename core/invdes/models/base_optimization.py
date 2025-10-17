@@ -179,6 +179,12 @@ class BaseOptimization(nn.Module):
             solver=self.sim_cfg["solver"],
         )
 
+    def reset_levelset_sdf(self):
+        for name, design_region in self.design_region_param_dict.items():
+            if hasattr(design_region, "reset_levelset_sdf"):
+                print(f"Reset levelset to SDF for design region {name}.")
+                design_region.reset_levelset_sdf()
+
     def reset_parameters(self):
         for design_region in self.design_region_param_dict.values():
             design_region.reset_parameters()

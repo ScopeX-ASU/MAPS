@@ -260,15 +260,16 @@ class TDMOptimization(BaseOptimization):
                 method="levelset",
                 rho_resolution=[25, 25],
                 transform=[
-                    dict(
-                        type="blur",
-                        mfs=0.1,
-                        resolutions=[hr_device.resolution, hr_device.resolution],
-                        dim="xy",
-                    ),
+                    # dict(
+                    #     type="blur",
+                    #     mfs=0.04,
+                    #     resolutions=[hr_device.resolution, hr_device.resolution],
+                    #     dim="xy",
+                    # ),
                     dict(type="binarize"),
                 ],  # there is no symmetry in this design region
                 init_method="ones",
+                # init_method="random",
                 denorm_mode="linear_eps",
                 interpolation="bilinear",
                 binary_projection=dict(

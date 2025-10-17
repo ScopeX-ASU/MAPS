@@ -13,7 +13,6 @@ sys.path.insert(
 import torch
 from pyutils.config import Config
 
-from core.invdes import builder
 from core.invdes.invdesign import InvDesign
 from core.invdes.models import TDMOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
@@ -76,7 +75,7 @@ if __name__ == "__main__":
         device=operation_device,
     )
 
-    hr_device = device.copy(resolution=50)
+    hr_device = device.copy(resolution=310)
     print(device)
     opt = TDMOptimization(
         device=device,
@@ -89,6 +88,14 @@ if __name__ == "__main__":
         devOptimization=opt,
         run=Config(
             n_epochs=100,
+        ),
+        optimizer=Config(
+            # name="adam",
+            # lr=0.01,
+            # name="lbfgs",
+            # line_search_fn="strong_wolfe",
+            # lr=1e-2,
+            weight_decay=0,
         ),
         plot_cfgs=Config(
             plot=True,
