@@ -8,15 +8,13 @@ from typing import Optional
 
 import torch
 from torch import Tensor
-
 from torch.optim.optimizer import (
+    Optimizer,
+    ParamsT,
     _disable_dynamo_if_unsupported,
     _params_doc,
     _to_scalar,
-    Optimizer,
-    ParamsT,
 )
-
 
 __all__ = ["Muon"]
 
