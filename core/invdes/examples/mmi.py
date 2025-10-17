@@ -49,29 +49,53 @@ if __name__ == "__main__":
             use_autodiff=False,
         )
     )
+    num_inports = 3
     num_outports = 3
+
+    target_unitary_smatrix = torch.randn(
+        (num_inports, num_outports), dtype=torch.complex64, device=operation_device
+    )
+    u, s, v = torch.linalg.svd(target_unitary_smatrix)
+    target_unitary_smatrix = torch.matmul(u, v) * 0.95
+    target_norm = torch.norm(target_unitary_smatrix)
+    print(f"target unitary smatrix:\n{target_unitary_smatrix}")
+    """ e.g., target unitary smatrix:
+    [[-0.1627-0.6450j,  0.6381-0.2135j, -0.0702-0.0481j],
+     [-0.5426-0.0271j, -0.0188+0.5920j, -0.5033+0.0567j],
+     [-0.2311+0.3339j,  0.2916+0.1178j,  0.2743-0.7506j]]
+
+    trained matrix, 0.581 relative L2 norm error
+    [[-0.1511-0.6146j,  0.6196-0.2099j, -0.0684-0.0495j,]
+     [-0.4896-0.0319j, -0.0191+0.5528j, -0.4856+0.0568j,]
+     [-0.2111+0.2967j,  0.2755+0.1021j,  0.2669-0.7242j]
+    """
 
     def fom_func(breakdown):
         ## maximization fom
-        fom = 1
-        s_param_list = []
         for key, obj in breakdown.items():
-            if "fwd_trans" in key:
-                fom = fom * obj["value"]
-            elif "phase" in key:
-                s_param_list.append(obj["value"])
-        if len(s_param_list) == 0:
-            return fom
-        if isinstance(s_param_list[0], torch.Tensor):
-            s_params = torch.tensor(s_param_list)
-            s_params_std = torch.std(s_params)
-            fom = fom - s_params_std
-        else:
-            s_params = npa.array(s_param_list)
-            s_params_std = npa.std(s_params)
-            fom = fom - s_params_std
+            if key == "smatrix":
+                s_matrix = obj["value"]  # shape (num_outports, num_inports)
+                fom = (
+                    -torch.norm(s_matrix - target_unitary_smatrix.flatten())
+                    / target_norm
+                )
+        # for key, obj in breakdown.items():
+        #     if "fwd_trans" in key:
+        #         fom = fom * obj["value"]
+        #     elif "phase" in key:
+        #         s_param_list.append(obj["value"])
+        # if len(s_param_list) == 0:
+        #     return fom
+        # if isinstance(s_param_list[0], torch.Tensor):
+        #     s_params = torch.tensor(s_param_list)
+        #     s_params_std = torch.std(s_params)
+        #     fom = fom - s_params_std
+        # else:
+        #     s_params = npa.array(s_param_list)
+        #     s_params_std = npa.std(s_params)
+        #     fom = fom - s_params_std
         # maximize the forward transmission and minimize the standard deviation of the s-parameters
-        return fom, {"phase std": {"weight": -1, "value": s_params_std}}
+        return fom, {"smatrix_err": {"weight": -1, "value": fom}}
 
     obj_cfgs = dict(_fusion_func=fom_func)
 
@@ -80,8 +104,10 @@ if __name__ == "__main__":
         box_size=mmi_region_size,
         port_len=(port_len, port_len),
         port_width=(input_port_width, output_port_width),
+        num_inports=num_inports,
         num_outports=num_outports,
         device=operation_device,
+        port_box_margin=0.5,
     )
 
     hr_device = device.copy(resolution=100)
@@ -102,9 +128,14 @@ if __name__ == "__main__":
             plot=True,
             interval=5,
             plot_name=f"{exp_name}",
-            objs=["fwd_trans_1"],
-            field_keys=[("in_slice_1", 1.55, "Ez1", 300)],
-            in_slice_names=["in_slice_1"],
+            objs=["smatrix_err", "smatrix_err", "smatrix_err"],
+            field_keys=[
+                ("in_slice_1", 1.55, "Ez1", 300),
+                ("in_slice_2", 1.55, "Ez1", 300),
+                ("in_slice_3", 1.55, "Ez1", 300),
+            ],
+            in_slice_names=["in_slice_1", "in_slice_2", "in_slice_3"],
+            filename_suffixes=["s1", "s2", "s3"],
             exclude_port_names=[],
         ),
         checkpoint_cfgs=Config(

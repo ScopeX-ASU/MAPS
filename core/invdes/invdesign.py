@@ -204,15 +204,23 @@ class InvDesign:
             i % plot_cfgs.interval == 0 or i == self._cfg.run.n_epochs - 1
         ):
             plot_filename = plot_cfgs.plot_name
+            plot_filename_suffixes = plot_cfgs.get(
+                "filename_suffixes", [""] * len(plot_cfgs.objs)
+            )
             if plot_filename.endswith(".png"):
                 plot_filename = plot_filename[:-4]
             for j in range(len(plot_cfgs.objs)):
                 # (port_name, wl, mode, temp), extract pol from mode, e.g., Ez1 -> Ez
                 pol = plot_cfgs.field_keys[j][2][:2]
+                suffix = plot_filename_suffixes[j]
+                if suffix != "":
+                    suffix = "_" + suffix
                 plot_kwargs = dict(
                     eps_map=self.devOptimization._eps_map,
                     obj=output_dict["breakdown"][plot_cfgs.objs[j]]["value"],
-                    plot_filename=plot_filename + f"_{i}" + f"_{plot_cfgs.objs[j]}.jpg",
+                    plot_filename=plot_filename
+                    + f"_{i}"
+                    + f"_{plot_cfgs.objs[j]}{suffix}.jpg",
                     field_key=plot_cfgs.field_keys[j],
                     # field_component=pol,
                     field_component=(
@@ -269,7 +277,15 @@ class InvDesign:
 
             log = f"Step {i:3d} (sharp: {feed_dict['sharpness']:.1f}) "
             log += ", ".join(
-                [f"{k}: {obj['value']:.4f}" for k, obj in results["breakdown"].items()]
+                [
+                    (
+                        f"{k}: {obj['value'].data}"
+                        if isinstance(obj["value"], torch.Tensor)
+                        and obj["value"].numel() > 1
+                        else f"{k}: {obj['value']:.4f}"
+                    )
+                    for k, obj in results["breakdown"].items()
+                ]
             )
             log += self._log
             if verbose:

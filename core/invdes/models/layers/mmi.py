@@ -39,22 +39,28 @@ class MMI(N_Ports):
         box_size: Tuple[float] = (1.5, 1.5),
         port_len: Tuple[float] = (1.8, 1.8),
         port_width: Tuple[float] = (0.48, 0.48),
+        num_inports: int = 1,
         num_outports: int = 2,
         port_box_margin: float = 0.2,
         device: torch.device = torch.device("cuda:0"),
     ):
-        # ----------------------------------
-        # |                                |
-        # |                                |
-        # |                                |
-        # |[1]                             |
-        # |                                |
-        # |                                |
-        # |              [0]               |
-        # ----------------------------------
+        #   ----------------------------------
+        #   |                                |
+        # --|                                |--
+        #   |                                |
+        # --|[1]                             |--
+        #   |                                |
+        # --|                                |--
+        #   |              [0]               |
+        #   ----------------------------------
+        assert (
+            box_size[1] - 2 * port_box_margin >= num_inports * port_width[0]
+        ), "box_size[1] should be larger than num_inports * port_width[0]"
+
         assert (
             box_size[1] - 2 * port_box_margin >= num_outports * port_width[1]
-        ), "box_size[1] should be larger than num_outports * port_len[1]"
+        ), "box_size[1] should be larger than num_outports * port_width[1]"
+        self.num_inports = num_inports
         self.num_outports = num_outports
         wl_cen = sim_cfg["wl_cen"]
         if isinstance(material_r1, str):
@@ -73,15 +79,31 @@ class MMI(N_Ports):
 
         eps_bg_fn = material_fn_dict[material_bg]
 
-        port_cfgs = dict(
-            in_port_1=dict(
+        # port_cfgs = dict(
+        #     in_port_1=dict(
+        #         type="box",
+        #         direction="x",
+        #         center=[-(port_len[0] + box_size[0] / 2) / 2, 0],
+        #         size=[port_len[0] + box_size[0] / 2, port_width[0]],
+        #         eps=eps_r1_fn(wl_cen),
+        #     ),
+        # )
+        port_cfgs = dict()
+
+        inport_y_coords = np.linspace(
+            -box_size[1] / 2 + port_width[0] / 2 + port_box_margin,
+            box_size[1] / 2 - port_width[0] / 2 - port_box_margin,
+            num_inports,
+        )
+        for i in range(1, num_inports + 1):
+            port_cfgs[f"in_port_{i}"] = dict(
                 type="box",
                 direction="x",
-                center=[-(port_len[0] + box_size[0] / 2) / 2, 0],
+                center=[-(port_len[0] + box_size[0] / 2) / 2, inport_y_coords[i - 1]],
                 size=[port_len[0] + box_size[0] / 2, port_width[0]],
                 eps=eps_r1_fn(wl_cen),
-            ),
-        )
+            )
+
         outport_y_coords = np.linspace(
             -box_size[1] / 2 + port_width[1] / 2 + port_box_margin,
             box_size[1] / 2 - port_width[1] / 2 - port_box_margin,
@@ -123,18 +145,37 @@ class MMI(N_Ports):
         pml = self.sim_cfg["PML"][0]
         port_len = self.port_cfgs["in_port_1"]["size"][0]
         offset = 0.2 + pml
-        src_slice = self.build_port_monitor_slice(
-            port_name="in_port_1",
-            slice_name="in_slice_1",
-            rel_loc=offset / port_len,
-            rel_width=rel_width,
-        )
-        refl_slice = self.build_port_monitor_slice(
-            port_name="in_port_1",
-            slice_name="refl_slice_1",
-            rel_loc=(offset + 0.1) / port_len,
-            rel_width=rel_width,
-        )
+        # src_slice = self.build_port_monitor_slice(
+        #     port_name="in_port_1",
+        #     slice_name="in_slice_1",
+        #     rel_loc=offset / port_len,
+        #     rel_width=rel_width,
+        # )
+        # refl_slice = self.build_port_monitor_slice(
+        #     port_name="in_port_1",
+        #     slice_name="refl_slice_1",
+        #     rel_loc=(offset + 0.1) / port_len,
+        #     rel_width=rel_width,
+        # )
+        src_slices = [
+            self.build_port_monitor_slice(
+                port_name=f"in_port_{i}",
+                slice_name=f"in_slice_{i}",
+                rel_loc=offset / port_len,
+                rel_width=rel_width,
+            )
+            for i in range(1, self.num_inports + 1)
+        ]
+        refl_slices = [
+            self.build_port_monitor_slice(
+                port_name=f"in_port_{i}",
+                slice_name=f"refl_slice_{i}",
+                rel_loc=(offset + 0.1) / port_len,
+                rel_width=rel_width,
+            )
+            for i in range(1, self.num_inports + 1)
+        ]
+
         out_slices = [
             self.build_port_monitor_slice(
                 port_name=f"out_port_{i}",
@@ -144,46 +185,46 @@ class MMI(N_Ports):
             )
             for i in range(1, self.num_outports + 1)
         ]
-        # out_slice = self.build_port_monitor_slice(
-        #     port_name="out_port_1",
-        #     slice_name="out_port_1",
-        #     rel_loc=0.6,
-        #     rel_width=rel_width,
-        # )
         self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=rel_width)
         radiation_monitor = self.build_radiation_monitor(monitor_name="rad_monitor")
-        return src_slice, out_slices, refl_slice, radiation_monitor
+        return src_slices, out_slices, refl_slices, radiation_monitor
 
     def norm_run(self, verbose: bool = True):
         if verbose:
             logger.info("Start normalization run ...")
         # norm_run_sim_cfg = copy.deepcopy(self.sim_cfg)
         # norm_run_sim_cfg["numerical_solver"] = "solve_direct"
-        norm_source_profiles = self.build_norm_sources(
-            source_modes=("Ez1",),
-            input_port_name="in_port_1",
-            input_slice_name="in_slice_1",
-            wl_cen=self.sim_cfg["wl_cen"],
-            wl_width=self.sim_cfg["wl_width"],
-            n_wl=self.sim_cfg["n_wl"],
-            # solver=self.sim_cfg["solver"],
-            solver="ceviche",
-            plot=True,
-            require_sim=True,
-        )
+        norm_source_profiles = [
+            self.build_norm_sources(
+                source_modes=("Ez1",),
+                input_port_name=f"in_port_{i}",
+                input_slice_name=f"in_slice_{i}",
+                wl_cen=self.sim_cfg["wl_cen"],
+                wl_width=self.sim_cfg["wl_width"],
+                n_wl=self.sim_cfg["n_wl"],
+                # solver=self.sim_cfg["solver"],
+                solver="ceviche",
+                plot=True,
+                require_sim=True,
+            )
+            for i in range(1, self.num_inports + 1)
+        ]
 
-        norm_refl_profiles = self.build_norm_sources(
-            source_modes=("Ez1",),
-            input_port_name="in_port_1",
-            input_slice_name="refl_slice_1",
-            wl_cen=self.sim_cfg["wl_cen"],
-            wl_width=self.sim_cfg["wl_width"],
-            n_wl=self.sim_cfg["n_wl"],
-            # solver=self.sim_cfg["solver"],
-            solver="ceviche",
-            plot=True,
-            require_sim=False,
-        )
+        norm_refl_profiles = [
+            self.build_norm_sources(
+                source_modes=("Ez1",),
+                input_port_name=f"in_port_{i}",
+                input_slice_name=f"refl_slice_{i}",
+                wl_cen=self.sim_cfg["wl_cen"],
+                wl_width=self.sim_cfg["wl_width"],
+                n_wl=self.sim_cfg["n_wl"],
+                # solver=self.sim_cfg["solver"],
+                solver="ceviche",
+                plot=True,
+                require_sim=False,
+            )
+            for i in range(1, self.num_inports + 1)
+        ]
         norm_monitor_profiles = [
             self.build_norm_sources(
                 source_modes=("Ez1",),
