@@ -154,14 +154,14 @@ class MMIOptimization(BaseOptimization):
                 transform=[
                     # dict(type="mirror_symmetry", dims=[1]),
                     dict(
-                        type="blur",
-                        mfs=0.05,
+                        type="fft",
+                        mfs=0.1,
                         resolutions=[hr_device.resolution, hr_device.resolution],
                         dim="xy",
                     ),
                     dict(type="binarize"),
                 ],
-                init_method="ones",
+                init_method="random",
                 denorm_mode="linear_eps",
                 interpolation="bilinear",
                 binary_projection=dict(

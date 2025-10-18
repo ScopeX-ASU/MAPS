@@ -163,7 +163,18 @@ class SMatrixObjective(object):
                                     in_mode,
                                     temp,
                                 )
-                            ] = s_list[-1]
+                            ] = {
+                                "s_p": (
+                                    s_p / norm_power
+                                    if self.energy
+                                    else s_p / norm_power**0.5
+                                ),  # normalized by input power
+                                "s_m": (
+                                    s_m / norm_power
+                                    if self.energy
+                                    else s_m / norm_power**0.5
+                                ),  # normalized by input power
+                            }
 
         if isinstance(s_list[0], Tensor):
             return torch.stack(s_list)

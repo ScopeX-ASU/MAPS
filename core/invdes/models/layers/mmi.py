@@ -79,15 +79,6 @@ class MMI(N_Ports):
 
         eps_bg_fn = material_fn_dict[material_bg]
 
-        # port_cfgs = dict(
-        #     in_port_1=dict(
-        #         type="box",
-        #         direction="x",
-        #         center=[-(port_len[0] + box_size[0] / 2) / 2, 0],
-        #         size=[port_len[0] + box_size[0] / 2, port_width[0]],
-        #         eps=eps_r1_fn(wl_cen),
-        #     ),
-        # )
         port_cfgs = dict()
 
         inport_y_coords = np.linspace(
@@ -145,18 +136,7 @@ class MMI(N_Ports):
         pml = self.sim_cfg["PML"][0]
         port_len = self.port_cfgs["in_port_1"]["size"][0]
         offset = 0.2 + pml
-        # src_slice = self.build_port_monitor_slice(
-        #     port_name="in_port_1",
-        #     slice_name="in_slice_1",
-        #     rel_loc=offset / port_len,
-        #     rel_width=rel_width,
-        # )
-        # refl_slice = self.build_port_monitor_slice(
-        #     port_name="in_port_1",
-        #     slice_name="refl_slice_1",
-        #     rel_loc=(offset + 0.1) / port_len,
-        #     rel_width=rel_width,
-        # )
+
         src_slices = [
             self.build_port_monitor_slice(
                 port_name=f"in_port_{i}",
@@ -240,15 +220,4 @@ class MMI(N_Ports):
             )
             for i in range(1, self.num_outports + 1)
         ]
-        # norm_monitor_profiles = self.build_norm_sources(
-        #     source_modes=("Ez1",),
-        #     input_port_name="out_port_1",
-        #     input_slice_name="out_port_1",
-        #     wl_cen=self.sim_cfg["wl_cen"],
-        #     wl_width=self.sim_cfg["wl_width"],
-        #     n_wl=self.sim_cfg["n_wl"],
-        #     # solver=self.sim_cfg["solver"],
-        #     solver="ceviche",
-        #     plot=True,
-        # )
         return norm_source_profiles, norm_refl_profiles, norm_monitor_profiles
