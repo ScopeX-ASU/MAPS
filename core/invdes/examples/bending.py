@@ -50,7 +50,7 @@ if __name__ == "__main__":
             solver="ceviche_torch",
             border_width=[0, port_len, port_len, 0],
             resolution=50,
-            plot_root=f"./figs/bending_{exp_name}",
+            plot_root=f"./figs/{exp_name}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -60,7 +60,7 @@ if __name__ == "__main__":
 
     device = Bending(
         sim_cfg=sim_cfg,
-        bending_region_size=bending_region_size,
+        box_size=bending_region_size,
         port_len=(port_len, port_len),
         port_width=(input_port_width, output_port_width),
         device=operation_device,

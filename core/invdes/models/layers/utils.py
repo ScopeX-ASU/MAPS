@@ -104,8 +104,6 @@ def apply_regions_gpu(reg_list, xs, ys, eps_r_list, eps_bg, device="cuda"):
     for e, reg in zip(eps_r_list, reg_list):
         # Assume that reg is a lambda or function that can be applied to tensors
         material_mask = reg(xs, ys)  # This should return a boolean tensor
-        # print("this is the dtype of the eps_r", eps_r.dtype)
-        # print("this is the dtype of the e", e.dtype)
         eps_r[material_mask] = e
 
     return eps_r.cpu().numpy()
@@ -199,8 +197,6 @@ class AdjointGradient(torch.autograd.Function):
                         .to(permittivity_list[0].dtype)
                     )
 
-                # if len(grad.shape) == 2:  # summarize the gradient along different frquencies
-                #     grad = torch.sum(grad, dim=-1)
                 if adjoint_mode == "fdtd":
                     grad = grad.view_as(permittivity_list[0])
                 elif adjoint_mode == "fdfd_angler":
@@ -749,16 +745,6 @@ def plot_eps_field(
                                 xs = np.insert(xs, gap_idx + 1, np.nan)
                                 ys = np.insert(ys, gap_idx + 1, np.nan)
                         ax[i].plot(xs, ys, color, alpha=0.5)
-                    # if len(m_slice.x.shape) == 0:
-                    #     xs = m_slice.x * np.ones(len(m_slice.y))
-                    #     ys = m_slice.y
-                    #     # ax[i].plot(xs, ys, color, alpha=0.5)
-                    #     ax[i].scatter(xs, ys, color=color, alpha=0.05, s=0.5)
-                    # elif len(m_slice.y.shape) == 0:
-                    #     xs = m_slice.x
-                    #     ys = m_slice.y * np.ones(len(m_slice.x))
-                    #     # ax[i].plot(xs, ys, color, alpha=0.5)
-                    #     ax[i].scatter(xs, ys, color=color, alpha=0.05, s=0.5)
                     else:  # two axis are all arrays, this is a box, we draw its 4 edges
                         xs, ys = m_slice.x[:, 0], m_slice.y[0]
                         left_xs = xs[0] * np.ones(len(ys))
@@ -1145,8 +1131,7 @@ def get_modes(
             + diag_eps_r.dot(Dxf).dot(diag_eps_r_xx_inv).dot(Dxb) * (1 / k0) ** 2
         )
 
-    # n_max = np.sqrt(np.max(eps_cross)) * 0.92
-    n_max = np.sqrt(np.max(eps_cross))  # why 0.92???
+    n_max = np.sqrt(np.max(eps_cross))
     vals, vecs = solver_eigs(A, m, guess_value=n_max**2)
 
     if pol == "Hz":

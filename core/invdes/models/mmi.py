@@ -146,6 +146,7 @@ class MMIOptimization(BaseOptimization):
         obj_cfgs=dict(),
         operation_device=torch.device("cuda:0"),
     ):
+        _design_region_cfgs = design_region_param_cfgs
         design_region_param_cfgs = dict()
         for region_name in device.design_region_cfgs.keys():
             design_region_param_cfgs[region_name] = dict(
@@ -154,7 +155,7 @@ class MMIOptimization(BaseOptimization):
                 transform=[
                     # dict(type="mirror_symmetry", dims=[1]),
                     dict(
-                        type="fft",
+                        type="blur",
                         mfs=0.1,
                         resolutions=[hr_device.resolution, hr_device.resolution],
                         dim="xy",
@@ -170,6 +171,10 @@ class MMIOptimization(BaseOptimization):
                     mode="regular",
                 ),
             )
+            if region_name in _design_region_cfgs:
+                design_region_param_cfgs[region_name].update(
+                    _design_region_cfgs[region_name]
+                )
 
         cfgs = DefaultConfig()  ## this is default configurations
         # for i in range(1, device.num_outports + 1):

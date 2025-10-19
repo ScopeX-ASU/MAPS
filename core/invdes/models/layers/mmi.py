@@ -112,7 +112,7 @@ class MMI(N_Ports):
         geometry_cfgs = dict()
 
         design_region_cfgs = dict()
-        design_region_cfgs["mmi_region"] = dict(
+        design_region_cfgs["design_region_1"] = dict(
             type="box",
             center=[0, 0],
             size=box_size,
@@ -182,7 +182,6 @@ class MMI(N_Ports):
                 wl_cen=self.sim_cfg["wl_cen"],
                 wl_width=self.sim_cfg["wl_width"],
                 n_wl=self.sim_cfg["n_wl"],
-                # solver=self.sim_cfg["solver"],
                 solver="ceviche",
                 plot=True,
                 require_sim=True,
@@ -198,7 +197,6 @@ class MMI(N_Ports):
                 wl_cen=self.sim_cfg["wl_cen"],
                 wl_width=self.sim_cfg["wl_width"],
                 n_wl=self.sim_cfg["n_wl"],
-                # solver=self.sim_cfg["solver"],
                 solver="ceviche",
                 plot=True,
                 require_sim=False,
@@ -213,7 +211,6 @@ class MMI(N_Ports):
                 wl_cen=self.sim_cfg["wl_cen"],
                 wl_width=self.sim_cfg["wl_width"],
                 n_wl=self.sim_cfg["n_wl"],
-                # solver=self.sim_cfg["solver"],
                 solver="ceviche",
                 plot=True,
                 require_sim=False,

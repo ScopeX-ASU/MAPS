@@ -1,11 +1,3 @@
-"""
-Description:
-this code is define the dataset class used for the ML4FDFD model
-I changed it from NeurOLight MMI dataset
-
-need to accomodate different types of devices
-"""
-
 import glob
 import os
 from typing import Callable, Dict, List, Optional, Tuple
@@ -122,6 +114,7 @@ class FDFD(VisionDataset):
                 )
             )
         ]
+
         total_device_id = []
         for filename in all_samples:
             device_id = filename.split("_id-")[1].split("_")[0]
@@ -409,27 +402,30 @@ class FDFDDataset:
 def test_fdfd():
     # pdb.set_trace()
     fdfd = FDFD(
-        device_type="metacoupler",
-        root="../../data",
+        device_type="bending",
+        root="./data",
+        data_dir="raw_opt_traj",
         download=False,
-        processed_dir="metacoupler",
+        processed_dir="bending",
     )
     print(len(fdfd.data))
     fdfd = FDFD(
-        device_type="metacoupler",
-        root="../../data",
+        device_type="bending",
+        root="./data",
+        data_dir="raw_opt_traj",
         train=False,
         download=False,
-        processed_dir="metacoupler",
+        processed_dir="bending",
     )
     print(len(fdfd.data))
     fdfd = FDFDDataset(
-        device_type="metacoupler",
-        root="../../data",
+        device_type="bending",
+        root="./data",
+        data_dir="raw_opt_traj",
         split="train",
         test_ratio=0.1,
         train_valid_split_ratio=[0.9, 0.1],
-        processed_dir="metacoupler",
+        processed_dir="bending",
     )
     print(len(fdfd))
 

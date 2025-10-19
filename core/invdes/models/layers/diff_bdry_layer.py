@@ -67,22 +67,6 @@ class SmoothRidge(nn.Module):
                 )
                 + 1
             )
-        # print("this is the w_left: ", w_left)
-        # print("this is the w_right: ", w_right)
-        # print("this is the width: ", width)
-        # check_for_nan(x, "input")
-        # check_for_nan(torch.exp(-(((x+self.total_length)**2 - (w_left)**2) * sharpness) * (self.total_length / (3*w_left))**2), "left")
-        # check_for_nan(torch.exp((((x-center)**2 - (width/2)**2) * sharpness) * (self.total_length / (3*width)) ** 2), "middle")
-        # check_for_nan(torch.exp(-((x**2 - (w_right)**2) * sharpness) * (self.total_length / (3*w_right))**2), "right")
-        # output = torch.where(
-        #     x < -width/2 + center,
-        #     1/(torch.clamp(torch.exp(-(((x+self.total_length)**2 - (w_left)**2) * sharpness) * (self.total_length / (3*w_left))**2), max=10000) + 1),
-        #     torch.where(
-        #         x < width/2 + center,
-        #         1/(torch.clamp(torch.exp((((x-center)**2 - (width/2)**2) * sharpness) * (self.total_length / (3*width)) ** 2), max=10000) + 1),
-        #         1/(torch.clamp(torch.exp(-((x**2 - (w_right)**2) * sharpness) * (self.total_length / (3*w_right))**2), max=10000) + 1),
-        #     )
-        # )
         return output
 
 
@@ -92,19 +76,15 @@ class multi_diff_bdry(nn.Module):
         self.total_height = total_height
 
     def forward(self, x, segment_widths, segment_types, Temp):
-        # 确保输入 x 是一个 torch.Tensor
         if not isinstance(x, torch.Tensor):
             x = torch.tensor(x)
 
-        # 初始化结果张量
         result = torch.zeros_like(x)
 
-        # 计算每个段的分界点
         segment_boundaries = torch.cumsum(segment_widths, dim=0)
         print("this is the segment_boundaries: ", segment_boundaries)
 
-        # 迭代处理每个分段
-        current_start = torch.tensor(0.0)  # 起始边界
+        current_start = torch.tensor(0.0)
         for i, (boundary, segment_type) in enumerate(
             zip(segment_boundaries, segment_types)
         ):
@@ -112,7 +92,6 @@ class multi_diff_bdry(nn.Module):
             middle_point = (current_start + boundary) / 2
 
             if i == 0:
-                # 根据 segment_type 选择不同的函数
                 if segment_type == 0:
                     result = torch.where(
                         in_segment,
@@ -140,7 +119,6 @@ class multi_diff_bdry(nn.Module):
                         result,
                     )  # type 0: media
             else:
-                # 根据 segment_type 选择不同的函数
                 if segment_type == 0:
                     result = torch.where(
                         in_segment,
@@ -180,10 +158,8 @@ class multi_diff_bdry(nn.Module):
                         result,
                     )  # type 0: media
 
-            # 更新起始边界
             current_start = boundary
 
-        # 处理最后一个区间右端点
         result = torch.where(
             x >= current_start, torch.sin(x) if segment_type == 1 else x**2, result
         )

@@ -6,7 +6,6 @@ import mlflow
 import torch
 import torch.cuda.amp as amp
 import torch.fft
-import wandb
 from pyutils.config import configs
 from pyutils.general import AverageMeter
 from pyutils.general import logger as lg
@@ -17,6 +16,7 @@ from pyutils.torch_train import (
 )
 from pyutils.typing import Criterion, Optimizer, Scheduler
 
+import wandb
 from core import builder
 
 

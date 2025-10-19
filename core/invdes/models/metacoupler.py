@@ -224,6 +224,7 @@ class MetaCouplerOptimization(BaseOptimization):
         obj_cfgs=dict(),
         operation_device=torch.device("cuda:0"),
     ):
+        _design_region_cfgs = design_region_param_cfgs
         design_region_param_cfgs = dict()
         for region_name in device.design_region_cfgs.keys():
             design_region_param_cfgs[region_name] = dict(
@@ -240,6 +241,10 @@ class MetaCouplerOptimization(BaseOptimization):
                     mode="regular",
                 ),
             )
+            if region_name in _design_region_cfgs:
+                design_region_param_cfgs[region_name].update(
+                    _design_region_cfgs[region_name]
+                )
 
         cfgs = DefaultConfig()  ## this is default configurations
         ## here we accept new configurations and update the default configurations

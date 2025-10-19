@@ -1,34 +1,18 @@
-import copy
-from functools import lru_cache
-from turtle import pos
-from typing import List, Optional, Tuple
+from typing import Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from einops import rearrange
 from mmcv.cnn.bricks import build_activation_layer, build_conv_layer, build_norm_layer
 from mmengine.registry import MODELS
-from neuralop.layers.fno_block import FNOBlocks
-from neuralop.layers.mlp import MLP
-from neuralop.layers.spectral_convolution import SpectralConv
-from neuralop.models import FNO
-from pyutils.activation import Swish
-from pyutils.torch_train import set_torch_deterministic
 from timm.models.layers import DropPath
-from torch import nn
 from torch.functional import Tensor
 from torch.types import Device
 
-from core.fdfd.fdfd import fdfd_ez
-from core.train.utils import resize_to_targt_size
-from core.utils import Si_eps, SiO2_eps
-
 from .layers.fno_conv2d import FNOConv2d
 from .layers.fourier_feature import LearnableFourierFeatures
-from .model_base import ConvBlock, LinearBlock, ModelBase
+from .model_base import ConvBlock, ModelBase
 
 __all__ = ["FNO2d"]
 

@@ -50,7 +50,7 @@ class DefaultSimulationConfig(Config):
         super().__init__()
         self.update(
             dict(
-                solver="ceviche",
+                solver="ceviche_torch",
                 binary_projection=dict(
                     fw_threshold=100,
                     bw_threshold=100,
@@ -63,7 +63,7 @@ class DefaultSimulationConfig(Config):
                 wl_cen=1.55,
                 wl_width=0,
                 n_wl=1,
-                plot_root="./figs/metacoupler",
+                plot_root="./figs/bending",
             )
         )
 
@@ -478,10 +478,11 @@ class BaseOptimization(nn.Module):
             raise ValueError(f"Unknown type of eps_map: {type(self._eps_map)}")
         final_design_eps = self._eps_map.detach().cpu().numpy()
         plt.figure()
-        plt.imshow(final_design_eps, cmap="jet")
+        plt.imshow(final_design_eps.T, origin="lower", cmap="gray_r")
         plt.colorbar()
         plt.savefig(
-            os.path.join(self.sim_cfg["plot_root"], "final_design_eps" + ".png")
+            os.path.join(self.sim_cfg["plot_root"], "final_design_eps" + ".png"),
+            dpi=300,
         )
         plt.close()
         eps_conponent = gf.read.from_np(

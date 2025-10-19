@@ -8,7 +8,6 @@ from typing import List
 import mlflow
 import torch
 import torch.cuda.amp as amp
-import wandb
 from pyutils.config import configs
 from pyutils.general import AverageMeter
 from pyutils.general import logger as lg
@@ -21,8 +20,11 @@ from pyutils.torch_train import (
 )
 from pyutils.typing import Criterion, Optimizer, Scheduler
 
+import wandb
 from core import builder
-from core.models.layers import *
+from core.invdes.invdesign import InvDesign
+from core.invdes.models.base_optimization import DefaultSimulationConfig
+from core.train.models.layers import *
 
 
 def train(
@@ -288,19 +290,46 @@ def main() -> None:
     if int(configs.run.deterministic) == True:
         set_torch_deterministic(int(configs.run.random_state))
 
-    device = builder.make_device(
-        device=operation_device,
+    lg.info(configs)
+
+    ### prepare simulation config
+    sim_cfg = DefaultSimulationConfig()
+    sim_cfg.update(configs.model.sim_cfg)
+    sim_cfg.update(
+        dict(plot_root=os.path.join(configs.plot.root, configs.plot.dir_name))
     )
 
+    ## prepare device and high-resolution device
+    device = builder.make_device(
+        device=operation_device,
+        sim_cfg=sim_cfg,
+    )
+    hr_device = device.copy(resolution=configs.model.get("hr_resolution", 310))
+
+    lg.info(device)
+    ## create optimization plan
     model = builder.make_model(
         device=operation_device,
         random_state=(
             int(configs.run.random_state) if int(configs.run.deterministic) else None
         ),
         optDevice=device,
+        hr_optDevice=hr_device,
+        sim_cfg=sim_cfg,
     )
     lg.info(model)
 
+    invdesign = InvDesign(
+        devOptimization=model,
+        run=configs.run,
+        plot_cfgs=configs.plot,
+        checkpoint_cfgs=configs.checkpoint,
+        optimizer=configs.optimizer,
+        lr_scheduler=configs.lr_scheduler,
+        sharp_scheduler=configs.sharp_scheduler,
+    )
+    invdesign.optimize()
+    exit(0)
     # ---------- these two criterion are not needed here ------------
     # criterion = builder.make_criterion(configs.criterion.name, configs.criterion).to(
     #     device

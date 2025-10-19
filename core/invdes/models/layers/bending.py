@@ -34,7 +34,7 @@ class Bending(N_Ports):
             "wl_width": 0,
             "n_wl": 1,
         },
-        bending_region_size: Tuple[float] = (1.5, 1.5),
+        box_size: Tuple[float] = (1.5, 1.5),
         port_len: Tuple[float] = (1.8, 1.8),
         port_width: Tuple[float] = (0.48, 0.48),
         device: torch.device = torch.device("cuda:0"),
@@ -49,7 +49,7 @@ class Bending(N_Ports):
         # |                                |
         # |              [0]               |
         # ----------------------------------
-        if bending_region_size[0] != bending_region_size[1]:
+        if box_size[0] != box_size[1]:
             warnings.warn(
                 "Bending region width and length are not equal, this is not a square bending region."
             )
@@ -70,7 +70,7 @@ class Bending(N_Ports):
 
         eps_bg_fn = material_fn_dict[material_bg]
 
-        box_size = list(bending_region_size)
+        box_size = list(box_size)
         port_cfgs = dict(
             in_port_1=dict(
                 type="box",

@@ -8,10 +8,7 @@ FilePath: /MAPS/core/invdes/models/layers/viz.py
 import matplotlib.pylab as plt
 import matplotlib.pyplot as plot
 import numpy as np
-import torch
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-
-from core.utils import print_stat
 
 """ Utilities for plotting and visualization """
 
