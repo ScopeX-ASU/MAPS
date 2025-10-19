@@ -20,6 +20,7 @@ import torch.amp as amp
 import torch.fft
 import torch.nn as nn
 import torch.nn.functional as F
+import wandb
 from pyutils.config import configs
 from pyutils.general import AverageMeter
 from pyutils.general import logger as lg
@@ -32,7 +33,6 @@ from pyutils.torch_train import (
 )
 from pyutils.typing import Criterion, DataLoader, Optimizer, Scheduler
 
-import wandb
 from core.train import builder
 from core.train.models.utils import from_Ez_to_Hx_Hy
 from core.utils import (

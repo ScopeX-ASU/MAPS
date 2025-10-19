@@ -5,13 +5,6 @@ LastEditTime: 2024-11-24 19:34:45
 FilePath: /MAPS/core/train/models/utils.py
 """
 
-"""
-Date: 2024-08-24 21:37:48
-LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-08-24 21:40:35
-FilePath: /Metasurface-Opt/core/models/utils.py
-"""
-
 import math
 import os
 

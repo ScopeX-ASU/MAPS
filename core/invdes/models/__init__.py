@@ -10,10 +10,6 @@ from .crossing import CrossingOptimization
 from .edge_coupler import EdgeCouplerOptimization
 from .layers import *
 from .mdm import MDMOptimization
-from .metacoupler import MetaCouplerOptimization
-from .metalens import MetaLensOptimization
-from .metalens_fdtd import Metalens
-from .metamirror import MetaMirrorOptimization
 from .mmi import MMIOptimization
 from .mode_mux import ModeCvtMuxOptimization
 from .optical_diode import OpticalDiodeOptimization

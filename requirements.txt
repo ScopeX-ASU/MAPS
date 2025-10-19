@@ -14,3 +14,10 @@ scipy>=1.16.2
 torch>=2.8.0+cu128
 torchonn_pyutils==0.0.3.1
 torchonn_pyutils.egg==info
+mmengine>=0.10.5
+timm>=1.0.11
+tensorly>=0.8.1
+tensorly-torch>=0.5.0
+einops>=0.8.0
+mmcv-lite>=2.2.0
+neuraloperator>=1.0.2
