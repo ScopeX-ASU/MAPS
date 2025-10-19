@@ -62,6 +62,27 @@ flexible neural network model definition, and diverse datadriven/physics-driven 
 ```git clone https://github.com/ScopeX-ASU/MAPS```
 
 ## Usage
+1. run examples of inverse design, e.g., waveguide bending
+```
+python core/invdes/examples/bending.py
+```
+or
+```
+python scripts/device/train.py
+```
+2. generate photonic device simulation datasets, e.g., generate 8 bending devices with perturbation applied
+```
+python data/fdfd/dataset_generation_launcher.py \
+  --device-name bending \
+  --num-devices 8 \
+  --num-gpus 4 \
+  --include-perturb
+```
+
+3. train AI model on device dataset for forward Maxwell Equation prediction task, e.g., Fourier neural operator on bending forward Ez field prediction.
+```
+python scripts/nn/fno/train_fwd_model.py
+```
 
 
 # Citing MAPS

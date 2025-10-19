@@ -17,12 +17,13 @@ import torch.distributed as dist
 import torch.fft
 import torch.nn.functional as F
 import torch.optim
-import yaml
 from pyutils.config import Config
-from pyutils.general import TimerCtx, ensure_dir
+from pyutils.general import ensure_dir
 from torch import Tensor
 from torch.types import Device
 from torch_sparse import spmm
+
+plt.rcParams["text.usetex"] = False
 
 train_configs = Config()
 from thirdparty.ceviche.constants import *
@@ -421,7 +422,7 @@ def cal_fom_from_fwd_field(
             out_modes = [int(mode) for mode in out_modes]
             assert (
                 len(out_modes) == 1
-            ), f"The code can handle multiple modes, but I have not check if it is correct"
+            ), "The code can handle multiple modes, but I have not check if it is correct"
             temperture = opt_cfg["temp"]
             temperture = [float(temp) for temp in temperture]
             wavelength = opt_cfg["wl"]
@@ -569,7 +570,7 @@ def cal_total_field_adj_src_from_fwd_field(
                 out_modes = [int(mode) for mode in out_modes]
                 assert (
                     len(out_modes) == 1
-                ), f"The code can handle multiple modes, but I have not check if it is correct"
+                ), "The code can handle multiple modes, but I have not check if it is correct"
                 temperture = opt_cfg["temp"]
                 temperture = [float(temp) for temp in temperture]
                 wavelength = opt_cfg["wl"]
@@ -2041,16 +2042,6 @@ def Si_eff_eps(wavelength, width: float = 10, thickness: float = 0.22):
         assert (
             False
         ), "For 2.5D simulation, effective index is only related to thickness, the width-related effective index is solved by 2D FDFD itself, do not need to consider separately"
-        assert (
-            thickness == 0.22
-        ), f"only support thickness of 0.22 for narrow waveguide, but got {thickness}"
-        match width:
-            case 0.48:
-                permittivity = 2.411707**2  # from lumerical
-            case 0.8:
-                permittivity = 2.688673**2  # from lumerical
-            case _:
-                raise ValueError(f"Invalid width: {width}, only support 0.48 and 0.8")
     return permittivity
 
 
@@ -2137,7 +2128,7 @@ class BestKModelSaver(object):
             new_checkpoint_name = (
                 f"{checkpoint_name}_{self.metric_name}-"
                 + self.format.format(metric)
-                + f"{'' if epoch is None else '_epoch-'+str(epoch)}"
+                + f"{'' if epoch is None else '_epoch-' + str(epoch)}"
             )
             path = os.path.join(dir, new_checkpoint_name + ".pt")
             self.model_cache[path] = (metric, epoch)
@@ -2152,7 +2143,7 @@ class BestKModelSaver(object):
                 del_checkpoint_name = (
                     f"{checkpoint_name}_{self.metric_name}-"
                     + self.format.format(worst_metric)
-                    + f"{'' if epoch is None else '_epoch-'+str(worst_epoch)}"
+                    + f"{'' if epoch is None else '_epoch-' + str(worst_epoch)}"
                 )
                 del_path = os.path.join(dir, del_checkpoint_name + ".pt")
                 try:
@@ -2165,7 +2156,7 @@ class BestKModelSaver(object):
                 new_checkpoint_name = (
                     f"{checkpoint_name}_{self.metric_name}-"
                     + self.format.format(metric)
-                    + f"{'' if epoch is None else '_epoch-'+str(epoch)}"
+                    + f"{'' if epoch is None else '_epoch-' + str(epoch)}"
                 )
                 path = os.path.join(dir, new_checkpoint_name + ".pt")
                 self.model_cache[path] = (metric, epoch)

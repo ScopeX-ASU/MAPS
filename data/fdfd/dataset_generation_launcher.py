@@ -1,15 +1,16 @@
+import argparse
 import os
 import subprocess
 from multiprocessing import Manager, Pool, Queue
 
-script = "data/fdfd/generate_mdm.py"
+import torch
 
 
 def metacoupler_launcher(queue):
     # While there are tasks in the queue, each process will fetch and execute one
     while not queue.empty():
         try:
-            rand_seed, gpu_id, each_step, include_perturb = (
+            rand_seed, gpu_id, each_step, include_perturb, script = (
                 queue.get_nowait()
             )  # Get task in order from the queue
             print("this is the random seed: ", rand_seed, flush=True)
@@ -37,25 +38,51 @@ def worker_process(queue):
 
 
 if __name__ == "__main__":
-    num_gpus = 4  # Number of GPUs
-    # taskid_begin, taskid_end = (0, 615)
-    # taskid_begin, taskid_end = (615, 1230)
-    # taskid_begin, taskid_end = (25, 50)
-    # taskid_begin, taskid_end = (25, 50)
-    taskid_begin, taskid_end = (0, 1)
+    argparse = argparse.ArgumentParser()
+    argparse.add_argument(
+        "--device-name",
+        type=str,
+        default="bending",
+        help="device name, e.g., bending, crossing, mdm, etc. Default is bending.",
+    )
+    argparse.add_argument(
+        "--num-devices",
+        type=int,
+        default=8,
+        help="number of photonic devices to generate. Default is 8.",
+    )
+    argparse.add_argument(
+        "--num-gpus", type=int, default=4, help="number of GPUs to use. Default is 4."
+    )
+    argparse.add_argument(
+        "--each-step",
+        action="store_true",
+        default=False,
+        help="whether to save each step of the device generation. Default is False.",
+    )
+    argparse.add_argument(
+        "--include-perturb",
+        action="store_true",
+        default=False,
+        help="whether to apply permittivity perturbations in the device generation. Default is False.",
+    )
 
-    # task_list = [16, 37]
+    args = argparse.parse_args()
+
+    num_gpus = args.num_gpus  # Number of GPUs
+    assert num_gpus <= torch.cuda.device_count(), "num_gpus exceeds available GPUs"
+    each_step = int(args.each_step)
+    include_perturb = int(args.include_perturb)
+    taskid_begin, taskid_end = (0, args.num_devices)
+    script = f"data/fdfd/generate_{args.device_name}.py"
 
     # Manager's queue allows inter-process communication for tasks
     manager = Manager()
     queue = manager.Queue()
-    each_step = 0
-    include_perturb = 0
+
     # Populate queue with tasks, ordered by task ID
     for seed in range(taskid_begin, taskid_end):
-        queue.put((seed, seed % num_gpus, each_step, include_perturb))
-    # for idx, seed in enumerate(task_list):
-    #     queue.put((seed, idx % num_gpus, each_step, include_perturb))
+        queue.put((seed, seed % num_gpus, each_step, include_perturb, script))
 
     with Pool(4) as p:
         # Each process runs `metacoupler_launcher`, pulling tasks from the queue

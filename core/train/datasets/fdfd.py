@@ -236,12 +236,12 @@ class FDFD(VisionDataset):
         if "perturb" in device_file:
             input_slice = device_file.split("_perturbed_")[1].split("-")[1]
             wavelength = float(device_file.split("_perturbed_")[1].split("-")[2])
-            mode = int(device_file.split("_perturbed_")[1].split("-")[3])
+            mode = device_file.split("_perturbed_")[1].split("-")[3]
             temp = int(device_file.split("_perturbed_")[1].split("-")[-1][:-3])
         else:
             input_slice = device_file.split("_opt_step_")[1].split("-")[1]
             wavelength = float(device_file.split("_opt_step_")[1].split("-")[2])
-            mode = int(device_file.split("_opt_step_")[1].split("-")[3])
+            mode = device_file.split("_opt_step_")[1].split("-")[3]
             temp = int(device_file.split("_opt_step_")[1].split("-")[-1][:-3])
         path = os.path.join(self.root, self.device_type, self.data_dir, device_file)
         with h5py.File(path, "r") as f:

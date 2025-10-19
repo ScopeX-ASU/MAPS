@@ -4,7 +4,6 @@ import math
 from functools import lru_cache
 from typing import Dict, Optional, Union
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
@@ -16,6 +15,7 @@ from torch.types import Device, _size
 
 from core.fdfd.fdfd import fdfd_ez
 from core.utils import Slice
+from thirdparty.ceviche.constants import *
 
 __all__ = [
     "LinearBlock",

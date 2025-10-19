@@ -249,10 +249,11 @@ def main():
     parser.add_argument("--gpu_id", type=int, default=0)
     parser.add_argument("--each_step", type=int, default=0)
     parser.add_argument("--include_perturb", type=int, default=0)
-    random_seed = parser.parse_args().random_seed
-    gpu_id = parser.parse_args().gpu_id
-    each_step = parser.parse_args().each_step
-    include_perturb = parser.parse_args().include_perturb
+    args = parser.parse_args()
+    random_seed = args.random_seed
+    gpu_id = args.gpu_id
+    each_step = args.each_step
+    include_perturb = args.include_perturb
     torch.cuda.set_device(gpu_id)
     device = torch.device("cuda:" + str(gpu_id))
     torch.backends.cudnn.benchmark = True

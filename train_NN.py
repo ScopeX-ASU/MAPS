@@ -592,12 +592,9 @@ def train(
             fields_adj[key] = field_adj.to(device, non_blocking=True)
         for key, field_norm in field_normalizer.items():
             field_normalizer[key] = field_norm.to(device, non_blocking=True)
-        # for key, field in incident_field.items():
-        #     incident_field[key] = field.to(device, non_blocking=True)
         for key, monitor_slice in monitor_slices.items():
             monitor_slices[key] = monitor_slice.to(device, non_blocking=True)
-        # for key, design_region in design_region_mask.items():
-        #     design_region_mask[key] = design_region.to(device, non_blocking=True)
+
         for key, ht in ht_m.items():
             if key.endswith("-origin_size"):
                 continue

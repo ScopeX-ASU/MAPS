@@ -1,11 +1,10 @@
 import logging
 import math
 import random
-from typing import TYPE_CHECKING, Any, Callable, List, Tuple
+from typing import TYPE_CHECKING, Any, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
-import ryaml
 import torch
 import torch.distributed as dist
 import torch.fft
@@ -14,8 +13,8 @@ import torch.optim
 from torch import Tensor
 from torch_sparse import spmm
 
-from core.fdfd.fdfd import fdfd_ez
 from core.utils import Slice, _load_opt_cfgs, get_eigenmode_coefficients, get_flux
+from thirdparty.ceviche.constants import *
 
 if TYPE_CHECKING:
     from torch.optim.optimizer import _params_t
@@ -175,38 +174,6 @@ def cal_total_field_adj_src_from_fwd_field(
                 total_fom = total_fom + fom
             total_fom = total_fom * (-1)
             gradient = torch.autograd.grad(total_fom, Ez_i, create_graph=True)[0]
-            gradient_list.append(gradient)
-        Hx = torch.stack(Hx_list, dim=0)
-        Hy = torch.stack(Hy_list, dim=0)
-        total_field = torch.cat((Hx, Hy, Ez_copy), dim=1)
-        total_field = pml_mask.unsqueeze(0).unsqueeze(0) * total_field
-        adj_src = torch.conj(torch.stack(gradient_list, dim=0))
-        return total_field, adj_src
-        for i in range(Ez.shape[0]):
-            monitor_slice_out = Slice(
-                y=monitor_out_y[i],
-                x=torch.arange(
-                    monitor_out_x[i][0],
-                    monitor_out_x[i][1],
-                ).to(monitor_out_y[i].device),
-            )
-            monitor_slice_refl = Slice(
-                x=monitor_refl_x[i],
-                y=torch.arange(
-                    monitor_refl_y[i][0],
-                    monitor_refl_y[i][1],
-                ).to(monitor_refl_x[i].device),
-            )
-            fom = cal_fom_from_fields(
-                Ez_i,
-                Hx_i,
-                Hy_i,
-                ht_m[i],
-                et_m[i],
-                monitor_slice_out,
-                monitor_slice_refl,
-            )
-            gradient = torch.autograd.grad(fom, Ez_i, create_graph=True)[0]
             gradient_list.append(gradient)
         Hx = torch.stack(Hx_list, dim=0)
         Hy = torch.stack(Hy_list, dim=0)
@@ -1151,10 +1118,10 @@ class SParamLoss(torch.nn.modules.loss._Loss):
                 out_slice_name = opt_cfg["out_slice_name"]
                 in_mode = opt_cfg["in_mode"]
                 out_modes = opt_cfg.get("out_modes", [])
-                out_modes = [int(mode) for mode in out_modes]
+                out_modes = [mode for mode in out_modes]
                 assert (
                     len(out_modes) == 1
-                ), f"The code can handle multiple modes, but I have not check if it is correct"
+                ), "The code can handle multiple modes, but I have not check if it is correct"
                 temperture = opt_cfg["temp"]
                 temperture = [float(temp) for temp in temperture]
                 wavelength = opt_cfg["wl"]
@@ -1171,7 +1138,7 @@ class SParamLoss(torch.nn.modules.loss._Loss):
                 # print(f"this is the wl: {wl}, mode: {mode}, temp: {temp}, in_port_name: {in_port_name}")
                 # print(f"this is the corresponding we read from current obj mode: {in_mode}, temp: {temperture}, in_port_name: {input_port_name}")
                 if (
-                    in_mode != int(mode[i].item())
+                    in_mode != mode[i]
                     or temp[i] not in temperture
                     or input_slice_name != src_in_slice_name[i]
                     or round(wavelength, 2) != float(wl[i].item())
@@ -1258,22 +1225,22 @@ class DirectCompareSParam(torch.nn.modules.loss._Loss):
         # quit()
         # ['s_params-obj_slice_name-out_slice_1-type-1-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300', 's_params-obj_slice_name-rad_slice_xm-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300', 's_params-obj_slice_name-rad_slice_xp-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300', 's_params-obj_slice_name-rad_slice_ym-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300', 's_params-obj_slice_name-rad_slice_yp-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300', 's_params-obj_slice_name-refl_slice_1-type-flux_minus_src-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300']
         fwd_trans_GT = s_params_GT[
-            "s_params-obj_slice_name-out_slice_1-type-1-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300"
+            "s_params-obj_slice_name-out_slice_1-type-Ez1-in_slice_name-in_slice_1-wl-1.55-in_mode-Ez1-temp-300"
         ]
         ref_GT = s_params_GT[
-            "s_params-obj_slice_name-refl_slice_1-type-flux_minus_src-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300"
+            "s_params-obj_slice_name-refl_slice_1-type-flux_minus_src-in_slice_name-in_slice_1-wl-1.55-in_mode-Ez1-temp-300"
         ]
         rad_xp_GT = s_params_GT[
-            "s_params-obj_slice_name-rad_slice_xp-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300"
+            "s_params-obj_slice_name-rad_slice_xp-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-Ez1-temp-300"
         ]
         rad_xm_GT = s_params_GT[
-            "s_params-obj_slice_name-rad_slice_xm-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300"
+            "s_params-obj_slice_name-rad_slice_xm-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-Ez1-temp-300"
         ]
         rad_yp_GT = s_params_GT[
-            "s_params-obj_slice_name-rad_slice_yp-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300"
+            "s_params-obj_slice_name-rad_slice_yp-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-Ez1-temp-300"
         ]
         rad_ym_GT = s_params_GT[
-            "s_params-obj_slice_name-rad_slice_ym-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-1-temp-300"
+            "s_params-obj_slice_name-rad_slice_ym-type-flux-in_slice_name-in_slice_1-wl-1.55-in_mode-Ez1-temp-300"
         ]
 
         target_s = torch.cat(
