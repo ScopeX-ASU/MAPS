@@ -262,13 +262,14 @@ class TDMOptimization(BaseOptimization):
                 transform=[
                     # dict(
                     #     type="blur",
-                    #     mfs=0.1,
+                    #     mfs=0.04,
                     #     resolutions=[hr_device.resolution, hr_device.resolution],
                     #     dim="xy",
                     # ),
                     dict(type="binarize"),
                 ],  # there is no symmetry in this design region
                 init_method="ones",
+                # init_method="random",
                 denorm_mode="linear_eps",
                 interpolation="bilinear",
                 binary_projection=dict(

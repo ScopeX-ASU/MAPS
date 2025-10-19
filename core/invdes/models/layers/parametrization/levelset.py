@@ -20,58 +20,170 @@ from .utils import HeavisideProjection
 __all__ = ["LeveSetParameterization"]
 
 
-# class LevelSetInterp(object):
-#     """This class implements the level set surface using Gaussian radial basis functions."""
+@torch.no_grad()
+def _reinit_sdf(phi: torch.Tensor, iters: int = 40, dt: float = 0.3) -> torch.Tensor:
+    eps = 1e-6
+    phi = phi.clone()
+    S = phi / torch.sqrt(phi * phi + eps)
 
-#     def __init__(
-#         self,
-#         x0: Tensor = None,
-#         y0: Tensor = None,
-#         z0: Tensor = None,
-#         sigma: float = 0.02,
-#         interpolation: str = "gaussian",
-#         device: Device = torch.device("cuda:0"),
-#     ):
-#         ## z0 is a tensor: first dimension is x-axis, second dimension is y-axis
-#         # Input data.
-#         x0 = x0.to(device)
-#         y0 = y0.to(device)
-#         z0 = z0.to(device)
-#         self.n_phi = z0.shape
-#         x, y = torch.meshgrid(x0, y0, indexing="ij")
-#         xy0 = torch.column_stack((x.reshape(-1), y.reshape(-1)))
-#         self.xy0 = xy0
-#         self.z0 = z0
-#         self.sig = sigma
-#         self.interpolation = interpolation # TODO
-#         self.device = device
+    def diffs(u):
+        u_pad = F.pad(u[None, None, ...], (1, 1, 1, 1), mode="replicate")[0, 0]
+        c = u_pad[..., 1:-1, 1:-1]
+        xp = u_pad[..., 1:-1, 2:]
+        xm = u_pad[..., 1:-1, 0:-2]
+        yp = u_pad[..., 2:, 1:-1]
+        ym = u_pad[..., 0:-2, 1:-1]
+        Dx_f = xp - c
+        Dx_b = c - xm
+        Dy_f = yp - c
+        Dy_b = c - ym
+        return Dx_f, Dx_b, Dy_f, Dy_b
 
-#         # Builds the level set interpolation model.
-#         if self.interpolation == "gaussian":
-#             self.build_gaussian_model()
+    for _ in range(iters):
+        Dx_f, Dx_b, Dy_f, Dy_b = diffs(phi)
+        a_pos = torch.maximum(
+            torch.clamp(Dx_b, min=0) ** 2, torch.clamp(Dx_f, max=0) ** 2
+        )
+        b_pos = torch.maximum(
+            torch.clamp(Dy_b, min=0) ** 2, torch.clamp(Dy_f, max=0) ** 2
+        )
+        grad_pos = torch.sqrt(a_pos + b_pos + eps)
 
-#     def build_gaussian_model(self):
-#         gauss_kernel = self.gaussian(self.xy0, self.xy0)
-#         self.model = torch.matmul(torch.linalg.inv(gauss_kernel), self.z0.flatten())
+        a_neg = torch.maximum(
+            torch.clamp(Dx_f, min=0) ** 2, torch.clamp(Dx_b, max=0) ** 2
+        )
+        b_neg = torch.maximum(
+            torch.clamp(Dy_f, min=0) ** 2, torch.clamp(Dy_b, max=0) ** 2
+        )
+        grad_neg = torch.sqrt(a_neg + b_neg + eps)
 
-#     def gaussian(self, xyi, xyj):
-#         # TODO no need to recalculate the distance matrix
-#         dist_sq = (xyi[:, 1].reshape(-1, 1) - xyj[:, 1].reshape(1, -1)).square_() + (
-#             xyi[:, 0].reshape(-1, 1) - xyj[:, 0].reshape(1, -1)
-#         ).square_()
-#         # return torch.exp(-dist_sq / (2 * self.sig**2))
-#         return dist_sq.mul_(-1 / (2 * self.sig**2)).exp_()
-#         # return dist_sq.mul_(-1 / (2 * 0.03**2)).exp_()
+        G = torch.where(S >= 0, grad_pos, grad_neg)
+        phi = phi - dt * S * (G - 1.0)
+    return phi
 
-#     def get_ls(self, x1, y1, shape):
-#         xx, yy = torch.meshgrid(x1, y1, indexing="ij")
-#         xx = xx.to(self.device)
-#         yy = yy.to(self.device)
-#         xy1 = torch.column_stack((xx.reshape(-1), yy.reshape(-1)))
-#         # ls = self.gaussian(self.xy0, xy1).T @ self.model
-#         ls = self.gaussian(xy1, self.xy0) @ self.model
-#         ls = ls.reshape(shape)
-#         return ls  ## level set surface with the same shape as z0
+
+def _grad_mag(phi: torch.Tensor):
+    dx = phi[:, 1:] - phi[:, :-1]
+    dy = phi[1:, :] - phi[:-1, :]
+    dx = F.pad(dx[None, None, ...], (0, 1, 0, 0), mode="replicate")[0, 0]
+    dy = F.pad(dy[None, None, ...], (0, 0, 0, 1), mode="replicate")[0, 0]
+    return torch.sqrt(dx * dx + dy * dy + 1e-12)
+
+
+# --- Bilinear interpolation from knot grid (x0,y0) -> eval grid (x1,y1) ---
+def _bilinear_from_knots(
+    z: torch.Tensor,
+    x0: torch.Tensor,
+    y0: torch.Tensor,
+    x1: torch.Tensor,
+    y1: torch.Tensor,
+) -> torch.Tensor:
+    """
+    z: [len(x0), len(y0)]
+    returns phi: [len(x1), len(y1)]
+    Assumes x0,y0 sorted ascending. Handles degenerate 1D cases.
+    """
+    H0, W0 = z.shape
+    H1, W1 = len(x1), len(y1)
+    device, dtype = z.device, z.dtype
+
+    # 1D cases
+    if H0 == 1 and W0 >= 1:
+        # interpolate along y only
+        yy = y1.clamp(min=y0.min(), max=y0.max())
+        j = torch.searchsorted(y0, yy).clamp(1, W0 - 1)
+        y1l, y1u = y0[j - 1], y0[j]
+        ty = (yy - y1l) / (y1u - y1l + 1e-12)
+        z1 = z[0, j - 1]
+        z2 = z[0, j]
+        vals = (1 - ty) * z1 + ty * z2
+        return vals.unsqueeze(0).repeat(H1, 1)
+
+    if W0 == 1 and H0 >= 1:
+        # interpolate along x only
+        xx = x1.clamp(min=x0.min(), max=x0.max())
+        i = torch.searchsorted(x0, xx).clamp(1, H0 - 1)
+        x1l, x1u = x0[i - 1], x0[i]
+        tx = (xx - x1l) / (x1u - x1l + 1e-12)
+        z1 = z[i - 1, 0]
+        z2 = z[i, 0]
+        vals = (1 - tx) * z1 + tx * z2
+        return vals.unsqueeze(1).repeat(1, W1)
+
+    # 2D bilinear
+    XX, YY = torch.meshgrid(x1, y1, indexing="ij")
+    xf = XX.reshape(-1).clamp(min=x0.min(), max=x0.max())
+    yf = YY.reshape(-1).clamp(min=y0.min(), max=y0.max())
+
+    iu = torch.searchsorted(x0, xf).clamp(1, H0 - 1)
+    ju = torch.searchsorted(y0, yf).clamp(1, W0 - 1)
+    il = iu - 1
+    jl = ju - 1
+
+    xL, xU = x0[il], x0[iu]
+    yL, yU = y0[jl], y0[ju]
+    tx = (xf - xL) / (xU - xL + 1e-12)
+    ty = (yf - yL) / (yU - yL + 1e-12)
+
+    # gather corners
+    il, iu, jl, ju = il.long(), iu.long(), jl.long(), ju.long()
+    z11 = z[il, jl]
+    z21 = z[iu, jl]
+    z12 = z[il, ju]
+    z22 = z[iu, ju]
+
+    vals = (
+        (1 - tx) * (1 - ty) * z11
+        + tx * (1 - ty) * z21
+        + (1 - tx) * ty * z12
+        + tx * ty * z22
+    )
+    return vals.reshape(H1, W1)
+
+
+# --- Public: linear-only projection of ls_knots to SDF ---
+def project_ls_knots_to_sdf_linear(
+    ls_knots: torch.Tensor,  # [len(x0), len(y0)]
+    x0: torch.Tensor,
+    y0: torch.Tensor,
+    x1: torch.Tensor,
+    y1: torch.Tensor,
+    *,
+    reinit_iters: int = 40,
+    fit_steps: int = 80,
+    fit_lr: float = 5e-2,
+    band_half_width: float = 2.0,
+    w_fit: float = 1.0,
+    w_sdf: float = 1e-3,
+    clip_knots: float | None = 0.2,
+) -> torch.Tensor:
+    """
+    Linear-only (bilinear) projection: adjusts ls_knots so that the bilinearly
+    interpolated φ becomes an SDF.
+    Returns updated ls_knots.
+    """
+    # 1) Build φ from current knots and reinitialize to SDF (target)
+    with torch.no_grad():
+        phi_raw = _bilinear_from_knots(ls_knots, x0, y0, x1, y1)
+        phi_sdf = _reinit_sdf(phi_raw, iters=reinit_iters, dt=0.3)
+        band = (phi_sdf.abs() <= band_half_width).to(phi_sdf.dtype)
+
+    # 2) Inner optimization on knots with bilinear forward
+    z = ls_knots.detach().clone().requires_grad_(True)
+    opt = torch.optim.Adam([z], lr=fit_lr)
+
+    for _ in range(fit_steps):
+        opt.zero_grad(set_to_none=True)
+        phi_pred = _bilinear_from_knots(z, x0, y0, x1, y1)
+        L_fit = ((phi_pred - phi_sdf).pow(2) * band).mean()
+        L_sdf = ((_grad_mag(phi_pred) - 1.0).pow(2) * band).mean()
+        (w_fit * L_fit + w_sdf * L_sdf).backward()
+        opt.step()
+        if clip_knots is not None:
+            with torch.no_grad():
+                z.clamp_(-clip_knots, clip_knots)
+
+    return z.detach()
 
 
 class LevelSetInterp(object):
@@ -366,6 +478,25 @@ class LeveSetParameterization(BaseParametrization):
 
         weight_dict = dict(ls_knots=ls_knots)
         return weight_dict, param_dict
+
+    def reset_levelset_sdf(self):
+        weights = self.weights
+        rho = self.params["rho"]
+        phi = self.params["hr_phi"]
+        x0, y0 = rho[0], rho[1]
+        x1, y1 = phi[0], phi[1]
+        weights["ls_knots"].data.copy_(
+            project_ls_knots_to_sdf_linear(
+                weights["ls_knots"],
+                x0,
+                y0,
+                x1,
+                y1,
+                reinit_iters=40,
+                fit_steps=80,
+                fit_lr=0.05,
+            )
+        )
 
     def _reset_parameters_levelset(
         self, weight_dict, param_cfg, region_cfg, init_method: str = "random"

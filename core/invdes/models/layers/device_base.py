@@ -10,7 +10,6 @@ import os
 from functools import lru_cache
 from typing import Tuple
 
-import matplotlib.pyplot as plt
 import meep as mp
 import numpy as np
 import torch
@@ -20,17 +19,11 @@ from pyutils.general import ensure_dir
 from core.fdfd import fdfd_ez as fdfd_ez_torch
 from core.fdfd import fdfd_hz as fdfd_hz_torch
 from core.invdes.models.layers.utils import modulation_fn_dict
-from core.utils import Si_eps, SiO2_eps, Slice, get_eigenmode_coefficients, get_flux
+from core.utils import Si_eps, SiO2_eps, Slice, get_flux
 from thirdparty.ceviche import fdfd_ez, fdfd_hz
 from thirdparty.ceviche.constants import C_0, MICRON_UNIT
 
-from .utils import (
-    apply_regions_gpu,
-    get_grid,
-    insert_mode,
-    insert_mode_spins,
-    plot_eps_field,
-)
+from .utils import apply_regions_gpu, get_grid, insert_mode, plot_eps_field
 
 __all__ = ["BaseDevice", "N_Ports"]
 

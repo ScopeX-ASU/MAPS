@@ -29,14 +29,14 @@ class DefaultConfig(DefaultOptimizationConfig):
                     fwd_trans=dict(
                         weight=1,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="out_port_1",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="out_slice_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
-                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         wl=[1.55],
                         temp=[300],
                         out_modes=(
-                            1,
+                            "Ez1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux",  # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
                         direction="x+",
@@ -44,14 +44,14 @@ class DefaultConfig(DefaultOptimizationConfig):
                     refl_trans=dict(
                         weight=-0.1,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="refl_port_1",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="refl_slice_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
-                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         wl=[1.55],
                         temp=[300],
                         out_modes=(
-                            1,
+                            "Ez1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="flux_minus_src",
                         direction="x",
@@ -59,19 +59,23 @@ class DefaultConfig(DefaultOptimizationConfig):
                     fwd_intensity_shape=dict(
                         weight=5,
                         #### objective is evaluated at this port
-                        in_port_name="in_port_1",
-                        out_port_name="out_port_1",
+                        in_slice_name="in_slice_1",
+                        out_slice_name="out_slice_1",
                         #### objective is evaluated at all points by sweeping the wavelength and modes
-                        in_mode=1,  # only one source mode is supported, cannot input multiple modes at the same time
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         wl=[1.55],
                         temp=[300],
                         out_modes=(
-                            1,
+                            "Ez1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="intensity_shape",  # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
                         shape_type="gaussian",
+                        ## https://en.wikipedia.org/wiki/Gaussian_beam
+                        ## gaussian beam spot size (diameter) s=2 * waist w0
+                        ## intensity FWHM = sqrt(2*ln(2)) * w0 = 2*sqrt(2*ln(2)) * sigma
+                        ## sigma = spot size / 4
                         shape_cfg=dict(
-                            width=2.5 / 3,
+                            width=2.5 / 4,
                         ),
                         direction="x+",
                     ),
@@ -97,10 +101,18 @@ class EdgeCouplerOptimization(BaseOptimization):
                 rho_resolution=[25, 25],
                 transform=[
                     dict(type="mirror_symmetry", dims=[1]),
-                    # dict(type="transpose_symmetry", flag=True),
+                    dict(
+                        type="blur",
+                        mfs=0.05,
+                        resolutions=[hr_device.resolution, hr_device.resolution],
+                        dim="xy",
+                    ),
+                    dict(type="binarize"),
                 ],
                 init_method="ones",
-                # init_method="ring",
+                # init_method="random",
+                denorm_mode="linear_eps",
+                interpolation="bilinear",
                 binary_projection=dict(
                     fw_threshold=100,
                     bw_threshold=100,

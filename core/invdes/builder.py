@@ -9,6 +9,7 @@ from pyutils.typing import Optimizer, Scheduler
 from torch.types import Device
 
 from core.invdes.models import *
+from core.invdes.optimizer import Adahessian, Muon
 from core.utils import (
     DAdaptAdam,
     ResolutionScheduler,
@@ -18,8 +19,6 @@ from core.utils import (
 
 __all__ = [
     "make_model",
-    "make_weight_optimizer",
-    "make_arch_optimizer",
     "make_optimizer",
     "make_scheduler",
     "make_criterion",
@@ -183,6 +182,23 @@ def make_optimizer(params, total_config=None) -> Optimizer:
             params,
             lr=config.lr,
             use_bb=getattr(config, "use_bb", True),
+        )
+    elif name == "adahessian":
+        optimizer = Adahessian(
+            params,
+            lr=config.lr,
+            betas=getattr(config, "betas", (0.9, 0.999)),
+            eps=getattr(config, "eps", 1e-4),
+            weight_decay=config.weight_decay,
+            hessian_power=getattr(config, "hessian_power", 0.5),
+        )
+    elif name == "muon":
+        optimizer = Muon(
+            params,
+            lr=config.lr,
+            weight_decay=config.weight_decay,
+            momentum=getattr(config, "momentum", 0.9),
+            nesterov=getattr(config, "nesterov", True),
         )
     else:
         raise NotImplementedError(name)

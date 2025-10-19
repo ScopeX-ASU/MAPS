@@ -7,7 +7,8 @@ from multiprocessing import Manager, Pool, Queue
 # script = "data/fdfd/generate_tdm.py"
 # script = "data/fdfd/generate_bending.py"
 # script = "data/fdfd/generate_crossing.py"
-script = "data/fdfd/generate_od.py"
+# script = "data/fdfd/generate_od.py"
+script = "data/fdfd/generate_mmi.py"
 
 
 def metacoupler_launcher(queue):

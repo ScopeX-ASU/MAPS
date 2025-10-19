@@ -19,6 +19,169 @@ from thirdparty.ceviche import jacobian
 from thirdparty.ceviche.constants import MU_0
 
 
+class SMatrixObjective(object):
+    def __init__(
+        self,
+        sims: dict,  # {wl: Simulation}
+        s_params: dict,
+        port_profiles: dict,  # port monitor profiles {slice_name: {(wl, mode): (profile, ht_m, et_m)}}
+        port_slices: dict,
+        in_slice_names: Tuple[str],
+        out_slice_names: Tuple[str],
+        in_mode: int,
+        out_modes: Tuple[int],
+        directions: Tuple[str],
+        name: str,
+        target_wls: Tuple[float],
+        target_temps: Tuple[float],
+        grid_step: float,
+        energy: bool = False,
+        obj_type: str = "smatrix",
+    ):
+        self.sims = sims
+        self.s_params = s_params
+        self.port_profiles = port_profiles
+        self.port_slices = port_slices
+        self.in_slice_names = in_slice_names
+        self.out_slice_names = out_slice_names
+        self.in_mode = in_mode
+        self.out_modes = out_modes
+        self.directions = directions
+        self.name = name
+        self.target_wls = target_wls
+        self.target_temps = target_temps
+        self.grid_step = grid_step
+        self.energy = energy
+        self.obj_type = obj_type
+
+    def __call__(self, fields):
+        s_list = []
+        (
+            target_wls,
+            target_temps,
+            in_slice_names,
+            out_slice_names,
+            in_mode,
+            out_modes,
+            directions,
+            name,
+            grid_step,
+        ) = (
+            self.target_wls,
+            self.target_temps,
+            self.in_slice_names,
+            self.out_slice_names,
+            self.in_mode,
+            self.out_modes,
+            self.directions,
+            self.name,
+            self.grid_step,
+        )
+        target_temps = set(target_temps)
+        assert len(out_slice_names) == len(
+            directions
+        ), "out_slice_names and directions must have the same length"
+        ## for each wavelength, we evaluate the objective
+        for in_slice_name in in_slice_names:
+            for out_slice_name, direction in zip(out_slice_names, directions):
+                for (wl, pol, temp), sim in self.sims.items():
+                    ## we calculate the average eigen energy for all output modes
+                    if not any(
+                        math.isclose(wl, target_wl, rel_tol=0, abs_tol=1e-4)
+                        for target_wl in target_wls
+                    ):
+                        continue
+                    if pol != in_mode[:2]:
+                        continue
+                    for out_mode in out_modes:
+                        if temp in target_temps:
+                            src, ht_m, et_m, norm_p, require_sim = self.port_profiles[
+                                out_slice_name
+                            ][(wl, out_mode)]
+                            norm_power = self.port_profiles[in_slice_name][
+                                (wl, in_mode)
+                            ][3]
+                            monitor_slice = self.port_slices[out_slice_name]
+
+                            field = fields[(in_slice_name, wl, in_mode, temp)]
+                            pol = in_mode[:2]
+                            if pol == "Ez":
+                                fx, fy, fz = (
+                                    field["Hx"],
+                                    field["Hy"],
+                                    field["Ez"],
+                                )  # fetch fields
+                            elif pol == "Hz":
+                                fx, fy, fz = (
+                                    field["Ex"],
+                                    field["Ey"],
+                                    field["Hz"],
+                                )
+                            if isinstance(ht_m, Tensor) and ht_m.device != fz.device:
+                                ht_m = ht_m.to(fz.device)
+                                et_m = et_m.to(fz.device)
+                                self.port_profiles[out_slice_name][(wl, out_mode)] = [
+                                    src.to(fz.device),
+                                    ht_m,
+                                    et_m,
+                                    norm_p,
+                                    require_sim,
+                                ]
+                            s_p, s_m = get_eigenmode_coefficients(
+                                fx,
+                                fy,
+                                fz,
+                                ht_m,
+                                et_m,
+                                monitor_slice,
+                                grid_step=grid_step,
+                                direction=direction[0],
+                                autograd=True,
+                                energy=self.energy,
+                                pol=pol,
+                            )
+                            if direction[1] == "+":
+                                s = s_p
+                            elif direction[1] == "-":
+                                s = s_m
+                            else:
+                                raise ValueError("Invalid direction")
+                            # print(s, norm_power)
+                            if self.energy:
+                                s_list.append(s / norm_power)
+                            else:
+                                s_list.append(s / norm_power**0.5)
+
+                            # only record the s parameters for eigenmode
+                            # we don't need to record the s parameters if we calculate the phase
+                            self.s_params[
+                                (
+                                    in_slice_name,
+                                    out_slice_name,
+                                    out_mode,
+                                    wl,
+                                    in_mode,
+                                    temp,
+                                )
+                            ] = {
+                                "s_p": (
+                                    s_p / norm_power
+                                    if self.energy
+                                    else s_p / norm_power**0.5
+                                ),  # normalized by input power
+                                "s_m": (
+                                    s_m / norm_power
+                                    if self.energy
+                                    else s_m / norm_power**0.5
+                                ),  # normalized by input power
+                            }
+
+        if isinstance(s_list[0], Tensor):
+            return torch.stack(s_list)
+        else:
+            return npa.array(s_list)
+
+
 class EigenmodeObjective(object):
     def __init__(
         self,
@@ -962,6 +1125,24 @@ class ObjectiveFunc(object):
                     target_wls=target_wls,
                     target_temps=target_temps,
                     grid_step=self.grid_step,
+                    obj_type=obj_type,
+                )
+            elif obj_type == "smatrix":
+                objfn = SMatrixObjective(
+                    sims=self.sims,
+                    s_params=self.s_params,
+                    port_profiles=self.port_profiles,
+                    port_slices=self.port_slices,
+                    in_slice_names=in_slice_name,
+                    out_slice_names=out_slice_name,
+                    in_mode=in_mode,
+                    out_modes=out_modes,
+                    directions=direction,
+                    name=name,
+                    target_wls=target_wls,
+                    target_temps=target_temps,
+                    grid_step=self.grid_step,
+                    energy=False,
                     obj_type=obj_type,
                 )
             elif obj_type in {"flux", "flux_minus_src"}:

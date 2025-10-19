@@ -7,6 +7,7 @@ FilePath: /MAPS/core/invdes/models/base_optimization.py
 
 import copy
 import os
+import re
 import sys
 from pathlib import Path
 from typing import List, Tuple
@@ -180,6 +181,12 @@ class BaseOptimization(nn.Module):
             obj_cfgs=self.obj_cfgs,
             solver=self.sim_cfg["solver"],
         )
+
+    def reset_levelset_sdf(self):
+        for name, design_region in self.design_region_param_dict.items():
+            if hasattr(design_region, "reset_levelset_sdf"):
+                print(f"Reset levelset to SDF for design region {name}.")
+                design_region.reset_levelset_sdf()
 
     def reset_parameters(self):
         for design_region in self.design_region_param_dict.values():
@@ -497,8 +504,8 @@ class BaseOptimization(nn.Module):
         filename_yml,
         step,
         *,
-        use_high_res_eps: bool = False,
-        binarize_eps: bool = False,
+        use_high_res_eps: bool = True,
+        binarize_eps: bool = True,
     ):
         """
         switch to another different dump_data function
@@ -875,12 +882,46 @@ class BaseOptimization(nn.Module):
 
         return results
     
-    def evaluation(self, image_path):
+    def evaluation(self, image_path, raw_data=None, read_S_parameter=False):
         """Evaluate a layout supplied as a PNG image or an HDF5 eps_map."""
         if len(self.device.design_region_masks) != 1:
             raise NotImplementedError(
                 "Image-based evaluation currently supports a single design region."
             )
+        
+        if read_S_parameter:
+            with h5py.File(raw_data, "r") as handle:
+                # Capture every S-parameter dataset stored in the HDF5 file.
+                raw_sparams = {}
+                sparam_entries = {}
+                max_out_idx = 0
+                max_in_idx = 0
+                for name, dataset in handle.items():
+                    if not name.startswith("s_params"):
+                        continue
+                    data = np.array(dataset)
+                    if data.size == 0:
+                        continue
+                    value = complex(data.flat[0])
+                    raw_sparams[name] = value
+                    out_match = re.search(r"out_slice_(\d+)", name)
+                    in_match = re.search(r"in_slice_(\d+)", name)
+                    if not (out_match and in_match):
+                        continue
+                    out_idx = int(out_match.group(1))
+                    in_idx = int(in_match.group(1))
+                    max_out_idx = max(max_out_idx, out_idx)
+                    max_in_idx = max(max_in_idx, in_idx)
+                    # sparam_entries[(out_idx, in_idx)] = value
+                    sparam_entries[(in_idx, out_idx)] = value
+
+                true_s_matrix = None
+                if sparam_entries:
+                    true_s_matrix = np.full(
+                        (max_in_idx, max_out_idx), np.nan + 0j, dtype=np.complex128
+                    )
+                    for (in_idx, out_idx), value in sparam_entries.items():
+                        true_s_matrix[in_idx - 1, out_idx - 1] = value
 
         image_path = Path(image_path)
         if not image_path.is_file():
@@ -899,35 +940,17 @@ class BaseOptimization(nn.Module):
             device=self.operation_device,
         )
 
-        if image_path.suffix.lower() == ".h5":
-            with h5py.File(image_path, "r") as handle:
-                if "eps_map" not in handle:
-                    raise KeyError(f"Dataset 'eps_map' not found in {image_path}.")
-                eps_map = np.array(handle["eps_map"])
-            if eps_map.ndim != 2:
-                raise ValueError(
-                    f"Expected a 2D eps_map from {image_path}, received shape {eps_map.shape}."
-                )
-            if np.iscomplexobj(eps_map):
-                eps_map = np.abs(eps_map)
-            full_map = torch.from_numpy(
-                eps_map.astype(np.float32, copy=False)
-            ).to(device=self.operation_device, dtype=self.epsilon_map.dtype)
-            # Clamp to the physically valid permittivity range if numerical noise exists.
-            min_eps = float(eps_lo.detach().cpu().item())
-            max_eps = float(eps_hi.detach().cpu().item())
-            full_map = full_map.clamp(min=min_eps, max=max_eps)
-        else:
-            from PIL import Image
+        from PIL import Image
 
-            img = Image.open(image_path).convert("L")
-            density = np.asarray(img, dtype=np.float32) / 255.0
-            density_tensor = torch.from_numpy(density).to(
-                device=self.operation_device, dtype=self.epsilon_map.dtype
-            )
-            full_map = eps_lo + density_tensor * (eps_hi - eps_lo)
+        img = Image.open(image_path).convert("L")
+        density = np.asarray(img, dtype=np.float32) / 255.0
+        density_tensor = torch.from_numpy(density).to(
+            device=self.operation_device, dtype=self.epsilon_map.dtype
+        )
+        full_map = eps_lo + density_tensor * (eps_hi - eps_lo)
 
-
+        
+            
         hr_eps_fullmap = full_map
         target_size = (
             region_mask.x.stop - region_mask.x.start,
@@ -973,4 +996,6 @@ class BaseOptimization(nn.Module):
             obj = self.objective_layer([eps_map])
 
         results = {"obj": obj, "breakdown": self.objective.breakdown}
+        if true_s_matrix is not None:
+            results["true_s_matrix"] = true_s_matrix
         return results

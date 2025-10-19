@@ -1,12 +1,11 @@
 import autograd.numpy as npa
-import matplotlib.pyplot as plt
 import numpy as np
 import scipy.sparse as sp
 import torch
 from torch import Tensor, nn
 from torch_sparse import spmm
 
-from core.utils import Slice, get_flux, print_stat
+from core.utils import Slice, get_flux
 from thirdparty.ceviche import fdfd_ez as fdfd_ez_ceviche
 from thirdparty.ceviche import fdfd_hz as fdfd_hz_ceviche
 from thirdparty.ceviche.constants import *
@@ -15,10 +14,10 @@ from thirdparty.ceviche.primitives import spsp_mult
 
 from .derivatives import compute_derivative_matrices
 from .preconditioner import create_symmetrizer
-from .solver import SparseSolveTorch, sparse_solve_torch
+from .solver import SparseSolveTorch
 
 # notataion is similar to that used in: http://www.jpier.org/PIERB/pierb36/11.11092006.pdf
-from .utils import sparse_mm, sparse_mv, torch_sparse_to_scipy_sparse
+from .utils import sparse_mv, torch_sparse_to_scipy_sparse
 
 __all__ = ["fdfd", "fdfd_ez", "fdfd_hz"]
 
@@ -230,38 +229,6 @@ class fdfd(nn.Module):
 
 
 """ These are the fdfd classes that you'll actually want to use """
-
-
-class fdfd_ez_torch(fdfd):
-    """deprecated"""
-
-    def __init__(self, omega, dL, eps_r, npml, bloch_phases=None, device="cpu"):
-        if isinstance(eps_r, np.ndarray):
-            eps_r = torch.from_numpy(eps_r).to(device)
-
-        super().__init__(
-            omega, dL, eps_r, npml, bloch_phases=bloch_phases, device=device
-        )
-
-    @torch.inference_mode()
-    def _make_A(self, eps_vec):
-        C = -1 / MU_0 * (sparse_mm(self.Dxf, self.Dxb) + sparse_mm(self.Dyf, self.Dyb))
-
-        # indices into the diagonal of a sparse matrix
-        entries_diag = -EPSILON_0 * self.omega**2 * eps_vec
-        A = C + torch.sparse.spdiags(
-            entries_diag[None, :].cpu(), torch.tensor([0]), (self.N, self.N)
-        ).to(self.device)
-        return A
-
-    def _solve_fn(self, eps_vec, A, Jz_vec):
-        b_vec = 1j * self.omega * Jz_vec
-        A = A.coalesce()
-        # Ez_vec = sp_solve(A, b_vec)
-        Ez_vec = sparse_solve_torch(A, self.eps_r, b_vec)
-
-        Hx_vec, Hy_vec = self._Ez_to_Hx_Hy(Ez_vec)
-        return Hx_vec, Hy_vec, Ez_vec
 
 
 class fdfd_ez(fdfd_ez_ceviche):
