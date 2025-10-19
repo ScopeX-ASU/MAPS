@@ -9,6 +9,7 @@ __pycache__/
 *.jpg
 *.gds
 *.out
+!assets/*.png
 
 # Distribution / packaging
 .Python
