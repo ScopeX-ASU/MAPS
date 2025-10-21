@@ -1,12 +1,13 @@
-import tensorflow as tf
-from keras import models
+import os
 
 import numpy as np
-import os
+import tensorflow as tf
+import tf_keras as k3
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
 from prefab.processor import *
+
 
 class Predictor():
     def __init__(self, type, fab, process, version, model_nums):
@@ -15,11 +16,13 @@ class Predictor():
         self.process = process
         self.version = version
         self.model_nums = model_nums
-
         self.models = []
         for j in self.model_nums:
-            self.models.append(models.load_model("../models/" + type + "_" + fab + "_"
+            # self.models.append(models.load_model("../models/" + type + "_" + fab + "_"
+            #     + process + "_" + str(version) + "_" + str(j) + ".pb"))
+            self.models.append(k3.models.load_model("../models/" + type + "_" + fab + "_"
                 + process + "_" + str(version) + "_" + str(j) + ".pb"))
+            
 
         self.slice_length = int(np.sqrt(self.models[0].weights[-1].shape)[0])
         self.slice_size = (self.slice_length, self.slice_length)
