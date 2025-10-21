@@ -169,7 +169,8 @@ cython_debug/
 
 *.h5
 *.json
-*.pt
+# *.pt
+/checkpoint
 /wandb/*
 /data/fdfd/metacoupler/*
 /data/fdfd/bending/*

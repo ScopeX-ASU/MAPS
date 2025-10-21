@@ -1,7 +1,9 @@
+import torch
 import numpy as np
 
+@torch.compile
 def binarize(device, eta=0.5, beta=np.inf):
-    num = np.tanh(beta*eta) + np.tanh(beta*(device - eta))
+    num = np.tanh(beta*eta) + torch.tanh(beta*(device - eta))
     den = np.tanh(beta*eta) + np.tanh(beta*(1 - eta))
     device = num/den
     return device
