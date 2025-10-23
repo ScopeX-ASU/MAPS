@@ -2072,6 +2072,13 @@ def SiN_eps(wavelength):
 
 
 @lru_cache(maxsize=64)
+def SiN_eff_eps(wavelength, width: float = 10, thickness: float = 0.22):
+    """Returns the effective permittivity of silicon at the given wavelength"""
+    # return 1.6**2
+    return 1.7**2
+
+
+@lru_cache(maxsize=64)
 def TiO2_eps(wavelength):
     """Returns the permittivity of silicon at the given wavelength"""
     return 2.9**2
@@ -2082,6 +2089,7 @@ material_fn_dict = {
     "Si_eff": Si_eff_eps,
     "SiO2": SiO2_eps,
     "SiN": SiN_eps,
+    "SiN_eff": SiN_eff_eps,
     "Air": Air_eps,
     "TiO2": TiO2_eps,
 }
