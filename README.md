@@ -4,6 +4,11 @@ By Pingchuan Ma, Zhengqi Gao, Meng Zhang, Haoyu Yang, Mark Ren, Rena Huang, Duan
 
 This repo is the official implementation of ["MAPS: Multi-Fidelity AI-Augmented Photonic Simulation and Inverse Design Infrastructure"](https://arxiv.org/abs/2503.01046) (DATE 2025)
 
+<p align="center">
+  <img src="assets/MAPS_logo_text.png" width="450"/>
+</p>
+
+
 ## Table of Contents
 
 - [Introduction](#introduction)

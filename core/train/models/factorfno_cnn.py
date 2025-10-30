@@ -11,8 +11,6 @@ from torch.functional import Tensor
 from torch.types import Device
 from torch.utils.checkpoint import checkpoint
 
-from core.utils import Si_eps
-
 from .fno_cnn import LearnableFourierFeatures
 from .layers.factorfno_conv2d import FactorFNOConv2d
 from .model_base import ConvBlock, ModelBase

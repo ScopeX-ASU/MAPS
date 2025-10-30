@@ -2,22 +2,8 @@
 this is just a simple model to build the training flow
 """
 
-import copy
-import math
-from collections import OrderedDict
-from functools import lru_cache
-from typing import Optional, Tuple
-
-import matplotlib.pyplot as plt
-import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import torch.nn.init as init
-from pyutils.torch_train import set_torch_deterministic
-from timm.models.layers import DropPath
-from torch import nn
-from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torch.types import Device
 
 __all__ = ["simpleCNN"]

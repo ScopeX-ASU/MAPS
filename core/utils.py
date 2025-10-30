@@ -260,7 +260,7 @@ def get_eigenmode_coefficients(
     pol: str = "Ez",
 ):
     ### for Ez polarization: hx, hy, ez, ht_m is hx or hy, et_m is ez
-    ### for Hx polarization: ex, ey, hz, ht_m is hz, et_m is ex or ey
+    ### for Hz polarization: ex, ey, hz, ht_m is hz, et_m is ex or ey
     if isinstance(ht_m, np.ndarray) and isinstance(hx, torch.Tensor):
         ht_m = torch.from_numpy(ht_m).to(ez.device)
         et_m = torch.from_numpy(et_m).to(ez.device)

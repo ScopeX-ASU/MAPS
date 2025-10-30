@@ -8,6 +8,7 @@ from typing import List
 import mlflow
 import torch
 import torch.cuda.amp as amp
+import wandb
 from pyutils.config import configs
 from pyutils.general import AverageMeter
 from pyutils.general import logger as lg
@@ -20,7 +21,6 @@ from pyutils.torch_train import (
 )
 from pyutils.typing import Criterion, Optimizer, Scheduler
 
-import wandb
 from core import builder
 from core.invdes.invdesign import InvDesign
 from core.invdes.models.base_optimization import DefaultSimulationConfig

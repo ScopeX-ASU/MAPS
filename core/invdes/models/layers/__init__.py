@@ -10,13 +10,8 @@ from .bending import *
 from .crossing import *
 from .diff_bdry_layer import *
 from .edge_coupler import *
-from .etchmmi import *
 from .fom_layer import *
 from .mdm import *
-from .metacoupler import *
-from .metalens import *
-from .metalens_fdtd import *
-from .metamirror import *
 from .mmi import *
 from .mode_mux import *
 from .optical_diode import *

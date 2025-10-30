@@ -75,7 +75,7 @@ if __name__ == "__main__":
     mlflow.set_experiment(configs.run.experiment)  # set experiments first
 
     tasks = [
-        ["Bending", 0, 0.02, 4, 200, 50, 50, 50, 0, "put_your_comment_here"],
+        ["Bending", 0, 0.02, 4, 200, 50, 50, 50, 0, "comment_here"],
     ]
 
     with Pool(1) as p:
