@@ -17,7 +17,7 @@ from torch.types import Device
 from .base_parametrization import BaseParametrization
 from .utils import HeavisideProjection
 
-__all__ = ["LeveSetParameterization"]
+__all__ = ["LevelSetParameterization"]
 
 
 @torch.no_grad()
@@ -371,7 +371,7 @@ class GetLevelSetEps(nn.Module):
         return eps, phi
 
 
-class LeveSetParameterization(BaseParametrization):
+class LevelSetParameterization(BaseParametrization):
     def __init__(
         self,
         *args,

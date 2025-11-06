@@ -129,7 +129,7 @@ def mmi_opt(
     ).to(operation_device)
     for region_name in device.design_region_cfgs:
         opt.design_region_param_cfgs[region_name]["transform"] = [
-                dict(
+            dict(
                 type="fft",
                 mfs=mfs,
                 resolutions=[hr_device.resolution, hr_device.resolution],
@@ -137,7 +137,7 @@ def mmi_opt(
             ),
             dict(type="binarize"),
         ]
-        
+
     print(opt)
     n_epoch = 1
     optimizer = torch.optim.Adam(opt.parameters(), lr=0.02)
@@ -184,7 +184,9 @@ def mmi_opt(
                     dump_data_path
                     + f"/{device_name}_id-{device_id}_opt_step_{step}_perturbed_{i}.h5"
                 )
-                filename_yml = dump_data_path + f"/{device_name}_id-{device_id}_perturbed_{i}.yml"
+                filename_yml = (
+                    dump_data_path + f"/{device_name}_id-{device_id}_perturbed_{i}.yml"
+                )
                 opt.dump_data(
                     filename_h5=filename_h5, filename_yml=filename_yml, step=step
                 )
@@ -225,11 +227,17 @@ def mmi_opt(
 
         (-results["obj"]).backward()
         current_design_region_dict = opt.get_design_region_eps_dict()
-        filename_h5 = dump_data_path + f"/{device_name}_id-{device_id}_opt_step_{step}.h5"
+        filename_h5 = (
+            dump_data_path + f"/{device_name}_id-{device_id}_opt_step_{step}.h5"
+        )
         filename_yml = dump_data_path + f"/{device_name}_id-{device_id}.yml"
 
         # Store the current breakdown for early stopping
-        current_breakdown = {k: obj["value"] for k, obj in results["breakdown"].items() if not (isinstance(obj["value"], torch.Tensor) and obj["value"].numel() > 1)}
+        current_breakdown = {
+            k: obj["value"]
+            for k, obj in results["breakdown"].items()
+            if not (isinstance(obj["value"], torch.Tensor) and obj["value"].numel() > 1)
+        }
         breakdown_history.append(current_breakdown)
 
         # Keep only the last `patience` results in the history

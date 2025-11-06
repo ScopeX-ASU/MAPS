@@ -427,7 +427,14 @@ class BaseParametrization(nn.Module):
         else:
             raise ValueError(f"Unsupported parameterization build method: {method}")
 
-        self.weights = nn.ParameterDict(weight_dict)
+        if all(isinstance(p, nn.Parameter) for p in weight_dict.values()):
+            self.weights = nn.ParameterDict(weight_dict)
+        elif all(isinstance(p, nn.Module) for p in weight_dict.values()):
+            self.weights = nn.ModuleDict(weight_dict)
+        else:
+            raise ValueError(
+                "The weight_dict should contain all nn.Parameter or all nn.Module"
+            )
 
         self.params = param_dict
 
@@ -441,7 +448,7 @@ class BaseParametrization(nn.Module):
         else:
             raise ValueError(f"Unsupported parameterization reset method: {method}")
 
-    def build_permittivity(self, weights, sharpness: float):
+    def build_permittivity(self, weights, sharpness: float, **kwargs):
         ### return: permittivity that you would like to dumpout as final solution, typically should be high resolution
         raise NotImplementedError
 
@@ -581,11 +588,11 @@ class BaseParametrization(nn.Module):
         sharpness: float,
         hr_entire_eps: torch.Tensor,
         hr_dr_mask: torch.Tensor,
-        ls_knots=None,
+        **kwargs,
     ):
         ## first build the normalized device permittivity using weights
         ## the built one is the high resolution permittivity for evaluation
-        permittivity = self.build_permittivity(self.weights, sharpness, ls_knots)
+        permittivity = self.build_permittivity(self.weights, sharpness, **kwargs)
 
         ## this is the cloned and detached permittivity for gds dumpout
         hr_permittivity = permittivity.detach().clone()

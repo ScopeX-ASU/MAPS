@@ -23,14 +23,14 @@ class DefaultConfig(DefaultOptimizationConfig):
                     wl_cen=1.55,
                     wl_width=0,
                     n_wl=1,
-                    plot_root="./figs/mmi",
+                    plot_root="./figs/etchmmi",
                 ),
                 obj_cfgs=dict(
                     smatrix=dict(
                         weight=1,
                         #### objective is evaluated at this port
-                        in_slice_name=["in_slice_1", "in_slice_2", "in_slice_3"],
-                        out_slice_name=["out_slice_1", "out_slice_2", "out_slice_3"],
+                        in_slice_name=["in_slice_1"],
+                        out_slice_name=["out_slice_1"],
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
                         wl=[1.55],
@@ -39,7 +39,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                             "Ez1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="smatrix",  # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
-                        direction=["x+", "x+", "x+"],
+                        direction=["x+"],
                     ),
                     # fwd_trans=dict(
                     #     weight=1,
@@ -136,7 +136,7 @@ class DefaultConfig(DefaultOptimizationConfig):
         )
 
 
-class MMIOptimization(BaseOptimization):
+class EtchMMIOptimization(BaseOptimization):
     def __init__(
         self,
         device,
@@ -146,35 +146,18 @@ class MMIOptimization(BaseOptimization):
         obj_cfgs=dict(),
         operation_device=torch.device("cuda:0"),
     ):
-        _design_region_cfgs = design_region_param_cfgs
         design_region_param_cfgs = dict()
         for region_name in device.design_region_cfgs.keys():
             design_region_param_cfgs[region_name] = dict(
-                method="levelset",
-                rho_resolution=[25, 25],
-                transform=[
-                    # dict(type="mirror_symmetry", dims=[1]),
-                    dict(
-                        type="blur",
-                        mfs=0.1,
-                        resolutions=[hr_device.resolution, hr_device.resolution],
-                        dim="xy",
-                    ),
-                    dict(type="binarize"),
-                ],
-                init_method="random",
-                denorm_mode="linear_eps",
-                interpolation="bilinear",
-                binary_projection=dict(
-                    fw_threshold=100,
-                    bw_threshold=100,
-                    mode="regular",
+                method="box",
+                geometry_cfgs=dict(
+                    batch_dims=(16, 16),  # Nx, Ny number of boxes in x and y directions
+                    size_dim=2,  # number of parameters to determine the size, default 2, e.g., 2 for box (size_x, size_y)
                 ),
+                transform=[],
+                init_method="2d_array",
+                denorm_mode="linear_eps",
             )
-            if region_name in _design_region_cfgs:
-                design_region_param_cfgs[region_name].update(
-                    _design_region_cfgs[region_name]
-                )
 
         cfgs = DefaultConfig()  ## this is default configurations
         # for i in range(1, device.num_outports + 1):

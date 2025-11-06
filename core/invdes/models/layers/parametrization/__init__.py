@@ -9,9 +9,13 @@ import torch
 from torch import nn
 
 from .base_parametrization import BaseParametrization
-from .levelset import LeveSetParameterization
+from .box import BoxParameterization
+from .levelset import LevelSetParameterization
 
-_param_registry = {"levelset": LeveSetParameterization}
+_param_registry = {
+    "levelset": LevelSetParameterization,
+    "box": BoxParameterization,
+}
 
 __all__ = ["parametrization_builder"]
 

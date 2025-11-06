@@ -8,6 +8,7 @@ FilePath: /MAPS/core/invdes/models/__init__.py
 from .bending import BendingOptimization
 from .crossing import CrossingOptimization
 from .edge_coupler import EdgeCouplerOptimization
+from .etchmmi import EtchMMIOptimization
 from .layers import *
 from .mdm import MDMOptimization
 from .mmi import MMIOptimization
