@@ -8,6 +8,17 @@ This repo is the official implementation of ["MAPS: Multi-Fidelity AI-Augmented 
   <img src="assets/MAPS_logo_text.png" width="450"/>
 </p>
 
+## News
+[2025/11/05] Released v0.0.3
+- Integrate [pydiso](https://github.com/simpeg/pydiso) solver to enable reusing matrix symbolic factorization for speedup. For the same polarization (e.g., Ez), there is only one solver instance as all matrices have the same sparse structure to avoid memory explosion.
+- Add EtchMMI device with rectangles in the design region.
+- Add continuous geometry parameterization. Support rectangles (box) with gradient calculation.
+
+[2025/10/19] Released v0.0.2
+- MAPS-InvDes supported. Levelset-based photonic device inverse design
+- MAPS-Data supported. Photonic simulation dataset generation, including forward fields, adjoint fields, S parameters, etc.
+- MAPS-train supported. Framework for AI model training for optical simulation prediction.
+
 
 ## Table of Contents
 
