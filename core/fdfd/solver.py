@@ -18,6 +18,13 @@ from thirdparty.ceviche.constants import *
 from thirdparty.ceviche.utils import make_sparse
 
 try:
+    from .pydiso_solver import MKLPardisoSolver as PydisoSolver
+
+    HAS_PYDISO = True
+except:
+    HAS_PYDISO = False
+
+try:
     # from pyMKL import pardisoSolver
     from .pardiso_solver import pardisoSolver
 
@@ -118,12 +125,15 @@ def solve_linear(
     symmetry=False,
     clear: bool = True,
     double: bool = True,
+    use_pydiso: bool = False,
     **kwargs,
 ):
     """Master function to call different solvers"""
 
     if solver_type == "direct":
-        return _solve_direct(A, b, symmetry=symmetry, clear=clear, double=double)
+        return _solve_direct(
+            A, b, symmetry=symmetry, clear=clear, double=double, use_pydiso=use_pydiso
+        )
     elif solver_type == "iterative":
         return _solve_iterative(A, b, iterative_method=iterative_method, **kwargs)
     elif solver_type == "iterative_nn":
@@ -134,32 +144,31 @@ def solve_linear(
         raise ValueError(f"Solver type {solver_type} not supported")
 
 
-# def solve_linear(A, b, iterative_method=False, symmetry=False, **kwargs):
-#     """ Master function to call the others """
-
-#     if iterative_method and iterative_method is not None:
-#         # if iterative solver string is supplied, use that method
-#         return _solve_iterative(A, b, iterative_method=iterative_method, **kwargs)
-#     elif iterative_method and iterative_method is None:
-#         # if iterative_method is supplied as None, use the default
-#         return _solve_iterative(A, b, iterative_method=DEFAULT_ITERATIVE_METHOD)
-#     else:
-#         # otherwise, use a direct solver
-#         return _solve_direct(A, b, symmetry=symmetry)
-
-
-def _solve_direct(A, b, symmetry=False, clear: bool = True, double: bool = True):
+def _solve_direct(
+    A, b, symmetry=False, clear: bool = True, double: bool = True, use_pydiso=False
+):
     """Direct solver"""
 
     if HAS_MKL:
         # prefered method using MKL. Much faster (on Mac at least)
         if symmetry:
             mtype = 6
+            matrix_type = "complex_symmetric"
         else:
             mtype = 13
-        pSolve = pardisoSolver(A, mtype=mtype, double=double)
+            matrix_type = "complex_unsymmetric"
+        if use_pydiso and HAS_PYDISO:
+            pSolve = PydisoSolver(A, matrix_type=matrix_type, factor=False)
+        elif HAS_MKL:
+            pSolve = pardisoSolver(A, mtype=mtype, double=double)
+
+        else:
+            raise ImportError(
+                "MKL and Pydiso both are not found, cannot use direct solver."
+            )
         pSolve.factor()
-        x = pSolve.solve(b)
+        x = pSolve.solve(b).reshape(-1)
+
         if clear:
             pSolve.clear()
             return x, None
@@ -193,71 +202,31 @@ def _solve_cuda(A, b, **kwargs):
     raise NotImplementedError("Please implement something fast and exciting here!")
 
 
-# ---------------------- Sparse Solver Copied from Ceviche ----------------------
-
-# Custom PyTorch sparse solver exploiting a CuPy backend
-# See https://blog.flaport.net/solving-sparse-linear-systems-in-pytorch.html
-# class SparseSolveCupy(torch.autograd.Function):
-#     @staticmethod
-#     def forward(ctx, A, b):
-#         # Sanity check
-#         if A.ndim != 2 or (A.shape[0] != A.shape[1]):
-#             raise ValueError("A should be a square 2D matrix.")
-#         # Transfer data to CuPy
-#         A_cp = coo_torch2cupy(A)
-#         b_cp = cp.asarray(b.data)
-#         # Solver the sparse system
-#         ctx.factorisedsolver = None
-#         if (b.ndim == 1) or (b.shape[1] == 1):
-#             # cp.sparse.linalg.spsolve only works if b is a vector but is fully on GPU
-#             x_cp = spsolve(A_cp, b_cp)
-#         else:
-#             # Make use of a factorisation (only the solver is then on the GPU)
-#             # We store it in ctx to reuse it in the backward pass
-#             ctx.factorisedsolver = factorized(A_cp)
-#             x_cp = ctx.factorisedsolver(b_cp)
-#         # Transfer (dense) result back to PyTorch
-#         x = torch.as_tensor(x_cp, device=b.device)
-#         if A.requires_grad or b.requires_grad:
-#             # Not sure if the following is needed / helpful
-#             x.requires_grad = True
-#         else:
-#             # Free up memory
-#             ctx.factorisedsolver = None
-#         # Save context for backward pass
-#         ctx.save_for_backward(A, b, x)
-#         return x
-
-#     @staticmethod
-#     def backward(ctx, grad):
-#         # Recover context
-#         A, b, x = ctx.saved_tensors
-#         # Compute gradient with respect to b
-#         if ctx.factorisedsolver is None:
-#             gradb = SparseSolve.apply(A.t(), grad)
-#         else:
-#             # Re-use factorised solver from forward pass
-#             grad_cp = cp.asarray(grad.data)
-#             gradb_cp = ctx.factorisedsolver(grad_cp, trans="T")
-#             gradb = torch.as_tensor(gradb_cp, device=b.device)
-#         # The gradient with respect to the (dense) matrix A would be something like
-#         # -gradb @ x.T but we are only interested in the gradient with respect to
-#         # the (non-zero) values of A
-#         gradAidx = A.indices()
-#         mgradbselect = -gradb.index_select(0, gradAidx[0, :])
-#         xselect = x.index_select(0, gradAidx[1, :])
-#         mgbx = mgradbselect * xselect
-#         if x.dim() == 1:
-#             gradAvals = mgbx
-#         else:
-#             gradAvals = torch.sum(mgbx, dim=1)
-#         gradAs = torch.sparse_coo_tensor(gradAidx, gradAvals, A.shape).to_sparse_csr()
-#         # gradAs = torch.sparse_csr_tensor(gradAs)
-#         return gradAs, gradb
-
-
 # sparse_solve_cupy = SparseSolveCupy.apply
 SCALE = 1e15
+
+
+def compare_As(A, B, atol=1e-5):
+    ## return structure match and value match
+    if A.shape != B.shape:
+        return False, False
+
+    # Compare structure: row pointers and column indices
+    structure_same = np.array_equal(A.indptr, B.indptr) and np.array_equal(
+        A.indices, B.indices
+    )
+
+    # If structure differs, values can't be meaningfully compared
+    if not structure_same:
+        return False, False
+
+    # Compare data values
+    if atol == 0.0:
+        values_same = np.array_equal(A.data, B.data)
+    else:
+        values_same = np.allclose(A.data, B.data, atol=atol)
+
+    return structure_same, values_same
 
 
 class SparseSolveTorchFunction(torch.autograd.Function):
@@ -283,6 +252,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         pol: str = "Ez",  # Ez or Hz
         double: bool = False,
         _solver_cache: dict | None = None,
+        _A_cache: dict | None = None,
     ):
         ### entries_a: values of the sparse matrix A
         ### indices_a: row/column indices of the sparse matrix A
@@ -303,7 +273,9 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         if isinstance(b, Tensor):
             b = b.cpu().numpy()
         N = np.prod(shape)
+
         A = make_sparse(entries_a, indices_a, (N, N))
+
         # epsilon = torch.tensor([EPSILON_0,], dtype=eps_diag.dtype, device=eps_diag.device)
         # omega = torch.tensor([omega,], dtype=eps_diag.dtype, device=eps_diag.device)
         # eps = (eps_diag / (-EPSILON_0 * omega**2)).reshape(shape) # here there is an assumption that the eps_vec is a square matrix
@@ -317,6 +289,15 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         else:
             symmetry = False
 
+        if not double:
+            b = (b / SCALE).astype(np.complex64)
+            A = (A / SCALE).astype(np.complex64)
+
+        if _A_cache is not None and _A_cache.get("A", None) is not None:
+            structure_match, value_match = compare_As(A, _A_cache["A"], atol=1e-5)
+        else:
+            structure_match, value_match = False, False
+
         if numerical_solver == "solve_direct":
             with TimerCtx(enable=ENABLE_TIMER, desc="forward"):
                 pSolve = (
@@ -324,37 +305,63 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                     if _solver_cache is not None
                     else None
                 )
-                ctx.pSolve = None
-                if not double:
-                    b = (b / SCALE).astype(np.complex64)
 
-                if pSolve is not None:
-                    # print("now we reuse the forward solver", flush=True)
-                    x = _solver_cache["pSolve_fwd"].solve(b)
-                else:
-                    if not double:
-                        A = (A / SCALE).astype(np.complex64)
-
-                        # print("max A and b", np.max(A), np.max(b))
-                    ### if not cache mode and not symmetric A, we cannot reuse anything, just clear it.
+                if pSolve is None or not structure_match:
+                    ## if there is no cached pSolve, or the structure of A is different, we need to create a new solver
                     x, pSolve = solve_linear(
                         A,
                         b,
                         symmetry=symmetry,
                         clear=not _solver_cache and not symmetry,
                         double=double,
+                        use_pydiso=HAS_PYDISO,
                     )
-                    if _solver_cache is not None:
-                        _solver_cache["pSolve_fwd"] = pSolve
-                        # print("now we cache the forward solver", flush=True)
-                if (
-                    symmetry
-                ):  # only when A is symmetric after precondiction, we can reuse pSolve for adjoint
-                    ctx.pSolve = pSolve
-                # print("forward x", np.max(x))
+                    # print("[fwd] creating a new direct solver", flush=True)
+                elif pSolve is not None:
+                    # print("now we reuse the forward solver", flush=True)
+                    if structure_match and value_match:
+                        ## we share the entire solver, just solving different b
+                        x = pSolve.solve(b).reshape(-1)
+                    elif HAS_PYDISO and structure_match:
+                        ## we refactor the matrix A to share the symbolic factorization
+                        pSolve.refactor(A)
+                        x = pSolve.solve(b)
+                        # print("[fwd] refactoring the direct solver", flush=True)
+                    else:
+                        ## unexpected condition, just recreate the solver anyway
+                        x, pSolve = solve_linear(
+                            A,
+                            b,
+                            symmetry=symmetry,
+                            clear=not _solver_cache and not symmetry,
+                            double=double,
+                            use_pydiso=HAS_PYDISO,
+                        )
+                else:
+                    raise ValueError("Unexpected solver condition")
+
+                if _solver_cache is not None:
+                    _solver_cache["pSolve_fwd"] = pSolve
+                if _A_cache is not None:
+                    _A_cache["A"] = A
 
                 # x = solve_linear(A, b, iterative_method="lgmres", symmetry=symmetry, rtol=1e-2)
             # print(f"my solve time (symmetry={symmetry}): {t.interval}")
+        elif numerical_solver == "solve_direct_gpu":
+            assert symmetry and not double
+            with TimerCtx(enable=ENABLE_TIMER, desc="forward"):
+                if not double:
+                    b = (b / SCALE).astype(np.complex64)
+                    A = (A / SCALE).astype(np.complex64)
+
+                with torch.cuda.stream(torch.cuda.default_stream()):
+                    A = A.tocoo().tocsr().sorted_indices()
+                    x = spsolve_cudss(
+                        A, b, device=eps_matrix.device, mtype=1 if symmetry else 0
+                    )
+                torch.cuda.synchronize()
+
+                # print("forward x", np.max(x))
         elif numerical_solver == "none":
             assert neural_solver is not None
             # print("we are now using pure neural solver", flush=True)
@@ -396,6 +403,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             x = torch.from_numpy(x).to(torch.complex128).to(eps_matrix.device)
         ctx.entries_a = entries_a
         ctx.indices_a = np.flip(indices_a, axis=0)
+        ctx.A = A
         ctx.save_for_backward(x, eps_matrix)
         ctx.solver_instance = solver_instance
         ctx.slice_name = slice_name
@@ -413,6 +421,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         ctx.omega = omega
         ctx.double = double
         ctx._solver_cache = _solver_cache
+        ctx._A_cache = _A_cache
         return x
 
     @staticmethod
@@ -453,23 +462,44 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             else:
                 A_t = make_sparse(entries_a, indices_a, (N, N))
                 symmetry = False
+
+            if not ctx.double:
+                A_t = (A_t / SCALE).astype(np.complex64)
+                adj_src = (adj_src / SCALE).astype(np.complex64)
+
+            _A_cache = ctx._A_cache
+            ## compare A_t.T with cached A
+            if _A_cache is not None and _A_cache.get("A", None) is not None:
+                structure_match, value_match = compare_As(A_t, _A_cache["A"], atol=1e-5)
+            else:
+                structure_match, value_match = False, False
+
             if numerical_solver == "solve_direct":
                 with TimerCtx(enable=ENABLE_TIMER, desc="adjoint"):
-                    if not ctx.double:
-                        adj_src = (adj_src / SCALE).astype(np.complex64)
+                    if ctx._solver_cache["pSolve_fwd"] is None or not structure_match:
+                        ## no cached fwd solver, or structure is different, we need to create a new adj solver
+                        adj, pSolve = solve_linear(
+                            A_t,
+                            adj_src,
+                            symmetry=symmetry,
+                            clear=not ctx._solver_cache,
+                            double=ctx.double,
+                        )
+                        # print("[bwd] creating a new direct solver", flush=True)
+                        # if cache mode, we need to cache this adj solver as well
 
-                    if ctx.pSolve is None:
-                        ## no fwd solver to reuse, means A is not symmtric
-                        ## if we find cached adj solver, we reuse it
-                        if (
-                            ctx._solver_cache is not None
-                            and ctx._solver_cache["pSolve_adj"] is not None
-                        ):
-                            adj = ctx.pSolve.solve(adj_src)
+                    elif ctx._solver_cache["pSolve_fwd"] is not None:
+                        if structure_match and value_match:
+                            pSolve = ctx._solver_cache["pSolve_fwd"]
+                            adj = pSolve.solve(adj_src).reshape(-1)
+                            # print("[bwd] reusing the direct solver", flush=True)
+                        elif HAS_PYDISO and structure_match:
+                            pSolve = ctx._solver_cache["pSolve_fwd"]
+                            pSolve.refactor(A_t)
+                            adj = pSolve.solve(adj_src)
+                            # print("[bwd] refactoring the direct solver", flush=True)
                         else:
-                            ## nothing to reuse, we need to solve it
-                            if not ctx.double:
-                                A_t = (A_t / SCALE).astype(np.complex64)
+                            ## unexpected condition, just recreate the solver anyway
                             adj, pSolve = solve_linear(
                                 A_t,
                                 adj_src,
@@ -477,15 +507,31 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                                 clear=not ctx._solver_cache,
                                 double=ctx.double,
                             )
-                            # if cache mode, we need to cache this adj solver as well
-                            if ctx._solver_cache is not None:
-                                ctx._solver_cache["pSolve_adj"] = pSolve
                     else:
-                        ## we reuse fwd solver
-                        # print("now we reuse the forward solver for adjoint", flush=True)
-                        adj = ctx.pSolve.solve(adj_src)
-                        ctx.pSolve = None
-                    # print("backward adj", adj[100])
+                        raise ValueError("Unexpected solver condition")
+
+                    if ctx._solver_cache is not None:
+                        ctx._solver_cache["pSolve_fwd"] = pSolve
+                    if _A_cache is not None:
+                        _A_cache["A"] = A_t
+
+            elif numerical_solver == "solve_direct_gpu":
+                assert symmetry and not ctx.double
+                with TimerCtx(enable=ENABLE_TIMER, desc="adjoint"):
+                    if not ctx.double:
+                        adj_src = (adj_src / SCALE).astype(np.complex64)
+                        A_t = (A_t / SCALE).astype(np.complex64)
+
+                    with torch.cuda.stream(torch.cuda.default_stream()):
+                        A_t = A_t.tocoo().tocsr().sorted_indices()
+                        adj = spsolve_cudss(
+                            A_t,
+                            adj_src,
+                            device=eps_matrix.device,
+                            mtype=1 if symmetry else 0,
+                        )
+                    torch.cuda.synchronize()
+
             elif numerical_solver == "none":
                 assert adj_solver is not None
                 # print("we are now using pure neural solver for adjoint", flush=True)
@@ -590,6 +636,7 @@ class SparseSolveTorch(torch.nn.Module):
         self.numerical_solver = numerical_solver
         self.use_autodiff = use_autodiff
         self._solver_cache = {"pSolve_fwd": None, "pSolve_adj": None}
+        self._A_cache = {"A": None}  # csr matrix
 
         self.set_cache_mode(False)
 
@@ -597,6 +644,7 @@ class SparseSolveTorch(torch.nn.Module):
         self.shape = shape
 
     def set_cache_mode(self, mode: bool):
+        ## whether to cache the pSolve
         self._cache_mode = mode
         if not mode:
             self.clear_solver_cache()
@@ -605,9 +653,11 @@ class SparseSolveTorch(torch.nn.Module):
         if self._solver_cache["pSolve_fwd"] is not None:
             self._solver_cache["pSolve_fwd"].clear()
             self._solver_cache["pSolve_fwd"] = None
+
         if self._solver_cache["pSolve_adj"] is not None:
             self._solver_cache["pSolve_adj"].clear()
             self._solver_cache["pSolve_adj"] = None
+        self._A_cache = {"A": None}
 
     def forward(
         self,
@@ -645,6 +695,7 @@ class SparseSolveTorch(torch.nn.Module):
             pol,
             double,
             self._solver_cache if self._cache_mode else None,
+            self._A_cache,
         )
         return x
 
