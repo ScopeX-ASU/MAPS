@@ -1410,7 +1410,7 @@ class TemperatureScheduler:
 
 
 class SharpnessScheduler(object):
-    __mode_list__ = {"cosine", "quadratic"}
+    __mode_list__ = {"cosine", "quadratic", "exp2"}
 
     def __init__(
         self,
@@ -1453,11 +1453,25 @@ class SharpnessScheduler(object):
         )
         return self.current_sharp
 
+    def _step_exp2(self):
+        ## 1111,2222,4444,8888,16161616,....256256256
+        num_stages = int(math.log2(self.final_sharp))
+        steps_per_stages = int(self.total_steps // num_stages)
+        self.current_step += 1
+        if self.current_step > self.total_steps:
+            self.current_step = self.total_steps
+        self.current_sharp = min(
+            max(self.initial_sharp, 2 ** (self.current_step // steps_per_stages)),
+            self.final_sharp,
+        )
+
     def step(self):
         if self.mode == "cosine":
             return self._step_cosine()
         elif self.mode == "quadratic":
             return self._step_quadratic()
+        elif self.mode == "exp2":
+            return self._step_exp2()
         else:
             raise ValueError(
                 f"mode should be one of {self.__mode_list__}, but got {self.mode}"
