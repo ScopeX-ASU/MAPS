@@ -3,7 +3,7 @@ Description:
 Author: Jiaqi Gu (jiaqigu@asu.edu)
 Date: 2025-11-06 17:04:02
 LastEditors: Jiaqi Gu (jiaqigu@asu.edu)
-LastEditTime: 2025-11-06 22:25:30
+LastEditTime: 2025-11-07 10:40:36
 FilePath: /MAPS_local/core/invdes/examples/vertical_coupler.py
 '''
 """
@@ -39,7 +39,7 @@ if __name__ == "__main__":
 
     # edge_coupler_region_size = (1.6, 1.6)
     vertical_coupler_region_size = (15, 0.16)
-    port_len = 1.8
+    port_len = 2.8
 
     input_port_width = 0.26
     output_port_width = 0.26
@@ -60,13 +60,13 @@ if __name__ == "__main__":
     )
 
     device = VerticalCoupler(
-        material_r=2.9**2, # effective index from tidy3d tutorial apodized coupler
+        material_r="Si", # effective index from tidy3d tutorial apodized coupler
         material_bg="SiO2",
         sim_cfg=sim_cfg,
         box_size=vertical_coupler_region_size,
         farfield_dist=farfield_dist,
         farfield_spot_size=10.8,
-        port_len=(2.8, 2.8),
+        port_len=(port_len, port_len),
         port_width=(input_port_width, output_port_width),
         device=operation_device,
     )

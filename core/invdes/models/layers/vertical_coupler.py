@@ -61,12 +61,18 @@ class VerticalCoupler(N_Ports):
                 type="box",
                 direction="y",
                 center=[-box_size[0]/2 + monitor_size / 2, farfield_dist / 2],
-                size=[monitor_size, farfield_dist],
+                size=[monitor_size, farfield_dist - port_width[0]],
                 eps=eps_bg_fn(wl_cen),
             ),
         )
 
-        geometry_cfgs = dict()
+        geometry_cfgs = dict(
+        cladding=dict(
+                type="box",
+                center=[0, farfield_dist / 2],
+                size=[farfield_spot_size, farfield_dist - port_width[0]],
+                eps=eps_bg_fn(wl_cen),
+            ))
 
         design_region_cfgs = dict(
             design_region_1=dict(
@@ -75,7 +81,7 @@ class VerticalCoupler(N_Ports):
                     0,
                     port_width[0] / 2
                     - self.box_size[1] / 2
-                    - 1 / sim_cfg["resolution"],
+                    - 0.5 / sim_cfg["resolution"],
                 ],
                 size=self.box_size,
                 eps=eps_r_fn(wl_cen),

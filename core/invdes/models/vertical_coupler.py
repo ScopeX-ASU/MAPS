@@ -129,15 +129,15 @@ class VerticalCouplerOptimization(BaseOptimization):
         for region_name in device.design_region_cfgs.keys():
             design_region_param_cfgs[region_name] = dict(
                 method="levelset",
-                rho_resolution=[50, 1],
+                rho_resolution=[50, 0],
                 transform=[
                     # dict(type="mirror_symmetry", dims=[1]),
-                    # dict(
-                    #     type="blur",
-                    #     mfs=0.05,
-                    #     resolutions=[hr_device.resolution, hr_device.resolution],
-                    #     dim="xy",
-                    # ),
+                    dict(
+                        type="blur",
+                        mfs=0.03,
+                        resolutions=[hr_device.resolution, hr_device.resolution],
+                        dim="xy",
+                    ),
                     dict(type="binarize"),
                 ],
                 # init_method="ones",
