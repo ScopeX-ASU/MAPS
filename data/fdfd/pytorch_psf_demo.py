@@ -109,7 +109,9 @@ def apply_etching_threshold(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Demo of applying PSF kernel with PyTorch.")
+    parser = argparse.ArgumentParser(
+        description="Demo of applying PSF kernel with PyTorch."
+    )
     parser.add_argument(
         "--input",
         type=Path,
@@ -146,7 +148,9 @@ def main() -> None:
         image = load_image(args.input)
         filtered = apply_kernel(image, kernel)
         thresholded = (
-            apply_etching_threshold(filtered, threshold) if threshold is not None else None
+            apply_etching_threshold(filtered, threshold)
+            if threshold is not None
+            else None
         )
 
         cols = 2 if thresholded is None else 3
@@ -195,9 +199,15 @@ def main() -> None:
             diff_source = thresholded if thresholded is not None else filtered
             diff = (diff_source - image).abs()
 
-            input_save_path = output_dir / f"pytorch_psf_demo_spacing_{spacing}_input.png"
-            filtered_save_path = output_dir / f"pytorch_psf_demo_spacing_{spacing}_filtered.png"
-            diff_save_path = output_dir / f"pytorch_psf_demo_spacing_{spacing}_difference.png"
+            input_save_path = (
+                output_dir / f"pytorch_psf_demo_spacing_{spacing}_input.png"
+            )
+            filtered_save_path = (
+                output_dir / f"pytorch_psf_demo_spacing_{spacing}_filtered.png"
+            )
+            diff_save_path = (
+                output_dir / f"pytorch_psf_demo_spacing_{spacing}_difference.png"
+            )
 
             save_tensor_image(image, input_save_path)
             save_tensor_image(filtered, filtered_save_path)
@@ -228,7 +238,9 @@ def main() -> None:
                 print(f"Saved thresholded image to {threshold_save_path}")
                 col_idx += 1
 
-            axes[row, col_idx].imshow(diff_norm.permute(1, 2, 0).numpy()[:, :, 0], cmap="magma")
+            axes[row, col_idx].imshow(
+                diff_norm.permute(1, 2, 0).numpy()[:, :, 0], cmap="magma"
+            )
             axes[row, col_idx].set_title("Abs difference")
             axes[row, col_idx].axis("off")
 

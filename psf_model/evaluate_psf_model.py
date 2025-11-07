@@ -15,7 +15,6 @@ from psf_model.calibrate_psf_model import (
     resolve_device,
 )
 
-
 Image.MAX_IMAGE_PIXELS = None
 
 
@@ -66,10 +65,14 @@ def sliding_window_predict(
     return output.clamp_(0.0, 1.0)
 
 
-def load_checkpoint_model(checkpoint_path: Path, device: torch.device) -> tuple[PSFCalibrationModel, dict]:
+def load_checkpoint_model(
+    checkpoint_path: Path, device: torch.device
+) -> tuple[PSFCalibrationModel, dict]:
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     if "args" not in checkpoint:
-        raise KeyError("Checkpoint missing 'args' entry. Please provide a checkpoint saved by calibrate_psf_model.py.")
+        raise KeyError(
+            "Checkpoint missing 'args' entry. Please provide a checkpoint saved by calibrate_psf_model.py."
+        )
 
     ckpt_args = checkpoint["args"]
     namespace = SimpleNamespace(**ckpt_args)
@@ -96,7 +99,9 @@ def collect_image_pairs(
     design_paths = sorted(data_dir.glob(design_glob))
     fabricated_paths = sorted(data_dir.glob(fabricated_glob))
     if not design_paths or not fabricated_paths:
-        raise FileNotFoundError(f"No images found in {data_dir} using globs {design_glob} / {fabricated_glob}.")
+        raise FileNotFoundError(
+            f"No images found in {data_dir} using globs {design_glob} / {fabricated_glob}."
+        )
     if len(design_paths) != len(fabricated_paths):
         raise ValueError("Mismatch between number of design and fabricated images.")
     return list(zip(design_paths, fabricated_paths))
@@ -108,18 +113,70 @@ def save_prediction(prediction: torch.Tensor, output_path: Path) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate calibrated PSF model on design/fabricated data.")
-    parser.add_argument("--checkpoint", type=Path, required=True, help="Path to model checkpoint.")
-    parser.add_argument("--data-dir", type=Path, default=Path("psf_model/data"), help="Directory containing x*.png/y*.png.")
-    parser.add_argument("--design-glob", type=str, default="x*.png", help="Glob for design (input) images.")
-    parser.add_argument("--fabricated-glob", type=str, default="y*.png", help="Glob for fabricated (target) images.")
-    parser.add_argument("--use-sliding-window", action="store_true", help="Enable sliding-window evaluation instead of full-image inference.")
-    parser.add_argument("--patch-size", type=int, default=512, help="Patch size used during evaluation when --use-sliding-window is set.")
-    parser.add_argument("--stride", type=int, default=256, help="Stride for sliding-window inference when enabled.")
-    parser.add_argument("--sharpness", type=float, default=None, help="Override sigmoid sharpness used during evaluation.")
-    parser.add_argument("--device", type=str, default=None, help="Device for inference. Defaults to cuda if available.")
-    parser.add_argument("--save-dir", type=Path, default=Path("psf_model/eval_outputs"), help="Directory to store predictions.")
-    parser.add_argument("--save-predictions", action="store_true", help="If set, save predicted fabricated images.")
+    parser = argparse.ArgumentParser(
+        description="Evaluate calibrated PSF model on design/fabricated data."
+    )
+    parser.add_argument(
+        "--checkpoint", type=Path, required=True, help="Path to model checkpoint."
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path("psf_model/data"),
+        help="Directory containing x*.png/y*.png.",
+    )
+    parser.add_argument(
+        "--design-glob",
+        type=str,
+        default="x*.png",
+        help="Glob for design (input) images.",
+    )
+    parser.add_argument(
+        "--fabricated-glob",
+        type=str,
+        default="y*.png",
+        help="Glob for fabricated (target) images.",
+    )
+    parser.add_argument(
+        "--use-sliding-window",
+        action="store_true",
+        help="Enable sliding-window evaluation instead of full-image inference.",
+    )
+    parser.add_argument(
+        "--patch-size",
+        type=int,
+        default=512,
+        help="Patch size used during evaluation when --use-sliding-window is set.",
+    )
+    parser.add_argument(
+        "--stride",
+        type=int,
+        default=256,
+        help="Stride for sliding-window inference when enabled.",
+    )
+    parser.add_argument(
+        "--sharpness",
+        type=float,
+        default=None,
+        help="Override sigmoid sharpness used during evaluation.",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Device for inference. Defaults to cuda if available.",
+    )
+    parser.add_argument(
+        "--save-dir",
+        type=Path,
+        default=Path("psf_model/eval_outputs"),
+        help="Directory to store predictions.",
+    )
+    parser.add_argument(
+        "--save-predictions",
+        action="store_true",
+        help="If set, save predicted fabricated images.",
+    )
     return parser.parse_args()
 
 
@@ -164,7 +221,11 @@ def main() -> None:
     print(f"Evaluating on device: {device}")
 
     model, ckpt_args = load_checkpoint_model(args.checkpoint, device)
-    sharpness = args.sharpness if args.sharpness is not None else ckpt_args.get("max_sharpness", 50.0)
+    sharpness = (
+        args.sharpness
+        if args.sharpness is not None
+        else ckpt_args.get("max_sharpness", 50.0)
+    )
     print(f"Using sigmoid sharpness: {sharpness}")
 
     pairs = collect_image_pairs(args.data_dir, args.design_glob, args.fabricated_glob)
@@ -174,7 +235,9 @@ def main() -> None:
     total_bce = 0.0
 
     for idx, (design_path, fabricated_path) in enumerate(pairs):
-        print(f"Processing pair {idx + 1}/{len(pairs)}: {design_path.name} vs {fabricated_path.name}")
+        print(
+            f"Processing pair {idx + 1}/{len(pairs)}: {design_path.name} vs {fabricated_path.name}"
+        )
         design_tensor = _load_grayscale_tensor(design_path)
         fabricated_tensor = _load_grayscale_tensor(fabricated_path)
 

@@ -89,15 +89,20 @@ def tdm_simulation(
         operation_device=operation_device,
     ).to(operation_device)
     print(opt)
-    
+
     results = opt.evaluation(image_path)
     print(results)
+
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--random_seed", type=int, default=0)
     parser.add_argument("--gpu_id", type=int, default=0)
-    parser.add_argument("--image_path", type=str, default="/home/hzhou144/projects/MAPS_local/data/fdfd/tdm/raw_opt_traj_ptb/corrected_design_prediction.png")
+    parser.add_argument(
+        "--image_path",
+        type=str,
+        default="/home/hzhou144/projects/MAPS_local/data/fdfd/tdm/raw_opt_traj_ptb/corrected_design_prediction.png",
+    )
     random_seed = parser.parse_args().random_seed
     gpu_id = parser.parse_args().gpu_id
     image_path = parser.parse_args().image_path

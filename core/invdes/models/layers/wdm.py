@@ -1,9 +1,10 @@
 from functools import partial
 from typing import Tuple
 
+import numpy as np
 import torch
 from pyutils.general import logger
-import numpy as np
+
 from core.utils import material_fn_dict
 
 from .device_base import N_Ports

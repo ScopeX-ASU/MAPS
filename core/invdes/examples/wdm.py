@@ -74,25 +74,29 @@ if __name__ == "__main__":
         return fom, {"trans_product": {"weight": 1, "value": product}}
 
     def build_wdm_obj_cfgs(
-        wls,                              # e.g. [1.54, 1.56, 1.58, ...]
-        desired_out_slices,               # e.g. ["out_slice_1", "out_slice_2", ...], same length as wls
+        wls,  # e.g. [1.54, 1.56, 1.58, ...]
+        desired_out_slices,  # e.g. ["out_slice_1", "out_slice_2", ...], same length as wls
         *,
         in_slice="in_slice_1",
         all_out_slices=("out_slice_1", "out_slice_2"),
         refl_slice="refl_slice_1",
-        rad_slices=dict(xp="rad_slice_xp", xm="rad_slice_xm", yp="rad_slice_yp", ym="rad_slice_ym"),
+        rad_slices=dict(
+            xp="rad_slice_xp", xm="rad_slice_xm", yp="rad_slice_yp", ym="rad_slice_ym"
+        ),
         weights=dict(trans=1.0, xtalk=-2.0, refl=-1.0, rad=-2.0),
         temp=300,
         in_mode="Ez1",
         out_modes=("Ez1",),
-        prop_dir="x+"
+        prop_dir="x+",
     ):
         """
         Returns a dict of objectives keyed like:
         wl{idx}_trans, wl{idx}_trans_p{j}, wl{idx}_refl_trans, wl{idx}_rad_trans_{dir}
         where idx starts at 1 in order of `wls`.
         """
-        assert len(wls) == len(desired_out_slices), "wls and desired_out_slices must have same length"
+        assert len(wls) == len(
+            desired_out_slices
+        ), "wls and desired_out_slices must have same length"
 
         cfg = {}
         for i, (wl, desired_out) in enumerate(zip(wls, desired_out_slices), start=1):
@@ -159,14 +163,18 @@ if __name__ == "__main__":
     # ---- Example: your 2-wavelength case ----
     wls = np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl).tolist()
     wls = [round(wl, 2) for wl in wls]
-    desired_out_slices = [f"out_slice_{i}" for i in range(1, n_wl + 1)]  # 1.54 -> port 1, 1.56 -> port 2
+    desired_out_slices = [
+        f"out_slice_{i}" for i in range(1, n_wl + 1)
+    ]  # 1.54 -> port 1, 1.56 -> port 2
     obj_cfgs = build_wdm_obj_cfgs(
         wls,
         desired_out_slices,
         in_slice="in_slice_1",
         all_out_slices=tuple(desired_out_slices),
         refl_slice="refl_slice_1",
-        rad_slices=dict(xp="rad_slice_xp", xm="rad_slice_xm", yp="rad_slice_yp", ym="rad_slice_ym"),
+        rad_slices=dict(
+            xp="rad_slice_xp", xm="rad_slice_xm", yp="rad_slice_yp", ym="rad_slice_ym"
+        ),
         weights=dict(trans=1, xtalk=-0.2, refl=-0.1, rad=-0.2),
         temp=300,
         in_mode="Ez1",

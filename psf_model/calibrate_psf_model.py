@@ -16,6 +16,7 @@ from psf_model.model.psf_model import build_effective_psf
 
 Image.MAX_IMAGE_PIXELS = None
 
+
 def _ensure_grayscale(image: Image.Image) -> Image.Image:
     if image.mode != "L":
         return image.convert("L")
@@ -51,9 +52,13 @@ class PatchDataset(Dataset):
 
         rng = np.random.default_rng(seed)
         self.samples: List[Tuple[int, int, int]] = []
-        for idx, (design, fabricated) in enumerate(zip(self.design_tensors, self.fab_tensors)):
+        for idx, (design, fabricated) in enumerate(
+            zip(self.design_tensors, self.fab_tensors)
+        ):
             if design.shape != fabricated.shape:
-                raise ValueError(f"Shape mismatch for image pair {design_paths[idx]} and {fabricated_paths[idx]}.")
+                raise ValueError(
+                    f"Shape mismatch for image pair {design_paths[idx]} and {fabricated_paths[idx]}."
+                )
             height, width = design.shape
             if height < patch_size or width < patch_size:
                 raise ValueError(
@@ -74,8 +79,13 @@ class PatchDataset(Dataset):
         img_idx, top, left = self.samples[index]
         bottom = top + self.patch_size
         right = left + self.patch_size
-        design_patch = self.design_tensors[img_idx][top:bottom, left:right].to(torch.float32) / 255.0
-        fabricated_patch = self.fab_tensors[img_idx][top:bottom, left:right].to(torch.float32) / 255.0
+        design_patch = (
+            self.design_tensors[img_idx][top:bottom, left:right].to(torch.float32)
+            / 255.0
+        )
+        fabricated_patch = (
+            self.fab_tensors[img_idx][top:bottom, left:right].to(torch.float32) / 255.0
+        )
 
         if self.augment:
             if random.random() < 0.5:
@@ -101,9 +111,13 @@ class FullImageDataset(Dataset):
         self.augment = augment
         self.design_tensors = [_load_grayscale_tensor(p) for p in design_paths]
         self.fab_tensors = [_load_grayscale_tensor(p) for p in fabricated_paths]
-        for idx, (design, fabricated) in enumerate(zip(self.design_tensors, self.fab_tensors)):
+        for idx, (design, fabricated) in enumerate(
+            zip(self.design_tensors, self.fab_tensors)
+        ):
             if design.shape != fabricated.shape:
-                raise ValueError(f"Shape mismatch for image pair {design_paths[idx]} and {fabricated_paths[idx]}.")
+                raise ValueError(
+                    f"Shape mismatch for image pair {design_paths[idx]} and {fabricated_paths[idx]}."
+                )
 
     def __len__(self) -> int:
         return len(self.design_tensors)
@@ -204,11 +218,15 @@ class PSFCalibrationModel(nn.Module):
             sig_by=sig_by,
         )
         padding = threshold_kernel_size // 2
-        self.threshold_head = nn.Conv2d(1, 1, kernel_size=threshold_kernel_size, padding=padding)
+        self.threshold_head = nn.Conv2d(
+            1, 1, kernel_size=threshold_kernel_size, padding=padding
+        )
         nn.init.zeros_(self.threshold_head.weight)
         nn.init.zeros_(self.threshold_head.bias)
 
-    def forward(self, x: torch.Tensor, sharpness: float) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(
+        self, x: torch.Tensor, sharpness: float
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         psf_out = self.psf(x)
         threshold = torch.sigmoid(self.threshold_head(psf_out))
         logits = sharpness * (psf_out - threshold)
@@ -228,7 +246,9 @@ class EpochMetrics:
     mse: float = 0.0
     bce: float = 0.0
 
-    def update(self, loss: torch.Tensor, mse: torch.Tensor, bce: torch.Tensor, batch_size: int) -> None:
+    def update(
+        self, loss: torch.Tensor, mse: torch.Tensor, bce: torch.Tensor, batch_size: int
+    ) -> None:
         self.loss += float(loss.detach()) * batch_size
         self.mse += float(mse.detach()) * batch_size
         self.bce += float(bce.detach()) * batch_size
@@ -268,10 +288,14 @@ def build_psf_kernel(args: argparse.Namespace) -> torch.Tensor:
     return kernel
 
 
-def compute_sharpness(args: argparse.Namespace, epoch: int, step: int, steps_per_epoch: int) -> float:
+def compute_sharpness(
+    args: argparse.Namespace, epoch: int, step: int, steps_per_epoch: int
+) -> float:
     if args.sharpness_ramp_epochs <= 0:
         return args.max_sharpness
-    progress = (epoch + step / max(steps_per_epoch, 1)) / max(args.sharpness_ramp_epochs, 1)
+    progress = (epoch + step / max(steps_per_epoch, 1)) / max(
+        args.sharpness_ramp_epochs, 1
+    )
     progress = max(0.0, min(1.0, progress))
     return args.min_sharpness + progress * (args.max_sharpness - args.min_sharpness)
 
@@ -302,10 +326,14 @@ def run_epoch(
         with torch.set_grad_enabled(train):
             pred, psf_out, threshold, logits = model(design, sharpness=sharpness)
             mse_loss = (
-                F.mse_loss(pred, fabricated) if loss_weights.mse > 0.0 else pred.new_tensor(0.0)
+                F.mse_loss(pred, fabricated)
+                if loss_weights.mse > 0.0
+                else pred.new_tensor(0.0)
             )
             bce_loss = (
-                F.binary_cross_entropy(pred, fabricated) if loss_weights.bce > 0.0 else pred.new_tensor(0.0)
+                F.binary_cross_entropy(pred, fabricated)
+                if loss_weights.bce > 0.0
+                else pred.new_tensor(0.0)
             )
             total_loss = loss_weights.mse * mse_loss + loss_weights.bce * bce_loss
 
@@ -323,22 +351,74 @@ def run_epoch(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Calibrate PSF model against fabrication data.")
-    parser.add_argument("--data-dir", type=Path, default=Path("psf_model/data"), help="Directory with x*.png/y*.png pairs.")
-    parser.add_argument("--design-glob", type=str, default="x*.png", help="Glob for design images.")
-    parser.add_argument("--fabricated-glob", type=str, default="y*.png", help="Glob for fabricated images.")
-    parser.add_argument("--kernel-size", type=int, default=501, help="Effective PSF kernel size in nanometers (pixels).")
+    parser = argparse.ArgumentParser(
+        description="Calibrate PSF model against fabrication data."
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path("psf_model/data"),
+        help="Directory with x*.png/y*.png pairs.",
+    )
+    parser.add_argument(
+        "--design-glob", type=str, default="x*.png", help="Glob for design images."
+    )
+    parser.add_argument(
+        "--fabricated-glob",
+        type=str,
+        default="y*.png",
+        help="Glob for fabricated images.",
+    )
+    parser.add_argument(
+        "--kernel-size",
+        type=int,
+        default=501,
+        help="Effective PSF kernel size in nanometers (pixels).",
+    )
     # parser.add_argument("--use-patches", action="store_true", help="Train on random patches instead of full images.")
-    parser.add_argument("--use-patches", type=bool, default=False, help="Train on random patches instead of full images.")
-    parser.add_argument("--patch-size", type=int, default=512, help="Patch size used for training when --use-patches is set.")
-    parser.add_argument("--train-patches-per-image", type=int, default=512, help="Number of training patches per image (requires --use-patches).")
-    parser.add_argument("--val-patches-per-image", type=int, default=0, help="Validation samples per image; when --use-patches is not set, full images are used and this acts as a boolean flag.")
+    parser.add_argument(
+        "--use-patches",
+        type=bool,
+        default=False,
+        help="Train on random patches instead of full images.",
+    )
+    parser.add_argument(
+        "--patch-size",
+        type=int,
+        default=512,
+        help="Patch size used for training when --use-patches is set.",
+    )
+    parser.add_argument(
+        "--train-patches-per-image",
+        type=int,
+        default=512,
+        help="Number of training patches per image (requires --use-patches).",
+    )
+    parser.add_argument(
+        "--val-patches-per-image",
+        type=int,
+        default=0,
+        help="Validation samples per image; when --use-patches is not set, full images are used and this acts as a boolean flag.",
+    )
     parser.add_argument("--batch-size", type=int, default=1, help="Mini-batch size.")
-    parser.add_argument("--epochs", type=int, default=2, help="Number of training epochs.")
-    parser.add_argument("--learning-rate", type=float, default=1e-3, help="Learning rate for optimizer.")
-    parser.add_argument("--min-sharpness", type=float, default=5.0, help="Initial sigmoid sharpness.")
-    parser.add_argument("--max-sharpness", type=float, default=50.0, help="Final sigmoid sharpness.")
-    parser.add_argument("--sharpness-ramp-epochs", type=int, default=20, help="Epochs to ramp sharpness.")
+    parser.add_argument(
+        "--epochs", type=int, default=2, help="Number of training epochs."
+    )
+    parser.add_argument(
+        "--learning-rate", type=float, default=1e-3, help="Learning rate for optimizer."
+    )
+    parser.add_argument(
+        "--min-sharpness", type=float, default=5.0, help="Initial sigmoid sharpness."
+    )
+    parser.add_argument(
+        "--max-sharpness", type=float, default=50.0, help="Final sigmoid sharpness."
+    )
+    parser.add_argument(
+        "--sharpness-ramp-epochs",
+        type=int,
+        default=20,
+        help="Epochs to ramp sharpness.",
+    )
     parser.add_argument(
         "--loss",
         choices=["mse", "bce", "combined"],
@@ -346,20 +426,53 @@ def parse_args() -> argparse.Namespace:
         default="mse",
         help="Loss function configuration.",
     )
-    parser.add_argument("--mse-weight", type=float, default=0.5, help="Weight for MSE loss when using combined loss.")
-    parser.add_argument("--bce-weight", type=float, default=0.5, help="Weight for BCE loss when using combined loss.")
-    parser.add_argument("--threshold-kernel-size", type=int, default=3, help="Kernel size for threshold prediction conv.")
+    parser.add_argument(
+        "--mse-weight",
+        type=float,
+        default=0.5,
+        help="Weight for MSE loss when using combined loss.",
+    )
+    parser.add_argument(
+        "--bce-weight",
+        type=float,
+        default=0.5,
+        help="Weight for BCE loss when using combined loss.",
+    )
+    parser.add_argument(
+        "--threshold-kernel-size",
+        type=int,
+        default=3,
+        help="Kernel size for threshold prediction conv.",
+    )
     parser.add_argument("--eta", type=float, default=0.55, help="PSF eta parameter.")
     parser.add_argument("--sig-ax", type=float, default=25.0, help="Sigma ax for PSF.")
     parser.add_argument("--sig-ay", type=float, default=25.0, help="Sigma ay for PSF.")
     parser.add_argument("--sig-bx", type=float, default=70.0, help="Sigma bx for PSF.")
     parser.add_argument("--sig-by", type=float, default=70.0, help="Sigma by for PSF.")
-    parser.add_argument("--device", type=str, default=None, help="Computation device. Defaults to cuda if available.")
-    parser.add_argument("--num-workers", type=int, default=0, help="Number of DataLoader workers.")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Computation device. Defaults to cuda if available.",
+    )
+    parser.add_argument(
+        "--num-workers", type=int, default=0, help="Number of DataLoader workers."
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
-    parser.add_argument("--checkpoint-dir", type=Path, default=Path("psf_model/checkpoints"), help="Directory to save checkpoints.")
-    parser.add_argument("--save-every", type=int, default=10, help="Checkpoint interval in epochs.")
-    parser.add_argument("--no-augment", action="store_true", help="Disable random flip augmentation during training.")
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=Path,
+        default=Path("psf_model/checkpoints"),
+        help="Directory to save checkpoints.",
+    )
+    parser.add_argument(
+        "--save-every", type=int, default=10, help="Checkpoint interval in epochs."
+    )
+    parser.add_argument(
+        "--no-augment",
+        action="store_true",
+        help="Disable random flip augmentation during training.",
+    )
     return parser.parse_args()
 
 
@@ -371,11 +484,15 @@ def resolve_device(device_arg: str | None) -> torch.device:
     return torch.device("cpu")
 
 
-def prepare_dataloaders(args: argparse.Namespace) -> Tuple[DataLoader, DataLoader | None]:
+def prepare_dataloaders(
+    args: argparse.Namespace,
+) -> Tuple[DataLoader, DataLoader | None]:
     design_paths = sorted(args.data_dir.glob(args.design_glob))
     fabricated_paths = sorted(args.data_dir.glob(args.fabricated_glob))
     if not design_paths or not fabricated_paths:
-        raise FileNotFoundError(f"No design/fabricated images found in {args.data_dir}.")
+        raise FileNotFoundError(
+            f"No design/fabricated images found in {args.data_dir}."
+        )
     if len(design_paths) != len(fabricated_paths):
         raise ValueError("Mismatch between number of design and fabricated images.")
 
@@ -385,7 +502,9 @@ def prepare_dataloaders(args: argparse.Namespace) -> Tuple[DataLoader, DataLoade
         if args.patch_size <= 0:
             raise ValueError("patch_size must be positive when using patches.")
         if args.train_patches_per_image <= 0:
-            raise ValueError("train_patches_per_image must be positive when using patches.")
+            raise ValueError(
+                "train_patches_per_image must be positive when using patches."
+            )
         train_dataset = PatchDataset(
             design_paths,
             fabricated_paths,

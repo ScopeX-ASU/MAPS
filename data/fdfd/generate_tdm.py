@@ -49,9 +49,9 @@ def tdm_opt(
         round((target_cell_size - 2 * port_len) * resolution) / resolution,
         round((target_cell_size - 2 * port_len) * resolution) / resolution,
     ]
-    assert round(tdm_region_size[0] + 2 * port_len, 2) == target_cell_size, (
-        f"right hand side: {tdm_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
-    )
+    assert (
+        round(tdm_region_size[0] + 2 * port_len, 2) == target_cell_size
+    ), f"right hand side: {tdm_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
 
     input_port_width = 0.48
     output_port_width = 0.48

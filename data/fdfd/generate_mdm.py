@@ -15,7 +15,6 @@ from core.invdes.models.layers import MDM
 from core.utils import DeterministicCtx, SharpnessScheduler, set_torch_deterministic
 from thirdparty.ceviche.constants import *
 
-
 # torch.set_printoptions(profile="full")
 
 
@@ -47,9 +46,9 @@ def mdm_opt(
         round((target_cell_size - 2 * port_len) * resolution) / resolution,
         round((target_cell_size - 2 * port_len) * resolution) / resolution,
     ]
-    assert round(mdm_region_size[0] + 2 * port_len, 2) == target_cell_size, (
-        f"right hand side: {mdm_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
-    )
+    assert (
+        round(mdm_region_size[0] + 2 * port_len, 2) == target_cell_size
+    ), f"right hand side: {mdm_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
 
     input_port_width = 0.8
     output_port_width = 0.8

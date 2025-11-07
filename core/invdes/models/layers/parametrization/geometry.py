@@ -9,11 +9,12 @@ FilePath: /MAPS_ilt/core/invdes/models/layers/parametrization/geometry.py
 
 import logging
 from typing import Any, Dict
-from torch.types import Device
-from torch import nn, Tensor
+
+import numpy as np
 import torch
 import torch.nn.functional as F
-import numpy as np
+from torch import Tensor, nn
+from torch.types import Device
 
 
 def gradImage(image):
@@ -84,9 +85,9 @@ class BatchGeometry(nn.Module):
         size_dim = self.geometry_cfgs.get(
             "size_dim", 2
         )  # number of parameters to determine the size, default 2, e.g., 2 for box, 1 for circle
-        assert isinstance(size_dim, int) and size_dim >= 1, (
-            "size_dim should be a positive integer."
-        )
+        assert (
+            isinstance(size_dim, int) and size_dim >= 1
+        ), "size_dim should be a positive integer."
         self.centers = nn.Parameter(
             torch.zeros(*batch_dims, 2)
         )  # (num_geometries, 2) # x, y coordinates, unit in um

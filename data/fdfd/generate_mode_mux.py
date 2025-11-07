@@ -125,7 +125,9 @@ def mode_mux_opt(
                     dump_data_path
                     + f"/mode_mux_id-{device_id}_opt_step_{step}_perturbed_{i}.h5"
                 )
-                filename_yml = dump_data_path + f"/mode_mux_id-{device_id}_perturbed_{i}.yml"
+                filename_yml = (
+                    dump_data_path + f"/mode_mux_id-{device_id}_perturbed_{i}.yml"
+                )
                 opt.dump_data(
                     filename_h5=filename_h5, filename_yml=filename_yml, step=step
                 )

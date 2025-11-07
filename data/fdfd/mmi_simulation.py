@@ -12,11 +12,10 @@ sys.path.insert(
 )
 import argparse
 import random
-import numpy as np
 
+import numpy as np
 import torch
 import torch.nn.functional as F
-
 from autograd.numpy import array as npa
 from pyutils.config import Config
 
@@ -42,7 +41,9 @@ def compare_designs(design_regions_1, design_regions_2):
     return torch.mean(torch.stack(similarity)).item()
 
 
-def _align_smatrix_phases(current: np.ndarray, reference: np.ndarray, atol: float = 1e-12):
+def _align_smatrix_phases(
+    current: np.ndarray, reference: np.ndarray, atol: float = 1e-12
+):
     """Align per-port phases of `current` to match `reference` up to numerical tolerance."""
     aligned = current.copy()
     num_inputs, num_outputs = reference.shape
@@ -83,7 +84,7 @@ def mmi_simulation(
     image_path="/home/hzhou144/projects/MAPS_local/data/fdfd/wdm/raw_opt_traj_ptb/wdm_id-0_opt_step_85-in_slice_1-1.56-Ez1-300.png",
     raw_data="/home/hzhou144/projects/MAPS_local/data/fdfd/mmi/raw_opt_traj_ptb/mmi_id-0_opt_step_0-in_slice_3-1.55-Ez1-300.h5",
 ):
-    
+
     set_torch_deterministic(int(device_id))
     dump_data_path = f"./data/fdfd/mmi/raw_opt_traj_ptb"
     sim_cfg = DefaultSimulationConfig()
@@ -195,7 +196,9 @@ def mmi_simulation(
             current_matrix, reference_matrix
         )
         diff = aligned_matrix - reference_matrix
-        aligned_error = np.linalg.norm(diff, ord='fro') / np.linalg.norm(reference_matrix, ord='fro')
+        aligned_error = np.linalg.norm(diff, ord="fro") / np.linalg.norm(
+            reference_matrix, ord="fro"
+        )
 
         # print("current_s_matrix:", current_matrix.reshape(-1))
         print("true_s_matrix:", reference_matrix.reshape(-1))
@@ -215,14 +218,23 @@ def mmi_simulation(
         print("No ground-truth S matrix stored in the HDF5 file.")
     ## need to read in the true S_parameter
 
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--random_seed", type=int, default=0)
     parser.add_argument("--gpu_id", type=int, default=0)
     # parser.add_argument("--image_path", type=str, default="/home/hzhou144/projects/MAPS_local/data/fdfd/mmi/raw_opt_traj_ptb/mmi_id-0_opt_step_0-in_slice_3-1.55-Ez1-300.png")
-    parser.add_argument("--image_path", type=str, default="/home/hzhou144/projects/MAPS_local/data/fdfd/data_fig/fdfd/mmi/prefab_prediction_wo_correction.png")
+    parser.add_argument(
+        "--image_path",
+        type=str,
+        default="/home/hzhou144/projects/MAPS_local/data/fdfd/data_fig/fdfd/mmi/prefab_prediction_wo_correction.png",
+    )
     # parser.add_argument("--image_path", type=str, default="/home/hzhou144/projects/MAPS_local/data/fdfd/data_fig/fdfd/mmi/corrected_design_prediction.png")
-    parser.add_argument("--raw_data", type=str, default="/home/hzhou144/projects/MAPS_local/data/fdfd/mmi/raw_opt_traj_ptb/mmi_id-0_opt_step_0-in_slice_3-1.55-Ez1-300.h5")
+    parser.add_argument(
+        "--raw_data",
+        type=str,
+        default="/home/hzhou144/projects/MAPS_local/data/fdfd/mmi/raw_opt_traj_ptb/mmi_id-0_opt_step_0-in_slice_3-1.55-Ez1-300.h5",
+    )
     random_seed = parser.parse_args().random_seed
     gpu_id = parser.parse_args().gpu_id
     image_path = parser.parse_args().image_path
@@ -232,6 +244,7 @@ def main():
     torch.backends.cudnn.benchmark = True
     set_torch_deterministic(int(41 + random_seed))
     mmi_simulation(random_seed, device, image_path=image_path, raw_data=raw_data)
+
 
 if __name__ == "__main__":
     main()

@@ -596,9 +596,7 @@ class BaseOptimization(nn.Module):
                 )
                 with h5py.File(filename, "w") as f:
                     # eps
-                    f.create_dataset(
-                        "eps_map", data=eps_dump
-                    )  # 2d numpy array
+                    f.create_dataset("eps_map", data=eps_dump)  # 2d numpy array
                     # eps_unique_count = np.unique(eps_dump).size
                     # f.attrs["eps_map_unique_count"] = int(eps_unique_count)
                     # print(f"eps_map unique values: {eps_unique_count}")
@@ -882,14 +880,14 @@ class BaseOptimization(nn.Module):
         results.update({"eps_map": eps_map})
 
         return results
-    
+
     def evaluation(self, image_path, raw_data=None, read_S_parameter=False):
         """Evaluate a layout supplied as a PNG image or an HDF5 eps_map."""
         if len(self.device.design_region_masks) != 1:
             raise NotImplementedError(
                 "Image-based evaluation currently supports a single design region."
             )
-        
+
         if read_S_parameter:
             with h5py.File(raw_data, "r") as handle:
                 # Capture every S-parameter dataset stored in the HDF5 file.
@@ -950,22 +948,26 @@ class BaseOptimization(nn.Module):
         )
         full_map = eps_lo + density_tensor * (eps_hi - eps_lo)
 
-        
-            
         hr_eps_fullmap = full_map
         target_size = (
             region_mask.x.stop - region_mask.x.start,
             region_mask.y.stop - region_mask.y.start,
         )
         if min(target_size) <= 0:
-            raise ValueError(f"Invalid target size derived from region mask: {target_size}")
+            raise ValueError(
+                f"Invalid target size derived from region mask: {target_size}"
+            )
 
         eps_span = eps_hi - eps_lo
         if torch.allclose(eps_span, torch.zeros_like(eps_span)):
-            raise ValueError("High and low permittivity values are identical; cannot normalize.")
+            raise ValueError(
+                "High and low permittivity values are identical; cannot normalize."
+            )
 
         hr_region_mask = self.hr_device.design_region_masks[region_name]
-        normalized = ((hr_eps_fullmap - eps_lo) / eps_span).clamp(0.0, 1.0)[hr_region_mask]
+        normalized = ((hr_eps_fullmap - eps_lo) / eps_span).clamp(0.0, 1.0)[
+            hr_region_mask
+        ]
         src_res = int(self.hr_device.sim_cfg["resolution"])
         tar_res = int(round(1000 / src_res)) * src_res
         hr_size = [

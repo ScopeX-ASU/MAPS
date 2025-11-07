@@ -13,11 +13,15 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
-from core.utils import material_fn_dict
 from core.invdes.models import MDMOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import MDM
-from core.utils import DeterministicCtx, SharpnessScheduler, set_torch_deterministic
+from core.utils import (
+    DeterministicCtx,
+    SharpnessScheduler,
+    material_fn_dict,
+    set_torch_deterministic,
+)
 from thirdparty.ceviche.constants import *
 
 
@@ -89,7 +93,7 @@ def mdm_simulation(
     each_step=False,
     include_perturb=False,
     perturb_probs=[0.05, 0.1, 0.15],
-    image_path="/home/hzhou144/projects/MAPS_local/data/fdfd/mdm/raw_opt_traj_ptb/mdm_id-0_opt_step_63-in_slice_1-1.55-Ez2-300.png"
+    image_path="/home/hzhou144/projects/MAPS_local/data/fdfd/mdm/raw_opt_traj_ptb/mdm_id-0_opt_step_63-in_slice_1-1.55-Ez2-300.png",
 ):
     set_torch_deterministic(int(device_id))
     # dump_data_path = f"./data/fdfd/mdm/raw_opt_traj_ptb"
@@ -140,7 +144,7 @@ def mdm_simulation(
         operation_device=operation_device,
     ).to(operation_device)
     print(opt)
-    
+
     ## load predicted image
     # eps = load_prediction_image(opt)
     results = opt.evaluation(image_path)
@@ -151,7 +155,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--random_seed", type=int, default=0)
     parser.add_argument("--gpu_id", type=int, default=0)
-    parser.add_argument("--image_path", type=str, default="/home/hzhou144/projects/MAPS_local/data/fdfd/mdm/prefab/corrected_design_prediction.png")
+    parser.add_argument(
+        "--image_path",
+        type=str,
+        default="/home/hzhou144/projects/MAPS_local/data/fdfd/mdm/prefab/corrected_design_prediction.png",
+    )
     # parser.add_argument("--each_step", type=bool, default=False)
     # parser.add_argument("--include_perturb", type=int, default=0)
     random_seed = parser.parse_args().random_seed
