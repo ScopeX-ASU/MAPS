@@ -11,8 +11,11 @@ from pyutils.typing import DataLoader, Optimizer, Scheduler
 from torch.types import Device
 from torch.utils.data import Sampler
 
-from core.datasets import *
-from core.models import *
+from core.invdes.models import *
+from core.invdes.models.layers import *
+from core.train.datasets import *
+from core.train.models import *
+from core.train.utils import SParamLoss
 
 from .utils import (
     AspectRatioLoss,
@@ -25,7 +28,6 @@ from .utils import (
     NormalizedMSELoss,
     ResolutionScheduler,
     SharpnessScheduler,
-    SParamLoss,
     TemperatureScheduler,
     fab_penalty_ls_curve,
     fab_penalty_ls_gap,
@@ -543,10 +545,11 @@ def make_dataloader(
     return train_loader, validation_loader, test_loader
 
 
-def make_device(device: Device):
+def make_device(device: Device, sim_cfg):
     device_to_opt = eval(configs.model.device_type)(
-        sim_cfg=configs.model.sim_cfg,
+        sim_cfg=sim_cfg,
         device=device,
+        **configs.model.device_cfg,
     )
     return device_to_opt
 
@@ -624,10 +627,14 @@ def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
             if_constant_period=configs.model.if_constant_period,
             focal_constant=configs.model.focal_constant,
         ).to(device)
-    elif configs.model.name.lower() == "metacoupleroptimization":
+    elif configs.model.name.lower().endswith("optimization"):
         model = eval(configs.model.name)(
             device=kwargs["optDevice"],
-            sim_cfg=configs.model.sim_cfg,
+            hr_device=kwargs.get("hr_optDevice", None),
+            sim_cfg=kwargs["sim_cfg"],
+            operation_device=device,
+            design_region_param_cfgs=configs.model.design_region_param_cfgs,
+            obj_cfgs=configs.model.get("obj_cfg", {}),
         ).to(device)
     elif "simplecnn" in configs.model.name.lower():
         model = eval(configs.model.name)().to(device)

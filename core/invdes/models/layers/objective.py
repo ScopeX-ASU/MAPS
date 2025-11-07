@@ -1357,10 +1357,25 @@ class ObjectiveFunc(object):
                 )
 
             ## after clustering, we can run simulation for each group, and only factorize matrix once per group
+            solvers = {"Ez": None, "Hz": None}
+            ### each polarization share the same solver as we can use pydiso to share the symbolic factorization
             for (wl, pol, temp), sim_inst_cfgs in _simulation_queues.items():
                 sim = self.sims[(wl, pol, temp)]
-                sim.set_cache_mode(True)
-                sim.clear_solver_cache()
+                if solvers[pol] is None:
+                    solvers[pol] = sim.solver
+                    sim.solver.set_cache_mode(True)
+                    sim.solver.clear_solver_cache()
+                else:
+                    sim.solver = solvers[pol]
+
+            ## for each polarization's solver, we only need to factorize once with pydiso
+            ## we have three scenarios here:
+            ## group 1: first solve (slow), then just solve(b): fast
+            ## group 2...: first solve (refactor, middle), then just solve(b): fast
+            for (wl, pol, temp), sim_inst_cfgs in _simulation_queues.items():
+                sim = self.sims[(wl, pol, temp)]
+                # sim.set_cache_mode(True)
+                # sim.clear_solver_cache()
                 for idx, sim_inst_cfg in enumerate(sim_inst_cfgs):
                     slice_name = sim_inst_cfg["slice_name"]
                     mode = sim_inst_cfg["mode"]

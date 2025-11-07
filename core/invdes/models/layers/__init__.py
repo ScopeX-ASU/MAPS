@@ -1,9 +1,10 @@
 """
 Description:
-Author: Jiaqi Gu (jqgu@utexas.edu)
-Date: 2021-12-25 22:47:08
-LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2024-12-13 02:57:26
+Author: Jiaqi Gu (jiaqigu@asu.edu)
+Date: 2025-10-29 21:32:38
+LastEditors: Jiaqi Gu (jiaqigu@asu.edu)
+LastEditTime: 2025-11-05 21:49:37
+FilePath: /MAPS_local/core/invdes/models/layers/__init__.py
 """
 
 from .bending import *
@@ -13,10 +14,6 @@ from .edge_coupler import *
 from .etchmmi import *
 from .fom_layer import *
 from .mdm import *
-from .metacoupler import *
-from .metalens import *
-from .metalens_fdtd import *
-from .metamirror import *
 from .mmi import *
 from .mode_mux import *
 from .optical_diode import *

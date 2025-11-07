@@ -5,24 +5,19 @@ basically, this should be like the training logic like in train_NN.py
 """
 
 import os
-import sys
 import traceback
-from typing import Any, Dict
-
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../MAPS"))
-sys.path.insert(0, project_root)
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict
 
 import torch
 from pyutils.config import Config
 from pyutils.general import logger
-from pyutils.torch_train import BestKModelSaver
 
 from core.invdes import builder
 from core.invdes.models import BendingOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import Bending
-from core.utils import set_torch_deterministic
+from core.utils import BestKModelSaver, set_torch_deterministic
 
 
 class InvDesign:
@@ -66,9 +61,8 @@ class InvDesign:
         ),
         checkpoint_cfgs=Config(
             save_model=False,
-            ckpt_name=None,
             dump_gds=False,
-            gds_name=None,
+            save_best_model_k=1,
         ),
     )
 
@@ -97,10 +91,10 @@ class InvDesign:
         )
         self.plot_thread = None  # ThreadPoolExecutor(2)
         self.saver = BestKModelSaver(
-            k=1,
-            descend=False,
+            k=int(self._cfg.checkpoint_cfgs.save_best_model_k),
+            descend=True,
             truncate=10,
-            metric_name="err",
+            metric_name="FoM",
             format="{:.4f}",
         )
 
@@ -156,19 +150,10 @@ class InvDesign:
             ), "plot_name (filename) must be provided if plot"
             assert len(plot_cfgs.objs) > 0, "objs must be provided"
             assert len(plot_cfgs.field_keys) > 0, "field_keys must be provided"
+            plot_cfgs.field_keys = [tuple(fk) for fk in plot_cfgs.field_keys]
             assert len(plot_cfgs.in_slice_names) > 0, "in_port_names must be provided"
             if len(plot_cfgs.exclude_slice_names) == 0:
                 plot_cfgs.exclude_slice_names = [[]] * len(plot_cfgs.objs)
-
-        ckpt_cfgs = self._cfg.checkpoint_cfgs
-        if ckpt_cfgs.save_model:
-            assert (
-                ckpt_cfgs.ckpt_name is not None
-            ), "ckpt_name must be provided if save model"
-        if ckpt_cfgs.dump_gds:
-            assert (
-                ckpt_cfgs.gds_name is not None
-            ), "gds_name must be provided if dump gds"
 
     def _before_step_callbacks(self, feed_dict) -> Dict[str, Any]:
         return feed_dict
@@ -191,13 +176,7 @@ class InvDesign:
         self.results = results  # record this result
         return results
 
-    def after_step(self, output_dict: Dict[str, Any] = {}) -> None:
-        # update the learning rate
-        self.lr_scheduler.step()
-        # update the sharpness
-        self.sharp_scheduler.step()
-
-        ## plot
+    def _plot_callback(self, output_dict: Dict[str, Any] = {}) -> None:
         i = self.global_step
         plot_cfgs = self._cfg.plot_cfgs
         if plot_cfgs.plot and (
@@ -222,7 +201,6 @@ class InvDesign:
                     + f"_{i}"
                     + f"_{plot_cfgs.objs[j]}{suffix}.jpg",
                     field_key=plot_cfgs.field_keys[j],
-                    # field_component=pol,
                     field_component=(
                         plot_cfgs.field_component
                         if plot_cfgs.field_component is not None
@@ -238,32 +216,69 @@ class InvDesign:
                 else:
                     self.plot_thread.submit(self.devOptimization.plot, **plot_kwargs)
 
-    def after_epoch(self, output_dict: Dict[str, Any] = {}) -> None:
-        ## save model
-        i = self.global_step
+    def _save_model_callback(self, output_dict: Dict[str, Any] = {}) -> None:
         try:
             if self._cfg.checkpoint_cfgs.save_model:
-                ckpt_name = self._cfg.checkpoint_cfgs.ckpt_name
-                if not ckpt_name.endswith(".pt"):
-                    ckpt_name += f"_epoch-{i}.pt"
-                else:
-                    ckpt_name = ckpt_name[:-3] + f"_epoch-{i}.pt"
-                path = os.path.join(self.devOptimization.sim_cfg.plot_root, ckpt_name)
-                self.save_model(output_dict["obj"].item(), path)
-                logger.info(f"save model to {path}")
+                model_name = self.devOptimization.__class__.__name__
+                ckpt_path = os.path.join(
+                    self._cfg.plot_cfgs.root,
+                    self._cfg.plot_cfgs.dir_name,
+                    "checkpoint",
+                    f"{model_name}_{self._cfg.checkpoint_cfgs.model_comment}.pt",
+                )
+                saved_path, del_path = self.save_model(
+                    output_dict["obj"].item(), ckpt_path
+                )
+                try:
+                    if self._cfg.checkpoint_cfgs.dump_gds and saved_path is not None:
+                        gds_path = os.path.join(
+                            "checkpoint", os.path.basename(saved_path)[:-3] + ".gds"
+                        )
+                        self.devOptimization.dump_gds_files(gds_path)
+                        gds_path = os.path.join(
+                            self._cfg.plot_cfgs.root,
+                            self._cfg.plot_cfgs.dir_name,
+                            gds_path,
+                        )
+                        print(f"[I] GDS dumped to {gds_path}", flush=True)
+
+                        if del_path is not None:
+                            try:
+                                del_path = os.path.join(
+                                    self._cfg.plot_cfgs.root,
+                                    self._cfg.plot_cfgs.dir_name,
+                                    "checkpoint",
+                                    os.path.basename(del_path)[:-3] + ".gds",
+                                )
+                                os.remove(del_path)
+                                print(f"[I] GDS {del_path} is removed", flush=True)
+                            except Exception as e:
+                                print(
+                                    f"[E] Model {del_path} failed to be removed",
+                                    flush=True,
+                                )
+                                traceback.print_exc(e)
+                except Exception as e:
+                    logger.error("dump gds failed")
+                    traceback.print_exc()
         except Exception as e:
             logger.error("save model failed")
             traceback.print_exc()
 
-        ## dump gds
-        try:
-            if self._cfg.checkpoint_cfgs.dump_gds:
-                self.devOptimization.dump_gds_files(
-                    self._cfg.checkpoint_cfgs.gds_name + ".gds"
-                )
-        except Exception as e:
-            logger.error("dump gds failed")
-            traceback.print_exc()
+    def after_step(self, output_dict: Dict[str, Any] = {}) -> None:
+        # update the learning rate
+        self.lr_scheduler.step()
+        # update the sharpness
+        self.sharp_scheduler.step()
+
+        ## plot
+        self._plot_callback(output_dict)
+
+        ## save model and dump gds
+        self._save_model_callback(output_dict)
+
+    def after_epoch(self, output_dict: Dict[str, Any] = {}) -> None:
+        pass
 
     def optimize(
         self,
@@ -293,14 +308,15 @@ class InvDesign:
         self.after_epoch(results)
 
     def save_model(self, fom, path):
-        self.saver.save_model(
+        saved_path, del_path = self.saver.save_model(
             self.devOptimization,
             fom,
-            epoch=self._cfg.run.n_epochs,
+            epoch=self.global_step,
             path=path,
             save_model=False,
             print_msg=True,
         )
+        return saved_path, del_path
 
 
 if __name__ == "__main__":

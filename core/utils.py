@@ -1,7 +1,10 @@
 import collections
 import logging
 import math
+import os
 import random
+import traceback
+from collections import OrderedDict
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Callable, Tuple
 
@@ -14,12 +17,13 @@ import torch.distributed as dist
 import torch.fft
 import torch.nn.functional as F
 import torch.optim
-import yaml
 from pyutils.config import Config
-from pyutils.general import TimerCtx
+from pyutils.general import ensure_dir
 from torch import Tensor
 from torch.types import Device
 from torch_sparse import spmm
+
+plt.rcParams["text.usetex"] = False
 
 train_configs = Config()
 from thirdparty.ceviche.constants import *
@@ -256,7 +260,7 @@ def get_eigenmode_coefficients(
     pol: str = "Ez",
 ):
     ### for Ez polarization: hx, hy, ez, ht_m is hx or hy, et_m is ez
-    ### for Hx polarization: ex, ey, hz, ht_m is hz, et_m is ex or ey
+    ### for Hz polarization: ex, ey, hz, ht_m is hz, et_m is ex or ey
     if isinstance(ht_m, np.ndarray) and isinstance(hx, torch.Tensor):
         ht_m = torch.from_numpy(ht_m).to(ez.device)
         et_m = torch.from_numpy(et_m).to(ez.device)
@@ -418,7 +422,7 @@ def cal_fom_from_fwd_field(
             out_modes = [int(mode) for mode in out_modes]
             assert (
                 len(out_modes) == 1
-            ), f"The code can handle multiple modes, but I have not check if it is correct"
+            ), "The code can handle multiple modes, but I have not check if it is correct"
             temperture = opt_cfg["temp"]
             temperture = [float(temp) for temp in temperture]
             wavelength = opt_cfg["wl"]
@@ -566,7 +570,7 @@ def cal_total_field_adj_src_from_fwd_field(
                 out_modes = [int(mode) for mode in out_modes]
                 assert (
                     len(out_modes) == 1
-                ), f"The code can handle multiple modes, but I have not check if it is correct"
+                ), "The code can handle multiple modes, but I have not check if it is correct"
                 temperture = opt_cfg["temp"]
                 temperture = [float(temp) for temp in temperture]
                 wavelength = opt_cfg["wl"]
@@ -2038,16 +2042,6 @@ def Si_eff_eps(wavelength, width: float = 10, thickness: float = 0.22):
         assert (
             False
         ), "For 2.5D simulation, effective index is only related to thickness, the width-related effective index is solved by 2D FDFD itself, do not need to consider separately"
-        assert (
-            thickness == 0.22
-        ), f"only support thickness of 0.22 for narrow waveguide, but got {thickness}"
-        match width:
-            case 0.48:
-                permittivity = 2.411707**2  # from lumerical
-            case 0.8:
-                permittivity = 2.688673**2  # from lumerical
-            case _:
-                raise ValueError(f"Invalid width: {width}, only support 0.48 and 0.8")
     return permittivity
 
 
@@ -2110,3 +2104,171 @@ def get_material_fn(material: str | float) -> Callable:
 
 train_configs = Config()
 inverse_configs = Config()
+
+
+class BestKModelSaver(object):
+    def __init__(
+        self,
+        k: int = 1,
+        descend: bool = True,
+        truncate: int = 2,
+        metric_name: str = "acc",
+        format: str = "{:.2f}",
+    ):
+        super().__init__()
+        self.k = k
+        self.descend = descend
+        self.truncate = truncate
+        self.metric_name = metric_name
+        self.format = format
+        self.epsilon = 0.1**truncate
+        self.model_cache = OrderedDict()
+
+    def better_op(self, a, b):
+        if self.descend:
+            return a >= b + self.epsilon
+        else:
+            return a <= b - self.epsilon
+
+    def __insert_model_record(self, metric, dir, checkpoint_name, epoch=None):
+        metric = round(metric * 10**self.truncate) / 10**self.truncate
+        if len(self.model_cache) < self.k:
+            new_checkpoint_name = (
+                f"{checkpoint_name}_{self.metric_name}-"
+                + self.format.format(metric)
+                + f"{'' if epoch is None else '_epoch-' + str(epoch)}"
+            )
+            path = os.path.join(dir, new_checkpoint_name + ".pt")
+            self.model_cache[path] = (metric, epoch)
+            return path, None
+        else:
+            worst_metric, worst_epoch = sorted(
+                list(self.model_cache.values()),
+                key=lambda x: x[0],
+                reverse=False if self.descend else True,
+            )[0]
+            if self.better_op(metric, worst_metric):
+                del_checkpoint_name = (
+                    f"{checkpoint_name}_{self.metric_name}-"
+                    + self.format.format(worst_metric)
+                    + f"{'' if epoch is None else '_epoch-' + str(worst_epoch)}"
+                )
+                del_path = os.path.join(dir, del_checkpoint_name + ".pt")
+                try:
+                    del self.model_cache[del_path]
+                except:
+                    print(
+                        "[W] Cannot remove checkpoint: {} from cache".format(del_path),
+                        flush=True,
+                    )
+                new_checkpoint_name = (
+                    f"{checkpoint_name}_{self.metric_name}-"
+                    + self.format.format(metric)
+                    + f"{'' if epoch is None else '_epoch-' + str(epoch)}"
+                )
+                path = os.path.join(dir, new_checkpoint_name + ".pt")
+                self.model_cache[path] = (metric, epoch)
+                return path, del_path
+            # elif(acc == min_acc):
+            #     new_checkpoint_name = f"{checkpoint_name}_acc-{acc:.2f}{'' if epoch is None else '_epoch-'+str(epoch)}"
+            #     path = os.path.join(dir, new_checkpoint_name+".pt")
+            #     self.model_cache[path] = (acc, epoch)
+            #     return path, None
+            else:
+                return None, None
+
+    def get_topk_model_path(self, topk: int = 1):
+        if topk <= 0:
+            return []
+        if topk > len(self.model_cache):
+            topk = len(self.model_cache)
+        return [
+            i[0]
+            for i in sorted(
+                self.model_cache.items(), key=lambda x: x[1][0], reverse=self.descend
+            )[:topk]
+        ]
+
+    def save_model(
+        self,
+        model,
+        metric,
+        epoch=None,
+        path="./checkpoint/model.pt",
+        other_params=None,
+        save_model=False,
+        print_msg=True,
+    ):
+        """Save PyTorch model in path
+
+        Args:
+            model (PyTorch model): PyTorch model
+            acc (scalar): accuracy
+            epoch (scalar, optional): epoch. Defaults to None
+            path (str, optional): Full path of PyTorch model. Defaults to "./checkpoint/model.pt".
+            other_params (dict, optional): Other saved params. Defaults to None
+            save_model (bool, optional): whether save source code of nn.Module. Defaults to False
+            print_msg (bool, optional): Control of message print. Defaults to True.
+        """
+        dir = os.path.dirname(path)
+        ensure_dir(dir)
+        checkpoint_name = os.path.splitext(os.path.basename(path))[0]
+        if isinstance(metric, torch.Tensor):
+            metric = metric.data.item()
+        new_path, del_path = self.__insert_model_record(
+            metric, dir, checkpoint_name, epoch
+        )
+
+        if del_path is not None:
+            try:
+                os.remove(del_path)
+                print(f"[I] Model {del_path} is removed", flush=True)
+            except Exception as e:
+                if print_msg:
+                    print(f"[E] Model {del_path} failed to be removed", flush=True)
+                traceback.print_exc(e)
+
+        if new_path is None:
+            if print_msg:
+                if self.descend:
+                    best_list = list(reversed(sorted(list(self.model_cache.values()))))
+                else:
+                    best_list = list(sorted(list(self.model_cache.values())))
+                print(
+                    f"[I] Not best {self.k}: {best_list}, skip this model ("
+                    + self.format.format(metric)
+                    + f"): {path}",
+                    flush=True,
+                )
+        else:
+            try:
+                # torch.save(model.state_dict(), new_path)
+                if other_params is not None:
+                    saved_dict = other_params
+                else:
+                    saved_dict = {}
+                if save_model:
+                    saved_dict.update(
+                        {"model": model, "state_dict": model.state_dict()}
+                    )
+                    torch.save(saved_dict, new_path)
+                else:
+                    saved_dict.update({"model": None, "state_dict": model.state_dict()})
+                    torch.save(saved_dict, new_path)
+                if print_msg:
+                    if self.descend:
+                        best_list = list(
+                            reversed(sorted(list(self.model_cache.values())))
+                        )
+                    else:
+                        best_list = list(sorted(list(self.model_cache.values())))
+
+                    print(
+                        f"[I] Model saved to {new_path}. Current best {self.k}: {best_list}",
+                        flush=True,
+                    )
+            except Exception as e:
+                if print_msg:
+                    print(f"[E] Model failed to be saved to {new_path}", flush=True)
+                traceback.print_exc(e)
+        return new_path, del_path

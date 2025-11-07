@@ -1,6 +1,3 @@
-import random
-from typing import Tuple
-
 import torch
 import torch.nn as nn
 from pyutils.lr_scheduler.warmup_cosine_restart import CosineAnnealingWarmupRestarts

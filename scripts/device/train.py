@@ -6,7 +6,7 @@ import mlflow
 from pyutils.config import configs
 from pyutils.general import ensure_dir, logger
 
-device = "metacoupler"
+device = "bending"
 model = "local_search"
 exp_name = "train_local_search"
 root = f"log/{device}/{model}/{exp_name}"
@@ -65,7 +65,8 @@ def task_launcher(args):
             f"--plot.root={'./plot/'}",
             f"--plot.dir_name={device}_{exp_name}_{id}",
         ]
-        logger.info(f"running command {pres + exp}")
+        logger.info(f"running command:\n\t{' '.join(pres + exp)}")
+
         subprocess.call(pres + exp, stderr=wfid, stdout=wfid)
 
 
@@ -74,10 +75,9 @@ if __name__ == "__main__":
     mlflow.set_experiment(configs.run.experiment)  # set experiments first
 
     tasks = [
-        ["MetaCoupler", 0, 0.02, 4, 200, 50, 50, 50, 0, "put_your_comment_here"],
+        ["Bending", 0, 0.02, 4, 200, 50, 50, 50, 0, "comment_here"],
     ]
-    # tasks = [[0, 1]]
 
-    with Pool(4) as p:
+    with Pool(1) as p:
         p.map(task_launcher, tasks)
     logger.info(f"Exp: {configs.run.experiment} Done.")

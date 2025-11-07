@@ -15,9 +15,9 @@ from autograd.numpy import array as npa
 from pyutils.config import Config
 
 from core.invdes.invdesign import InvDesign
-from core.invdes.models import MMIOptimization
+from core.invdes.models import EtchMMIOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
-from core.invdes.models.layers import MMI
+from core.invdes.models.layers import EtchMMI
 from core.utils import set_torch_deterministic
 
 sys.path.pop(0)
@@ -35,7 +35,7 @@ if __name__ == "__main__":
 
     input_port_width = 0.48
     output_port_width = 0.48
-    exp_name = "mmi_opt"
+    exp_name = "etchmmi_opt"
 
     sim_cfg.update(
         dict(
@@ -97,9 +97,26 @@ if __name__ == "__main__":
         # maximize the forward transmission and minimize the standard deviation of the s-parameters
         return fom, {"smatrix_err": {"weight": -1, "value": fom}}
 
-    obj_cfgs = dict(_fusion_func=fom_func)
+    obj_cfgs = dict(
+        smatrix=dict(
+            weight=1,
+            #### objective is evaluated at this port
+            in_slice_name=[f"in_slice_{i + 1}" for i in range(num_inports)],
+            out_slice_name=[f"out_slice_{i + 1}" for i in range(num_outports)],
+            #### objective is evaluated at all points by sweeping the wavelength and modes
+            in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
+            wl=[1.55],
+            temp=[300],
+            out_modes=(
+                "Ez1",
+            ),  # can evaluate on multiple output modes and get average transmission
+            type="smatrix",  # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
+            direction=["x+"] * num_outports,
+        ),
+        _fusion_func=fom_func,
+    )
 
-    device = MMI(
+    device = EtchMMI(
         sim_cfg=sim_cfg,
         box_size=mmi_region_size,
         port_len=(port_len, port_len),
@@ -112,7 +129,7 @@ if __name__ == "__main__":
 
     hr_device = device.copy(resolution=100)
     print(device)
-    opt = MMIOptimization(
+    opt = EtchMMIOptimization(
         device=device,
         hr_device=hr_device,
         sim_cfg=sim_cfg,

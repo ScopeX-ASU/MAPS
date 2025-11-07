@@ -9,9 +9,9 @@ import random
 import torch
 import torch.nn.functional as F
 
-from core.invdes.models import WDMOptimization
+from core.invdes.models import OpticalDiodeOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
-from core.invdes.models.layers import WDM
+from core.invdes.models.layers import OpticalDiode
 from core.utils import (
     DeterministicCtx,
     SharpnessScheduler,
@@ -30,7 +30,7 @@ def compare_designs(design_regions_1, design_regions_2):
     return torch.mean(torch.stack(similarity)).item()
 
 
-def wdm_opt(
+def optical_diode_opt(
     device_id,
     operation_device,
     each_step=False,
@@ -38,43 +38,40 @@ def wdm_opt(
     perturb_probs=[0.05, 0.1, 0.15],
 ):
     set_torch_deterministic(int(device_id))
-    dump_data_path = f"./data/fdfd/wdm/raw_opt_traj_ptb"
+    dump_data_path = f"./data/fdfd/optical_diode/raw_opt_traj_ptb"
     sim_cfg = DefaultSimulationConfig()
-    target_img_size = 512
+    target_img_size = 256
     resolution = 50
     target_cell_size = target_img_size / resolution  # 10.24
-    port_len = round(random.uniform(2, 2.4) * resolution) / resolution
+    port_len = round(random.uniform(1, 1.2) * resolution) / resolution
 
-    wdm_region_size = [
+    optical_diode_region_size = [
         round((target_cell_size - 2 * port_len) * resolution) / resolution,
         round((target_cell_size - 2 * port_len) * resolution) / resolution,
     ]
     assert (
-        round(wdm_region_size[0] + 2 * port_len, 2) == target_cell_size
-    ), f"right hand side: {wdm_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
+        round(optical_diode_region_size[0] + 2 * port_len, 2) == target_cell_size
+    ), f"right hand side: {optical_diode_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
 
     input_port_width = 0.48
-    output_port_width = 0.48
+    output_port_width = 0.8
 
     sim_cfg.update(
         dict(
             solver="ceviche_torch",
             border_width=[0, 0, port_len, port_len],
             resolution=resolution,
-            plot_root=f"./data/fdfd/wdm/plot_opt_traj_ptb/wdm_{device_id}",
+            plot_root=f"./data/fdfd/optical_diode/plot_opt_traj_ptb/optical_diode_{device_id}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
             use_autodiff=False,
-            wl_cen=1.55,
-            wl_width=0.02,
-            n_wl=2,
         )
     )
 
-    device = WDM(
+    device = OpticalDiode(
         sim_cfg=sim_cfg,
-        box_size=wdm_region_size,
+        box_size=optical_diode_region_size,
         port_len=(port_len, port_len),
         port_width=(input_port_width, output_port_width),
         device=operation_device,
@@ -82,7 +79,7 @@ def wdm_opt(
     # hr_device = device.copy(resolution=310)
     hr_device = device.copy(resolution=1000)
     print(device)
-    opt = WDMOptimization(
+    opt = OpticalDiodeOptimization(
         device=device,
         hr_device=hr_device,
         sim_cfg=sim_cfg,
@@ -132,29 +129,31 @@ def wdm_opt(
                 # Dump data for the perturbed model
                 filename_h5 = (
                     dump_data_path
-                    + f"/wdm_id-{device_id}_opt_step_{step}_perturbed_{i}.h5"
+                    + f"/optical_diode_id-{device_id}_opt_step_{step}_perturbed_{i}.h5"
                 )
-                filename_yml = dump_data_path + f"/wdm_id-{device_id}_perturbed_{i}.yml"
+                filename_yml = (
+                    dump_data_path + f"/optical_diode_id-{device_id}_perturbed_{i}.yml"
+                )
                 opt.dump_data(
                     filename_h5=filename_h5, filename_yml=filename_yml, step=step
                 )
 
                 opt.plot(
                     eps_map=opt._eps_map,
-                    obj=results["breakdown"]["wl1_trans"]["value"],
-                    plot_filename=f"wdm_opt_step_{step}_wl1_fwd_perturbed_{i}.png",
-                    field_key=("in_slice_1", 1.54, "Ez1", 300),
+                    obj=results["breakdown"]["fwd_trans"]["value"],
+                    plot_filename=f"optical_diode_opt_step_{step}_fwd_perturbed_{i}.png",
+                    field_key=("in_slice_1", 1.55, "Ez1", 300),
                     field_component="Ez",
                     in_slice_name="in_slice_1",
                     exclude_slice_names=[],
                 )
                 opt.plot(
                     eps_map=opt._eps_map,
-                    obj=results["breakdown"]["wl2_trans"]["value"],
-                    plot_filename=f"wdm_opt_step_{step}_wl2_fwd_perturbed_{i}.png",
-                    field_key=("in_slice_1", 1.56, "Ez1", 300),
+                    obj=results["breakdown"]["bwd_trans"]["value"],
+                    plot_filename=f"optical_diode_opt_step_{step}_bwd_perturbed_{i}.png",
+                    field_key=("out_slice_1", 1.55, "Ez1", 300),
                     field_component="Ez",
-                    in_slice_name="in_slice_1",
+                    in_slice_name="out_slice_1",
                     exclude_slice_names=[],
                 )
 
@@ -183,8 +182,10 @@ def wdm_opt(
 
         (-results["obj"]).backward()
         current_design_region_dict = opt.get_design_region_eps_dict()
-        filename_h5 = dump_data_path + f"/wdm_id-{device_id}_opt_step_{step}.h5"
-        filename_yml = dump_data_path + f"/wdm_id-{device_id}.yml"
+        filename_h5 = (
+            dump_data_path + f"/optical_diode_id-{device_id}_opt_step_{step}.h5"
+        )
+        filename_yml = dump_data_path + f"/optical_diode_id-{device_id}.yml"
 
         # Store the current breakdown for early stopping
         current_breakdown = {k: obj["value"] for k, obj in results["breakdown"].items()}
@@ -215,20 +216,20 @@ def wdm_opt(
             dumped_data = True
             opt.plot(
                 eps_map=opt._eps_map,
-                obj=results["breakdown"]["wl1_trans"]["value"],
-                plot_filename="wdm_opt_step_{}_wl1_fwd.png".format(step),
-                field_key=("in_slice_1", 1.54, "Ez1", 300),
+                obj=results["breakdown"]["fwd_trans"]["value"],
+                plot_filename="optical_diode_opt_step_{}_fwd.png".format(step),
+                field_key=("in_slice_1", 1.55, "Ez1", 300),
                 field_component="Ez",
                 in_slice_name="in_slice_1",
                 exclude_slice_names=[],
             )
             opt.plot(
                 eps_map=opt._eps_map,
-                obj=results["breakdown"]["wl2_trans"]["value"],
-                plot_filename="wdm_opt_step_{}_wl2_fwd.png".format(step),
-                field_key=("in_slice_1", 1.56, "Ez1", 300),
+                obj=results["breakdown"]["bwd_trans"]["value"],
+                plot_filename="optical_diode_opt_step_{}_bwd.png".format(step),
+                field_key=("out_slice_1", 1.55, "Ez1", 300),
                 field_component="Ez",
-                in_slice_name="in_slice_1",
+                in_slice_name="out_slice_1",
                 exclude_slice_names=[],
             )
         else:
@@ -253,20 +254,20 @@ def wdm_opt(
                 dumped_data = True
                 opt.plot(
                     eps_map=opt._eps_map,
-                    obj=results["breakdown"]["wl1_trans"]["value"],
-                    plot_filename="wdm_opt_step_{}_wl1_fwd.png".format(step),
-                    field_key=("in_slice_1", 1.54, "Ez1", 300),
+                    obj=results["breakdown"]["fwd_trans"]["value"],
+                    plot_filename="optical_diode_opt_step_{}_fwd.png".format(step),
+                    field_key=("in_slice_1", 1.55, "Ez1", 300),
                     field_component="Ez",
                     in_slice_name="in_slice_1",
                     exclude_slice_names=[],
                 )
                 opt.plot(
                     eps_map=opt._eps_map,
-                    obj=results["breakdown"]["wl2_trans"]["value"],
-                    plot_filename="wdm_opt_step_{}_wl2_fwd.png".format(step),
-                    field_key=("in_slice_1", 1.56, "Ez1", 300),
+                    obj=results["breakdown"]["bwd_trans"]["value"],
+                    plot_filename="optical_diode_opt_step_{}_bwd.png".format(step),
+                    field_key=("out_slice_1", 1.55, "Ez1", 300),
                     field_component="Ez",
-                    in_slice_name="in_slice_1",
+                    in_slice_name="out_slice_1",
                     exclude_slice_names=[],
                 )
         # for p in opt.parameters():
@@ -297,7 +298,7 @@ def main():
     device = torch.device("cuda:" + str(gpu_id))
     torch.backends.cudnn.benchmark = True
     set_torch_deterministic(int(41 + random_seed))
-    wdm_opt(random_seed, device, each_step, include_perturb)
+    optical_diode_opt(random_seed, device, each_step, include_perturb)
 
 
 if __name__ == "__main__":
