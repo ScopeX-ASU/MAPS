@@ -1,6 +1,15 @@
 """
 Description:
 Author: Jiaqi Gu (jiaqigu@asu.edu)
+Date: 2025-11-06 16:59:24
+LastEditors: Jiaqi Gu (jiaqigu@asu.edu)
+LastEditTime: 2025-11-06 20:28:23
+FilePath: /MAPS_local/core/invdes/models/layers/__init__.py
+"""
+
+"""
+Description:
+Author: Jiaqi Gu (jiaqigu@asu.edu)
 Date: 2025-10-29 21:32:38
 LastEditors: Jiaqi Gu (jiaqigu@asu.edu)
 LastEditTime: 2025-11-05 21:49:37
@@ -19,4 +28,5 @@ from .mode_mux import *
 from .optical_diode import *
 from .tdm import *
 from .utils import *
+from .vertical_coupler import *
 from .wdm import *

@@ -15,4 +15,5 @@ from .mmi import MMIOptimization
 from .mode_mux import ModeCvtMuxOptimization
 from .optical_diode import OpticalDiodeOptimization
 from .tdm import TDMOptimization
+from .vertical_coupler import VerticalCouplerOptimization
 from .wdm import WDMOptimization
