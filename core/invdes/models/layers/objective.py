@@ -593,6 +593,7 @@ class FluxObjective(object):
         in_mode: int,
         direction: str,
         name: str,
+        target_wls: Tuple[float],
         target_temps: Tuple[float],
         grid_step: float,
         minus_src: bool = False,
@@ -607,6 +608,7 @@ class FluxObjective(object):
         self.in_mode = in_mode
         self.direction = direction
         self.name = name
+        self.target_wls = target_wls
         self.target_temps = target_temps
         self.grid_step = grid_step
         self.minus_src = minus_src
@@ -615,6 +617,7 @@ class FluxObjective(object):
     def __call__(self, fields):
         s_list = []
         (
+            target_wls,
             target_temps,
             in_slice_name,
             out_slice_name,
@@ -623,6 +626,7 @@ class FluxObjective(object):
             name,
             grid_step,
         ) = (
+            self.target_wls,
             self.target_temps,
             self.in_slice_name,
             self.out_slice_name,
@@ -636,6 +640,13 @@ class FluxObjective(object):
         target_temps = set(target_temps)
         ## for each wavelength, we evaluate the objective
         for (wl, pol, temp), _ in self.sims.items():
+
+            if not any(
+                math.isclose(wl, target_wl, rel_tol=0, abs_tol=1e-4)
+                for target_wl in target_wls
+            ):
+                continue
+
             if temp in target_temps:
                 monitor_slice = self.port_slices[out_slice_name]
                 norm_power = self.port_profiles[in_slice_name][(wl, in_mode)][3]
@@ -1156,6 +1167,7 @@ class ObjectiveFunc(object):
                     in_mode=in_mode,
                     direction=direction,
                     name=name,
+                    target_wls=target_wls,
                     target_temps=target_temps,
                     grid_step=self.grid_step,
                     minus_src=obj_type == "flux_minus_src",
