@@ -27,7 +27,7 @@ class VerticalCoupler(N_Ports):
         },
         box_size: Tuple[float] = (10, 0.06),
         farfield_dist: float = 2.0,
-        farfield_spot_size: float = 10.8, # spot_size
+        farfield_spot_size: float = 10.8,  # spot_size
         port_len: Tuple[float] = (1.8, 1.8),
         port_width: Tuple[float] = (0.26, 0.26),
         device: torch.device = torch.device("cuda:0"),
@@ -35,7 +35,9 @@ class VerticalCoupler(N_Ports):
         wl_cen = sim_cfg["wl_cen"]
         self.box_size = box_size
         self.farfield_spot_size = farfield_spot_size
-        monitor_size = farfield_spot_size * 1.2 # this source plane should be 1.2x the gaussian spot size to avoid truncation
+        monitor_size = (
+            farfield_spot_size * 1.2
+        )  # this source plane should be 1.2x the gaussian spot size to avoid truncation
         if isinstance(material_r, float):
             eps_r_fn = lambda wl: material_r
         else:
@@ -60,19 +62,20 @@ class VerticalCoupler(N_Ports):
             out_port_2=dict(
                 type="box",
                 direction="y",
-                center=[-box_size[0]/2 + monitor_size / 2, farfield_dist / 2],
+                center=[-box_size[0] / 2 + monitor_size / 2, farfield_dist / 2],
                 size=[monitor_size, farfield_dist - port_width[0]],
                 eps=eps_bg_fn(wl_cen),
             ),
         )
 
         geometry_cfgs = dict(
-        cladding=dict(
+            cladding=dict(
                 type="box",
                 center=[0, farfield_dist / 2],
                 size=[farfield_spot_size, farfield_dist - port_width[0]],
                 eps=eps_bg_fn(wl_cen),
-            ))
+            )
+        )
 
         design_region_cfgs = dict(
             design_region_1=dict(
@@ -111,24 +114,28 @@ class VerticalCoupler(N_Ports):
             slice_name="in_slice_1",
             rel_loc=offset / port_len,
             rel_width=rel_width,
-            direction="x+"
+            direction="x+",
         )
         refl_slice = self.build_port_monitor_slice(
             port_name="out_port_2",
             slice_name="refl_slice_1",
             rel_loc=0.95,
             rel_width=1,
-            direction="y+"
+            direction="y+",
         )
         out_slice_1 = self.build_port_monitor_slice(
             port_name="out_port_1",
             slice_name="out_slice_1",
             rel_loc=(1 - offset / port_len),
             rel_width=rel_width,
-            direction="x+"
+            direction="x+",
         )
         out_slice_2 = self.build_port_monitor_slice(
-            port_name="out_port_2", slice_name="out_slice_2", rel_loc=0.9, rel_width=1, direction="y-"
+            port_name="out_port_2",
+            slice_name="out_slice_2",
+            rel_loc=0.9,
+            rel_width=1,
+            direction="y-",
         )
         self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=rel_width)
         radiation_monitor = self.build_radiation_monitor(monitor_name="rad_monitor")
@@ -183,6 +190,5 @@ class VerticalCoupler(N_Ports):
             source_type="gaussian_beam",
             spot_size=self.farfield_spot_size,
         )
-
 
         return norm_source_profiles, norm_refl_profiles, norm_monitor_profiles

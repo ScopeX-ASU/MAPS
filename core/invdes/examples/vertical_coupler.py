@@ -1,11 +1,12 @@
-'''
-Description: 
+"""
+Description:
 Author: Jiaqi Gu (jiaqigu@asu.edu)
 Date: 2025-11-06 17:04:02
 LastEditors: Jiaqi Gu (jiaqigu@asu.edu)
-LastEditTime: 2025-11-07 10:40:36
+LastEditTime: 2025-11-07 13:18:51
 FilePath: /MAPS_local/core/invdes/examples/vertical_coupler.py
-'''
+"""
+
 """
 this is a wrapper for the invdes module
 we call use InvDesign.optimize() to optimize the inventory design
@@ -60,7 +61,7 @@ if __name__ == "__main__":
     )
 
     device = VerticalCoupler(
-        material_r="Si", # effective index from tidy3d tutorial apodized coupler
+        material_r="Si",  # effective index from tidy3d tutorial apodized coupler
         material_bg="SiO2",
         sim_cfg=sim_cfg,
         box_size=vertical_coupler_region_size,
@@ -79,6 +80,7 @@ if __name__ == "__main__":
         sim_cfg=sim_cfg,
         operation_device=operation_device,
     ).to(operation_device)
+
     invdesign = InvDesign(
         devOptimization=opt,
         run=Config(
@@ -90,7 +92,7 @@ if __name__ == "__main__":
             # name="lbfgs",
             # line_search_fn="strong_wolfe",
             # lr=1e-2,
-            # weight_decay=0,
+            weight_decay=0,
         ),
         sharp_scheduler=Config(
             mode="cosine",
