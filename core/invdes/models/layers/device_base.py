@@ -19,7 +19,7 @@ from pyutils.general import ensure_dir
 from core.fdfd import fdfd_ez as fdfd_ez_torch
 from core.fdfd import fdfd_hz as fdfd_hz_torch
 from core.invdes.models.layers.utils import modulation_fn_dict
-from core.utils import Si_eps, SiO2_eps, Slice, get_flux
+from core.utils import Si_eps, SiO2_eps, Slice, get_flux, get_shape
 from thirdparty.ceviche import fdfd_ez, fdfd_hz
 from thirdparty.ceviche.constants import C_0, MICRON_UNIT
 
@@ -965,6 +965,106 @@ class N_Ports(BaseDevice):
                 mode_profiles[(wl, source_mode)] = [mode, ht_m, et_m, power_scale]
         return mode_profiles
 
+    def insert_gaussian_beam(
+        self,
+        eps,
+        slice: Slice,
+        spot_size: float = 4,  # spot_size / 4 = gaussian std.
+        wl_cen: float = 1.55,
+        wl_width: float = 0,
+        n_wl: int = 1,
+        source_modes: Tuple[str] = ("Ez1",),
+        grid_step=None,
+        power_scales: dict = None,
+        direction: str = "x+",
+        custom_source: np.ndarray | torch.Tensor = None,
+    ):
+        if isinstance(custom_source, torch.Tensor):
+            lib = torch
+            eps = torch.tensor(eps, dtype=torch.float32, device=custom_source.device)
+        elif isinstance(custom_source, np.ndarray) or custom_source is None:
+            lib = np
+        else:
+            raise ValueError("custom_source must be either np.ndarray or torch.Tensor")
+        grid_step = grid_step or self.grid_step
+        source_profiles = {}
+
+        offset = -1 if direction[1] == "+" else 1
+        for wl in lib.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl):
+            for source_mode in source_modes:
+                source = lib.zeros_like(eps, dtype=lib.complex64)
+                if lib == torch:
+                    source = source.to(custom_source.device)
+                if direction[0] == "y":  # horizontal slice
+                    gaussian_slice = get_shape(
+                        "gaussian",
+                        dict(width=spot_size / 4),
+                        (slice.x.shape[0],),
+                        grid_step,
+                        device=eps.device,
+                    )
+                    source[slice.x, slice.y] = gaussian_slice
+
+                    if lib == torch:
+                        source[slice.x, slice.y + offset] = (
+                            lib.exp(
+                                torch.tensor(
+                                    [
+                                        -1j * 2 * lib.pi / wl_cen * grid_step
+                                        - 1j * lib.pi,
+                                    ],
+                                    device=source.device,
+                                )
+                            )
+                            * gaussian_slice
+                        )
+                    else:
+                        source[slice.x, slice.y + offset] = (
+                            lib.exp(-1j * 2 * lib.pi / wl_cen * grid_step - 1j * lib.pi)
+                            * gaussian_slice
+                        )
+                elif direction[0] == "x":  # vertical slice
+                    gaussian_slice = get_shape(
+                        "gaussian",
+                        dict(width=spot_size / 4),
+                        (slice.y.shape[0],),
+                        grid_step,
+                        device=eps.device,
+                    )
+                    source[slice.x, slice.y] = gaussian_slice
+                    if lib == torch:
+                        source[slice.x + offset, slice.y] = (
+                            lib.exp(
+                                torch.tensor(
+                                    [
+                                        -1j * 2 * lib.pi / wl_cen * grid_step
+                                        - 1j * lib.pi,
+                                    ],
+                                    device=source.device,
+                                )
+                            )
+                            * gaussian_slice
+                        )
+                    else:
+                        source[slice.x + offset, slice.y] = (
+                            lib.exp(-1j * 2 * lib.pi / wl_cen * grid_step - 1j * lib.pi)
+                            * gaussian_slice
+                        )
+
+                ht_m = et_m = source.reshape(-1)
+                if power_scales is not None:
+                    power_scale = power_scales[
+                        (wl, source_mode)
+                    ]  # use direction as a placeholder for mode
+                    ht_m = et_m = et_m * power_scale
+                    source = source * power_scale
+                else:
+                    power_scale = 1
+                if isinstance(wl, torch.Tensor):
+                    wl = round(wl.item(), 2)
+                source_profiles[(wl, source_mode)] = [source, ht_m, et_m, power_scale]
+        return source_profiles
+
     def insert_plane_wave(
         self,
         eps,
@@ -1158,10 +1258,12 @@ class N_Ports(BaseDevice):
         source_type: str = "mode",
         plot=False,
         require_sim: bool = False,
+        **kwargs,
     ):
         assert source_type in {
             "mode",
             "plane_wave",
+            "gaussian_beam",
         }, f"Source type {source_type} not supported"
 
         input_slice = self.port_monitor_slices[input_slice_name]
@@ -1207,6 +1309,18 @@ class N_Ports(BaseDevice):
                     power_scales=power_scales,
                     direction=direction,
                 )
+            elif source_type == "gaussian_beam":
+                source_profiles = self.insert_gaussian_beam(
+                    in_port_eps,
+                    input_slice,
+                    kwargs["spot_size"],
+                    wl_cen=wl_cen,
+                    wl_width=wl_width,
+                    n_wl=n_wl,
+                    source_modes=source_modes,
+                    power_scales=power_scales,
+                    direction=direction,
+                )
 
             # print_stat(monitor_profiles[(1.55, 1)][0])
             fields = self.solve(
@@ -1225,14 +1339,15 @@ class N_Ports(BaseDevice):
                 else:
                     raise ValueError(f"Unknown polarization {pol}")
 
-                # _, ht_m, et_m, _ = source_profiles[k]
+                _, ht_m, et_m, _ = source_profiles[k]
                 # print("this is the type of Hx:", type(Hx), flush=True)
                 # print("this is the type of Hy:", type(Hy), flush=True)
                 # print("this is the type of Ez:", type(Ez), flush=True)
                 # print("this is the type of ht_m:", type(ht_m), flush=True)
                 # print("this is the type of et_m:", type(et_m), flush=True)
-                # ht_m = torch.from_numpy(ht_m).to(Ez.device)
-                # et_m = torch.from_numpy(et_m).to(Ez.device)
+                # ht_m = torch.from_numpy(ht_m).to(Fz.device)
+                # et_m = torch.from_numpy(et_m).to(Fz.device)
+                # from core.utils import get_eigenmode_coefficients
                 # eigen_energy = get_eigenmode_coefficients(
                 #     Fx,
                 #     Fy,
