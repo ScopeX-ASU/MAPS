@@ -9,6 +9,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Callable, Tuple
 
 import autograd.numpy as npa
+import imageio.v2 as imageio
 import matplotlib.pyplot as plt
 import numpy as np
 import ryaml
@@ -2278,3 +2279,76 @@ class BestKModelSaver(object):
                     print(f"[E] Model failed to be saved to {new_path}", flush=True)
                 traceback.print_exc(e)
         return new_path, del_path
+
+
+def dump_steady_field_mp4(
+    E, eps, filepath, fps: int = 20, dpi=150, total_time: float = 10
+):
+    ### just apply phase shift to x and make it like a FDTD simulated video
+    ## total_time in s
+    ## wavelength = 1.55 um
+    ## we first calculate phase
+    total_frames = int(fps * total_time)
+    delta_phase = np.pi / 8
+    phases = torch.arange(0, total_frames, device=E.device) * delta_phase
+    # print(E.shape)
+    E = E.unsqueeze(0) * torch.exp(1j * phases[..., None, None])
+    E = E.cpu().numpy().real.transpose(0, 2, 1)
+    eps = eps.T
+
+    """
+    E: (T, H, W) real-valued tensor (torch.Tensor or numpy.ndarray)
+    outfile: output mp4 filename
+    fps: video frame rate
+    dpi: resolution (bigger dpi = higher resolution)
+    vmin, vmax: value range for colormap (None = auto per entire sequence)
+
+    Colormap: RdBu (blue-negative → red-positive)
+    """
+
+    T, H, W = E.shape
+
+    # global color limits for consistent color scaling
+    vmin = E.min()
+    vmax = E.max()
+
+    writer = imageio.get_writer(filepath, fps=fps, macro_block_size=1)
+
+    # prepare a matplotlib figure for rendering frames
+    fig, ax = plt.subplots(figsize=(W / 100, H / 100), dpi=dpi)
+    ax.axis("off")
+
+    for t in range(T):
+        ax.clear()
+        ax.axis("off")
+
+        img = ax.imshow(
+            E[t],
+            cmap="RdBu",
+            vmin=vmin,
+            vmax=vmax,
+            origin="lower",
+            interpolation="bilinear",
+        )
+        img = ax.imshow(
+            eps,
+            cmap="gray_r",
+            alpha=0.3,
+            origin="lower",
+            interpolation="bilinear",
+        )
+
+        ### I need colorbar, scaled it to the image height , put on the right side
+        # cbar = fig.colorbar(img, ax=ax, orientation='vertical')
+        # cbar.ax.set_aspect('auto')
+        # cbar.ax.tick_params(labelsize=8)
+
+        fig.canvas.draw()
+        frame = np.frombuffer(fig.canvas.tostring_argb(), dtype=np.uint8)
+        frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (4,))
+        frame = frame[..., 1:]  # RGB -> drop alpha
+
+        writer.append_data(frame)
+
+    writer.close()
+    plt.close(fig)

@@ -27,7 +27,7 @@ sys.path.insert(
 )
 import matplotlib.pyplot as plt
 
-from core.utils import print_stat
+from core.utils import dump_steady_field_mp4, print_stat
 from thirdparty.ceviche.constants import C_0, MICRON_UNIT
 
 from .layers.device_base import N_Ports
@@ -390,6 +390,7 @@ class BaseOptimization(nn.Module):
         field_component: str = "Ez",
         in_slice_name: str = "in_slice_1",
         exclude_slice_names: List[str] = [],
+        dump_mp4: bool = False,
     ):
         # print("this is the kyes of self.objective.solutions", list(self.objective.solutions.keys()), flush=True)
         Ez = self.objective.solutions[field_key][field_component]
@@ -456,6 +457,24 @@ class BaseOptimization(nn.Module):
             x_shift_coord=x_shift_coord if extended_Ez is not None else 0,
             x_shift_idx=x_shift_idx if extended_Ez is not None else 0,
         )
+
+        if dump_mp4:
+            dump_steady_field_mp4(
+                Ez.data,
+                eps_map.detach().cpu().numpy(),
+                os.path.join(
+                    self.sim_cfg["plot_root"], plot_filename.replace(".jpg", ".mp4")
+                ),
+                fps=20,
+                dpi=200,
+                total_time=3,
+            )
+            print(
+                "Field video saved to",
+                os.path.join(
+                    self.sim_cfg["plot_root"], plot_filename.replace(".jpg", ".mp4")
+                ),
+            )
 
     def dump_gds_files(self, filename):
         design_region_mask_list = []
