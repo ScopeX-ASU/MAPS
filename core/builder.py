@@ -815,8 +815,8 @@ def make_scheduler(
             optimizer,
             first_cycle_steps=configs.run.n_epochs,
             max_lr=configs.optimizer.lr,
-            min_lr=configs.scheduler.lr_min,
-            warmup_steps=int(configs.scheduler.warmup_steps),
+            min_lr=configs.lr_scheduler.lr_min,
+            warmup_steps=int(configs.lr_scheduler.warmup_steps),
         )
     elif name == "exp":
         scheduler = torch.optim.lr_scheduler.ExponentialLR(
