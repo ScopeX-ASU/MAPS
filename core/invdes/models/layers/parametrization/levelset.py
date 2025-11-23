@@ -219,10 +219,40 @@ class LevelSetInterp(object):
             self.build_linear_model()
         elif self.interpolation == "bilinear":
             self.build_bilinear_model()
+        elif self.interpolation == "gaussian_linear":
+            self.build_gaussian_linear_model(x0, y0, sigma)
 
     def build_gaussian_model(self):
         gauss_kernel = self.gaussian(self.xy0, self.xy0)
         self.model = torch.matmul(torch.linalg.inv(gauss_kernel), self.z0.flatten())
+
+    def build_gaussian_linear_model(self, x0, y0, sigma):
+        ### we use 3 sigma rule to build the convolution kernel
+        ## sigma: typically the rho_size in um unit
+        grid_x, grid_y = x0[1] - x0[0], y0[1] - y0[0]
+        ## then the kernel size in number of points
+        kernel_size_x = int((3 * sigma) / grid_x) * 2 + 1
+        kernel_size_y = int((3 * sigma) / grid_y) * 2 + 1
+        ## create gaussian kernel
+        grid_xx, grid_yy = torch.meshgrid(
+            torch.linspace(
+                -grid_x * (kernel_size_x // 2),
+                grid_x * (kernel_size_x // 2),
+                kernel_size_x,
+                device=self.device,
+            ),
+            torch.linspace(
+                -grid_y * (kernel_size_y // 2),
+                grid_y * (kernel_size_y // 2),
+                kernel_size_y,
+                device=self.device,
+            ),
+            indexing="ij",
+        )
+        self.gauss_kernel = torch.exp(((grid_xx**2 + grid_yy**2) / (-2 * (sigma**2))))[
+            None, None
+        ]  # [1, 1, kx, ky]
+        self.gauss_kernel = self.gauss_kernel / self.gauss_kernel.sum()
 
     def gaussian(self, xyi, xyj):
         dist_sq = (xyi[:, 1].reshape(-1, 1) - xyj[:, 1].reshape(1, -1)).square_() + (
@@ -265,12 +295,12 @@ class LevelSetInterp(object):
             z_const = None  # No constant dimension
         return z_const
 
-    def linear_interpolate(self, x1, y1):
+    def linear_interpolate(self, x1, y1, z0=None):
         # Perform 1D linear interpolation for each axis independently.
         x0 = self.xy0[:, 0].unique(sorted=True)
         y0 = self.xy0[:, 1].unique(sorted=True)
-        z0 = self.z0.reshape(len(x0), len(y0))
-
+        if z0 is None:
+            z0 = self.z0.reshape(len(x0), len(y0))
         x_idx = torch.searchsorted(x0, x1.clamp(min=x0.min(), max=x0.max()))
         y_idx = torch.searchsorted(y0, y1.clamp(min=y0.min(), max=y0.max()))
 
@@ -300,6 +330,22 @@ class LevelSetInterp(object):
         # Use bilinear interpolation, equivalent to linear in 2D.
         return self.linear_interpolate(x1, y1)
 
+    def gaussian_linear_interpolate(self, x1, y1):
+        ## first use the gaussian kernel to convolve the z0
+        # z0: [len(x0), len(y0)]
+        # gauss_kernel: [1, 1, kx, ky]
+        z0 = F.conv2d(
+            self.z0.unsqueeze(0).unsqueeze(0),
+            self.gauss_kernel,
+            padding=(
+                self.gauss_kernel.shape[2] // 2,
+                self.gauss_kernel.shape[3] // 2,
+            ),
+        )[
+            0, 0
+        ]  # [H, W]
+        return self.linear_interpolate(x1, y1, z0=z0)
+
     def get_ls(self, x1, y1, shape):
         xx, yy = torch.meshgrid(x1, y1, indexing="ij")
         xx = xx.to(self.device)
@@ -319,6 +365,9 @@ class LevelSetInterp(object):
             ls = ls.reshape(shape)
         elif self.interpolation == "bilinear":
             ls = self.bilinear_interpolate(xx.flatten(), yy.flatten())
+            ls = ls.reshape(shape)
+        elif self.interpolation == "gaussian_linear":
+            ls = self.gaussian_linear_interpolate(xx.flatten(), yy.flatten())
             ls = ls.reshape(shape)
         else:
             raise ValueError(f"Unsupported interpolation type: {self.interpolation}")
