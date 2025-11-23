@@ -16,6 +16,7 @@ This repo is the official implementation of ["MAPS: Multi-Fidelity AI-Augmented 
 - Support exp2 sharpness scheduler
 - Add video generation based on steady-state field solution
 - Add differentiable morphology operator in reparametrization
+- Add gaussian-smoothed linear interpolation in levelset
 
 
 [2025/10/19] Released v0.0.2
