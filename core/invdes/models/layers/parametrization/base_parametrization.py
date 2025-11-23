@@ -8,6 +8,8 @@ FilePath: /MAPS/core/invdes/models/layers/parametrization/base_parametrization.p
 from copy import deepcopy
 from typing import List, Tuple
 
+import cv2
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -15,6 +17,11 @@ from torch.types import Device
 
 from core.inv_litho.photonic_model import *
 from core.utils import padding_to_tiles, rip_padding
+
+try:
+    from kornia.morphology import closing, dilation, erosion, opening
+except:
+    raise ImportError("Please install kornia to use morphology operations.")
 
 
 def cvt_res(
@@ -368,6 +375,102 @@ def fft(xs, mfs, resolutions, entire_eps, dr_mask, dim="xy"):
     return xs
 
 
+@lru_cache(maxsize=4)
+def _get_morph_kernel_opt(
+    mode: str = "open", kernel_size: float = 0.039, res: int = 100, device="cuda"
+):
+    ## kernel size in um unit
+    kernel_size = int(
+        kernel_size * res
+    )  # Convert mfs to pixels and round up, 1.2 here is a margin coefficient
+    if kernel_size % 2 == 0:
+        kernel_size += 1  # Ensure kernel size is odd
+
+    if mode == "open":
+        kernel = torch.tensor(
+            cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (kernel_size, kernel_size)
+            ).astype(np.float32)
+        ).to(device)
+    elif mode == "close":
+        kernel = torch.tensor(
+            cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (kernel_size + 2, kernel_size + 2)
+            ).astype(np.float32)
+        ).to(device)
+    else:
+        raise ValueError(f"Unsupported morphology mode: {mode}")
+    return kernel
+
+
+def _morph_op(x, kernel_size: float = 0.039, resolution: int = 100, mode: str = "open"):
+    """
+    https://github.com/phdyang007/curvyILT/blob/main/curvyilt.py
+    """
+    x = x.unsqueeze(0).unsqueeze(0)  # add batch and channel dimension
+    if mode == "close":
+        kernel = _get_morph_kernel_opt(
+            mode="close", kernel_size=kernel_size, res=resolution, device=x.device
+        )
+        x = closing(x, kernel, engine="convolution")
+    elif mode == "open":
+        kernel = _get_morph_kernel_opt(
+            mode="open", kernel_size=kernel_size, res=resolution, device=x.device
+        )
+        x = opening(x, kernel, engine="convolution")
+    elif mode == "close_open":
+        kernel_close = _get_morph_kernel_opt(
+            mode="close", kernel_size=kernel_size, res=resolution, device=x.device
+        )
+        x = closing(x, kernel_close, engine="convolution")
+        kernel_open = _get_morph_kernel_opt(
+            mode="open", kernel_size=kernel_size, res=resolution, device=x.device
+        )
+        x = opening(x, kernel_open, engine="convolution")
+    elif mode == "open_close":
+        kernel_open = _get_morph_kernel_opt(
+            mode="open", kernel_size=kernel_size, res=resolution, device=x.device
+        )
+        x = opening(x, kernel_open, engine="convolution")
+        kernel_close = _get_morph_kernel_opt(
+            mode="close", kernel_size=kernel_size, res=resolution, device=x.device
+        )
+        x = closing(x, kernel_close, engine="convolution")
+    elif mode == "opt":
+        kernel_open = _get_morph_kernel_opt(
+            mode="open", kernel_size=kernel_size, res=resolution, device=x.device
+        )
+        xo = opening(x, kernel_open, engine="convolution")
+        kernel_close = _get_morph_kernel_opt(
+            mode="close", kernel_size=kernel_size, res=resolution, device=x.device
+        )
+        xc = closing(x, kernel_close, engine="convolution")
+        x = xo + xc - x
+    else:
+        raise ValueError(f"Unsupported morphology mode: {mode}")
+    return x[0, 0]
+
+
+def morph_op(
+    xs: Tuple | List,
+    kernel_size: float = 0.039,
+    resolution: int = 100,
+    mode: str = "open",
+):
+    assert mode in {
+        "open",
+        "close",
+        "open_close",
+        "close_open",
+        "opt",
+    }, f"Unsupported morphology mode: {mode}"
+    xs = [
+        _morph_op(x, kernel_size=kernel_size, resolution=resolution, mode=mode)
+        for x in xs
+    ]
+    return xs
+
+
 permittivity_transform_collections = dict(
     mirror_symmetry=mirror_symmetry,
     transpose_symmetry=transpose_symmetry,
@@ -376,6 +479,7 @@ permittivity_transform_collections = dict(
     etching=etching,
     blur=blur,
     fft=fft,
+    morph_op=morph_op,
 )
 
 
@@ -476,6 +580,13 @@ class BaseParametrization(nn.Module):
                 continue
             cfg = deepcopy(transform_cfg)
             del cfg["type"]
+
+            enabled = cfg.get("enabled", True)
+            cfg["enabled"] = enabled
+            if not enabled:
+                continue
+            del cfg["enabled"]
+
             if "device" in cfg.keys():
                 assert cfg["device"] == "cuda", "running on cpu is not supported"
                 cfg["device"] = self.operation_device
