@@ -6,6 +6,7 @@ FilePath: /MAPS/core/invdes/models/layers/parametrization/base_parametrization.p
 """
 
 from copy import deepcopy
+from functools import lru_cache
 from typing import List, Tuple
 
 import cv2
