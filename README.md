@@ -14,6 +14,9 @@ This repo is the official implementation of ["MAPS: Multi-Fidelity AI-Augmented 
 - Add EtchMMI device with rectangles in the design region.
 - Add continuous geometry parameterization. Support rectangles (box) with gradient calculation.
 - Support exp2 sharpness scheduler
+- Add video generation based on steady-state field solution
+- Add differentiable morphology operator in reparametrization
+
 
 [2025/10/19] Released v0.0.2
 - MAPS-InvDes supported. Levelset-based photonic device inverse design
