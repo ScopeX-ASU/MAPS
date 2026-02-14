@@ -23,6 +23,13 @@ from core.utils import Si_eps, SiO2_eps, Slice, get_flux
 from thirdparty.ceviche import fdfd_ez, fdfd_hz
 from thirdparty.ceviche.constants import C_0, MICRON_UNIT
 
+try:
+    import tidy3d as td
+
+    TD_SUPPORTED = True
+except ImportError:
+    TD_SUPPORTED = False
+
 from .utils import apply_regions_gpu, get_grid, insert_mode, plot_eps_field
 
 __all__ = ["BaseDevice", "N_Ports"]
@@ -196,8 +203,10 @@ class N_Ports(BaseDevice):
         self.update_device_config(self.__class__.__name__, device_cfg)
         self.update_simulation_config(sim_cfg)
         self.sim_cfg = sim_cfg
-        self.add_geometries(port_cfgs)
-        self.add_geometries(geometry_cfgs)
+
+        use_tidy3d = self.resolution >= 500 and TD_SUPPORTED
+        self.add_geometries(port_cfgs, use_tidy3d=use_tidy3d)
+        self.add_geometries(geometry_cfgs, use_tidy3d=use_tidy3d)
         ## do not add design region to geometry, otherwise meep will have subpixel smoothing on the border
         ## but need to consider this in bounding box
         # self.add_geometries(design_region_cfgs)
@@ -216,6 +225,7 @@ class N_Ports(BaseDevice):
             sim_cfg["PML"],
             self.resolution,
             self.eps_bg,
+            use_tidy3d=use_tidy3d,
         )
 
         self.Nx, self.Ny, self.Nz = [
@@ -237,29 +247,71 @@ class N_Ports(BaseDevice):
             {}
         )  # {slice_name: {(wl, mode): (profile, ht_m, et_m, norm_power)}}
 
-    def add_geometries(self, cfgs):
+    def add_geometries(self, cfgs, use_tidy3d: bool = False):
         for name, cfg in cfgs.items():
-            self.add_geometry(name, cfg)
+            self.add_geometry(name, cfg, use_tidy3d=use_tidy3d)
 
-    def add_geometry(self, name, cfg):
+    def add_geometry(self, name, cfg, use_tidy3d: bool = False):
         geo_type = cfg["type"]
         eps_r = cfg["eps"]
         eps_bg = cfg.get("eps_bg", eps_r)
         eps_r = (eps_r + eps_bg) / 2
 
+        def make_vector3(size, fill=0):
+            if len(size) == 2:
+                return [size[0], size[1], fill]
+            else:
+                return size
+
         match geo_type:
             case "box":
-                geometry = mp.Block(
-                    mp.Vector3(*cfg["size"]),
-                    center=mp.Vector3(*cfg["center"]),
-                    material=mp.Medium(epsilon=eps_r),
-                )
+                if use_tidy3d:
+                    geometry = td.Structure(
+                        geometry=td.Box(
+                            size=make_vector3(cfg["size"], fill=td.inf),
+                            center=make_vector3(cfg["center"], fill=0),
+                        ),
+                        medium=td.Medium(permittivity=eps_r**2),
+                    )
+                else:
+                    geometry = mp.Block(
+                        mp.Vector3(*cfg["size"]),
+                        center=mp.Vector3(*cfg["center"]),
+                        material=mp.Medium(epsilon=eps_r),
+                    )
+
             case "prism":
-                geometry = mp.Prism(
-                    [mp.Vector3(*v) for v in cfg["vertices"]],
-                    height=cfg.get("height", mp.inf),
-                    material=mp.Medium(epsilon=eps_r),
-                )
+                if use_tidy3d:
+                    geometry = td.Structure(
+                        geometry=td.PolySlab(
+                            vertices=[make_vector3(v, fill=0) for v in cfg["vertices"]],
+                            height=cfg.get("height", td.inf),
+                        ),
+                        medium=td.Medium(permittivity=eps_r**2),
+                    )
+                else:
+                    geometry = mp.Prism(
+                        [mp.Vector3(*v) for v in cfg["vertices"]],
+                        height=cfg.get("height", mp.inf),
+                        material=mp.Medium(epsilon=eps_r),
+                    )
+            case "cylinder":
+                if use_tidy3d:
+                    geometry = td.Structure(
+                        geometry=td.Cylinder(
+                            radius=cfg["radius"],
+                            height=cfg.get("height", td.inf),
+                            center=make_vector3(cfg["center"], fill=0),
+                        ),
+                        medium=td.Medium(permittivity=eps_r**2),
+                    )
+                else:
+                    geometry = mp.Cylinder(
+                        radius=cfg["radius"],
+                        height=cfg.get("height", mp.inf),
+                        center=mp.Vector3(*cfg["center"]),
+                        material=mp.Medium(epsilon=eps_r),
+                    )
             case _:
                 raise ValueError(f"Geometry type {geo_type} not supported")
 
@@ -281,7 +333,13 @@ class N_Ports(BaseDevice):
             )
 
         for geometry in self.geometry.values():
-            if isinstance(geometry, mp.Block):
+            if isinstance(geometry, td.Structure):
+                min_bounds, max_bounds = geometry.geometry.bounds
+                left = min(left, min_bounds[0])
+                right = max(right, max_bounds[0])
+                lower = min(lower, min_bounds[1])
+                upper = max(upper, max_bounds[1])
+            elif isinstance(geometry, mp.Block):
                 left = min(left, geometry.center.x - geometry.size.x / 2)
                 right = max(right, geometry.center.x + geometry.size.x / 2)
                 lower = min(lower, geometry.center.y - geometry.size.y / 2)
@@ -292,6 +350,11 @@ class N_Ports(BaseDevice):
                     right = max(right, vertex.x)
                     lower = min(lower, vertex.y)
                     upper = max(upper, vertex.y)
+            elif isinstance(geometry, mp.Cylinder):
+                left = min(left, geometry.center.x - geometry.radius)
+                right = max(right, geometry.center.x + geometry.radius)
+                lower = min(lower, geometry.center.y - geometry.radius)
+                upper = max(upper, geometry.center.y + geometry.radius)
             else:
                 raise ValueError(f"Geometry type {type(geometry)} not supported")
         sx = (
@@ -302,22 +365,78 @@ class N_Ports(BaseDevice):
         )  # PML is already contained in border
         return (sx, sy, 0)
 
-    def get_epsilon_map(self, cell_size, geometry, PML, resolution, eps_bg):
-        boundary = [
-            mp.PML(PML[0], direction=mp.X),
-            mp.PML(PML[1], direction=mp.Y),
-        ]
-        sim = mp.Simulation(
-            resolution=resolution,
-            cell_size=mp.Vector3(*cell_size),
-            boundary_layers=boundary,
-            geometry=list(geometry.values()),
-            sources=None,
-            default_material=mp.Medium(epsilon=eps_bg),
-            eps_averaging=False,
-        )
-        sim.run(until=0)
-        epsilon_map = sim.get_epsilon().astype(np.float32)
+    def get_epsilon_map(
+        self, cell_size, geometry, PML, resolution, eps_bg, use_tidy3d: bool = False
+    ):
+        import time
+
+        start = time.time()
+        if use_tidy3d:
+            print(
+                f"Using Tidy3d to generate epsilon map with resolution {resolution} and cell size {cell_size}"
+            )
+
+            def make_vector3(size):
+                if len(size) == 2:
+                    return (
+                        [size[0], size[1], td.inf]
+                        if use_tidy3d
+                        else mp.Vector3(size[0], size[1], mp.inf)
+                    )
+                else:
+                    return size
+
+            monitor = td.PermittivityMonitor(
+                center=(0, 0, 0),
+                freqs=[250e12],
+                size=make_vector3(cell_size),
+                name="eps_monitor",
+            )
+
+            sim = td.Simulation(
+                center=(0, 0, 0),
+                size=cell_size,
+                grid_spec=td.GridSpec(
+                    wavelength=1.55,
+                    grid_x=td.UniformGrid(
+                        dl=1 / resolution,
+                    ),
+                    grid_y=td.UniformGrid(
+                        dl=1 / resolution,
+                    ),
+                ),
+                subpixel=True,
+                structures=list(geometry.values()),
+                sources=[],
+                monitors=[monitor],
+                run_time=1e-12,
+                boundary_spec=td.BoundarySpec.pml(x=True, y=True, z=False),
+            )
+            epsilon_map = (
+                sim.epsilon(monitor).to_numpy().real[..., 0].astype(np.float32)
+            )
+        else:
+            print(
+                f"Using Meep to generate epsilon map with resolution {resolution} and cell size {cell_size}"
+            )
+            boundary = [
+                mp.PML(PML[0], direction=mp.X),
+                mp.PML(PML[1], direction=mp.Y),
+            ]
+            sim = mp.Simulation(
+                resolution=resolution,
+                cell_size=mp.Vector3(*cell_size),
+                boundary_layers=boundary,
+                geometry=list(geometry.values()),
+                sources=None,
+                default_material=mp.Medium(epsilon=eps_bg),
+                eps_averaging=False,
+            )
+            sim.run(until=0)
+            epsilon_map = sim.get_epsilon().astype(np.float32)
+
+        end = time.time()
+        print(f"Epsilon map generated in {end - start:.2f} seconds")
         return epsilon_map
 
     def build_design_region_mask(self, design_region_cfgs):
@@ -330,12 +449,18 @@ class N_Ports(BaseDevice):
             lower = center[1] - size[1] / 2 + self.cell_size[1] / 2
             upper = lower + size[1]
             left = max(0, int(np.round(left / self.grid_step)))
+            # right = min(
+            #     self.Nx, int(np.round(right / self.grid_step)) + 1
+            # )  # +1 to include the right boundary
             right = min(
-                self.Nx, int(np.round(right / self.grid_step)) + 1
+                self.Nx, int(np.round(right / self.grid_step))
             )  # +1 to include the right boundary
             lower = max(0, int(np.round(lower / self.grid_step)))
+            # upper = min(
+            #     self.Ny, int(np.round(upper / self.grid_step)) + 1
+            # )  # +1 to include the right boundary
             upper = min(
-                self.Ny, int(np.round(upper / self.grid_step)) + 1
+                self.Ny, int(np.round(upper / self.grid_step))
             )  # +1 to include the right boundary
             region = Slice(
                 x=slice(left, right), y=slice(lower, upper)
