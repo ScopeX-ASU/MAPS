@@ -6,7 +6,7 @@ from pyutils.typing import Optimizer, Scheduler
 from torch.types import Device
 
 from core.invdes.models import *
-from core.invdes.optimizer import Adahessian, Muon
+from core.invdes.optimizer import Adahessian, LevenbergMarquardt, Muon
 from core.utils import (
     DAdaptAdam,
     ResolutionScheduler,
@@ -196,6 +196,15 @@ def make_optimizer(params, total_config=None) -> Optimizer:
             weight_decay=config.weight_decay,
             momentum=getattr(config, "momentum", 0.9),
             nesterov=getattr(config, "nesterov", True),
+        )
+    elif name == "lm":
+        optimizer = LevenbergMarquardt(
+            params,
+            lr=config.lr,
+            attempts_per_step=getattr(config, "attempts_per_step", 5),
+            solve_method=getattr(config, "solve_method", "solve"),
+            damping_strategy=getattr(config, "damping_strategy", None),
+            sqrt_eps=getattr(config, "sqrt_eps", 1e-8),
         )
     else:
         raise NotImplementedError(name)

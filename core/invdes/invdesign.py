@@ -110,14 +110,15 @@ class InvDesign:
                 self.devOptimization = devOptimization
                 self.sharpness = 1
 
-            def __call__(self):
+            def __call__(self, backward: bool = True):
                 # clear grad here
                 self.optimizer.zero_grad()
                 # forward pass
                 results = self.devOptimization.forward(sharpness=self.sharpness)
 
                 # need backward to compute grad
-                (-results["obj"]).backward()
+                if backward:
+                    (-results["obj"]).backward()
 
                 # store any results for plot/log
                 self.results = results
@@ -294,9 +295,12 @@ class InvDesign:
             log += ", ".join(
                 [
                     (
-                        f"{k}: {obj['value'].data}"
+                        (
+                            f"{k}: {obj['value'].data}"
+                            if obj["value"].numel() > 1
+                            else f"{k}: {obj['value'].item():.4f}"
+                        )
                         if isinstance(obj["value"], torch.Tensor)
-                        and obj["value"].numel() > 1
                         else f"{k}: {obj['value']:.4f}"
                     )
                     for k, obj in results["breakdown"].items()
