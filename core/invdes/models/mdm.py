@@ -257,6 +257,24 @@ class DefaultConfig(DefaultOptimizationConfig):
                         type="flux",
                         direction="y",
                     ),
+                    smatrix=dict(
+                        weight=0,
+                        #### objective is evaluated at this port
+                        in_slice_name=["in_slice_1"],
+                        # in_slice_name=["in_slice_1"],
+                        # out_slice_name=["out_slice_1"],
+                        out_slice_name=["out_slice_1", "out_slice_2"],
+                        #### objective is evaluated at all points by sweeping the wavelength and modes
+                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
+                        wl=[1.55],  #
+                        temp=[300],
+                        out_modes=(
+                            "Ez1",
+                        ),  # can evaluate on multiple output modes and get average transmission
+                        type="smatrix",  # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
+                        direction=["x+", "x+"],
+                        # direction=["x+"],
+                    ),
                 ),
             )
         )
@@ -272,36 +290,37 @@ class MDMOptimization(BaseOptimization):
         obj_cfgs=dict(),
         operation_device=torch.device("cuda:0"),
     ):
-        _design_region_cfgs = design_region_param_cfgs
-        design_region_param_cfgs = dict()
-        for region_name in device.design_region_cfgs.keys():
-            design_region_param_cfgs[region_name] = dict(
-                method="levelset",
-                rho_resolution=[25, 25],
-                transform=[
-                    dict(
-                        type="blur",
-                        mfs=0.1,
-                        resolutions=[hr_device.resolution, hr_device.resolution],
-                        dim="xy",
+        if not design_region_param_cfgs:
+            design_region_param_cfgs = dict()
+            for region_name in device.design_region_cfgs.keys():
+                design_region_param_cfgs[region_name] = dict(
+                    method="levelset",
+                    rho_resolution=[100, 100],
+                    transform=[
+                        dict(
+                            type="blur",
+                            mfs=0.05,
+                            resolutions=[hr_device.resolution, hr_device.resolution],
+                            dim="xy",
+                        ),
+                        dict(type="binarize"),
+                    ],
+                    init_method="random",
+                    denorm_mode="linear_eps",
+                    interpolation="gaussian_linear",
+                    binary_projection=dict(
+                        fw_threshold=100,
+                        bw_threshold=100,
+                        mode="regular",
                     ),
-                    dict(type="binarize"),
-                ],
-                init_method="random",
-                denorm_mode="linear_eps",
-                interpolation="bilinear",
-                binary_projection=dict(
-                    fw_threshold=100,
-                    bw_threshold=100,
-                    mode="regular",
-                ),
-            )
-            if region_name in _design_region_cfgs:
-                design_region_param_cfgs[region_name].update(
-                    _design_region_cfgs[region_name]
                 )
 
         cfgs = DefaultConfig()  ## this is default configurations
+        override_obj = obj_cfgs.get("override", False)
+        del obj_cfgs["override"]  # remove this key to avoid confusion later
+        if override_obj:
+            print("Override default obj_cfgs with the provided obj_cfgs", flush=True)
+            cfgs.obj_cfgs = {}
         ## here we accept new configurations and update the default configurations
         cfgs.update(
             dict(
