@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Callable, Iterable, Literal, Optional, Sequence, Tuple, List
+from typing import Callable, Iterable, List, Literal, Optional, Sequence, Tuple
 
 import torch
 from torch import Tensor
@@ -17,6 +17,7 @@ DampingMode = Literal["standard", "fletcher"]
 
 class DampingStrategy:
     """Interface aligned with training.py usage."""
+
     def reset(self) -> None:
         raise NotImplementedError
 
@@ -54,6 +55,7 @@ class StandardDampingStrategy(DampingStrategy):
 
     Includes optional attempt/training stopping when lambda saturates.
     """
+
     def __init__(
         self,
         starting_value: float = 1e-3,
@@ -78,7 +80,9 @@ class StandardDampingStrategy(DampingStrategy):
         self.reset()
 
     def reset(self) -> None:
-        self._damping = torch.tensor(self.starting_value, dtype=torch.get_default_dtype())
+        self._damping = torch.tensor(
+            self.starting_value, dtype=torch.get_default_dtype()
+        )
 
     def initialize_step(self, loss: Tensor) -> None:
         # Keep as-is. training.py calls this at each step.
@@ -109,12 +113,16 @@ class StandardDampingStrategy(DampingStrategy):
     def on_successful_update(self, loss: Tensor) -> None:
         _ = loss
         assert self._damping is not None
-        self._damping = torch.clamp(self._damping * self.dec_factor, self.min_value, self.max_value)
+        self._damping = torch.clamp(
+            self._damping * self.dec_factor, self.min_value, self.max_value
+        )
 
     def on_unsuccessful_update(self, loss: Tensor) -> None:
         _ = loss
         assert self._damping is not None
-        self._damping = torch.clamp(self._damping * self.inc_factor, self.min_value, self.max_value)
+        self._damping = torch.clamp(
+            self._damping * self.inc_factor, self.min_value, self.max_value
+        )
 
     def stop_attempts(self, loss: Tensor) -> bool:
         _ = loss
@@ -158,7 +166,9 @@ def _trainable_params_from_groups(param_groups) -> List[Tensor]:
     return ps
 
 
-def _flatten_grads_like_training_py(grads: Sequence[Optional[Tensor]], params: Sequence[Tensor]) -> Tensor:
+def _flatten_grads_like_training_py(
+    grads: Sequence[Optional[Tensor]], params: Sequence[Tensor]
+) -> Tensor:
     flat: List[Tensor] = []
     for g, p in zip(grads, params):
         if g is None:
@@ -244,7 +254,7 @@ class LevenbergMarquardt(Optimizer):
                 if not isinstance(p, Tensor) or not p.requires_grad:
                     continue
                 n = p.numel()
-                upd = updates_flat[offset: offset + n].view_as(p)
+                upd = updates_flat[offset : offset + n].view_as(p)
                 p.add_(-lr * upd)
                 offset += n
 
@@ -253,7 +263,9 @@ class LevenbergMarquardt(Optimizer):
 
     def step(self, closure: Callable[[], Tensor]) -> Tensor:
         if closure is None:
-            raise RuntimeError("LevenbergMarquardt requires a closure() that returns the scalar loss.")
+            raise RuntimeError(
+                "LevenbergMarquardt requires a closure() that returns the scalar loss."
+            )
 
         params = _trainable_params_from_groups(self.param_groups)
         if len(params) == 0:
@@ -263,7 +275,9 @@ class LevenbergMarquardt(Optimizer):
         with torch.enable_grad():
             loss = closure(backward=False)
             if loss.ndim != 0:
-                raise ValueError(f"closure() must return scalar loss; got shape {tuple(loss.shape)}")
+                raise ValueError(
+                    f"closure() must return scalar loss; got shape {tuple(loss.shape)}"
+                )
             if torch.any(loss < 0):
                 loss = loss + loss.detach().abs() + 1e-6
                 # raise ValueError("Loss must be non-negative to form residual sqrt(loss).")
@@ -271,7 +285,11 @@ class LevenbergMarquardt(Optimizer):
             self.damping_strategy.initialize_step(loss)
 
             # Scalar residual (num_residuals = 1)
-            sqrt_eps = torch.tensor(float(self.param_groups[0]["sqrt_eps"]), device=loss.device, dtype=loss.dtype)
+            sqrt_eps = torch.tensor(
+                float(self.param_groups[0]["sqrt_eps"]),
+                device=loss.device,
+                dtype=loss.dtype,
+            )
             residual = torch.sqrt(loss + sqrt_eps)  # scalar
 
             # Jacobian row wrt params: J_flat shape (P,)
@@ -328,7 +346,11 @@ class LevenbergMarquardt(Optimizer):
                     # Compute updates:
                     # - Overdetermined: updates = (J'J + damp)^-1 * (J' r)
                     # - Underdetermined: updates = (JJ' + damp)^-1 * r ; then map back: J' * updates
-                    updates = self._solve(JJ_damped, rhs, solve_method=self.param_groups[0]["solve_method"])
+                    updates = self._solve(
+                        JJ_damped,
+                        rhs,
+                        solve_method=self.param_groups[0]["solve_method"],
+                    )
 
                     if not overdetermined:
                         assert J is not None
@@ -354,7 +376,9 @@ class LevenbergMarquardt(Optimizer):
                         if new_loss.ndim != 0:
                             # restore and hard-fail
                             backup.restore(params)
-                            raise ValueError(f"closure() must return scalar loss; got shape {tuple(new_loss.shape)}")
+                            raise ValueError(
+                                f"closure() must return scalar loss; got shape {tuple(new_loss.shape)}"
+                            )
 
                     if new_loss < loss:
                         # Accept
