@@ -20,6 +20,8 @@ This repo is the official implementation of ["MAPS: Multi-Fidelity AI-Augmented 
 - Add Tidy3d for fast high-resolution epsilon map building, add cynlinder geometry.
 - Add LM optimizer
 - Change mdm behavior as MUX+converter
+- Support wdm_SiN, mdm_SiN
+- [important] remove levelset knot normalization
 
 
 [2025/10/19] Released v0.0.2
