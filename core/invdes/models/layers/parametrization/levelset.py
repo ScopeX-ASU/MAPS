@@ -226,6 +226,20 @@ class LevelSetInterp(object):
         gauss_kernel = self.gaussian(self.xy0, self.xy0)
         self.model = torch.matmul(torch.linalg.inv(gauss_kernel), self.z0.flatten())
 
+    def gaussian(self, xyi, xyj):
+        dist_sq = (xyi[:, 1].reshape(-1, 1) - xyj[:, 1].reshape(1, -1)).square_() + (
+            xyi[:, 0].reshape(-1, 1) - xyj[:, 0].reshape(1, -1)
+        ).square_()
+        return dist_sq.mul_(-1 / (2 * self.sig**2)).exp_()
+
+    def build_linear_model(self):
+        # For linear interpolation, no precomputed model is required.
+        pass
+
+    def build_bilinear_model(self):
+        # For bilinear interpolation, no precomputed model is required.
+        pass
+
     def build_gaussian_linear_model(self, x0, y0, sigma):
         ### we use 3 sigma rule to build the convolution kernel
         ## sigma: typically the rho_size in um unit
@@ -253,20 +267,6 @@ class LevelSetInterp(object):
             None, None
         ]  # [1, 1, kx, ky]
         self.gauss_kernel = self.gauss_kernel / self.gauss_kernel.sum()
-
-    def gaussian(self, xyi, xyj):
-        dist_sq = (xyi[:, 1].reshape(-1, 1) - xyj[:, 1].reshape(1, -1)).square_() + (
-            xyi[:, 0].reshape(-1, 1) - xyj[:, 0].reshape(1, -1)
-        ).square_()
-        return dist_sq.mul_(-1 / (2 * self.sig**2)).exp_()
-
-    def build_linear_model(self):
-        # For linear interpolation, no precomputed model is required.
-        pass
-
-    def build_bilinear_model(self):
-        # For bilinear interpolation, no precomputed model is required.
-        pass
 
     def handle_constant_dimension(self, x1, y1):
         """Handle cases where one dimension of z0 has only one knot."""
@@ -301,6 +301,7 @@ class LevelSetInterp(object):
         y0 = self.xy0[:, 1].unique(sorted=True)
         if z0 is None:
             z0 = self.z0.reshape(len(x0), len(y0))
+
         x_idx = torch.searchsorted(x0, x1.clamp(min=x0.min(), max=x0.max()))
         y_idx = torch.searchsorted(y0, y1.clamp(min=y0.min(), max=y0.max()))
 
@@ -623,9 +624,11 @@ class LevelSetParameterization(BaseParametrization):
             weight_dict["ls_knots"].data -= 0.05
         elif init_method == "rectangle":
             weight = weight_dict["ls_knots"]
-            weight.data.fill_(-0.2)
-            weight.data[:, weight.shape[1] // 4 : 3 * weight.shape[1] // 4] = 0.05
-            weight.data += torch.randn_like(weight) * 0.01
+            # weight.data.fill_(-0.2)
+            # weight.data[:, weight.shape[1] // 4 : 3 * weight.shape[1] // 4] = 0.05
+            # weight.data += torch.randn_like(weight) * 0.01
+            weight.data.fill_(-1)
+            weight.data[:, weight.shape[1] // 4 : 3 * weight.shape[1] // 4] = 1
         elif init_method.startswith("grating_1d"):
             method = init_method.split("_")
             if len(method) > 1:
@@ -748,7 +751,7 @@ class LevelSetParameterization(BaseParametrization):
         design_param = weights["ls_knots"] if ls_knots is None else ls_knots
         ### to avoid all knots becoming unreasonable large to make it stable
         ### also to avoid most knots concentrating near threshold, otherwise, binarization will not work
-        design_param = design_param / (design_param.std() + 1e-6) * 1 / 4
+        # design_param = design_param / (design_param.std() + 1e-6) * 1 / 4
         phi_model = LevelSetInterp(
             x0=rho[0],
             y0=rho[1],
