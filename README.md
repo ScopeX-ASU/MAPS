@@ -18,6 +18,7 @@ This repo is the official implementation of ["MAPS: Multi-Fidelity AI-Augmented 
 - Add differentiable morphology operator in reparametrization
 - Add gaussian-smoothed linear interpolation in levelset
 - Add Tidy3d for fast high-resolution epsilon map building, add cynlinder geometry.
+- Add LM optimizer
 
 
 [2025/10/19] Released v0.0.2
