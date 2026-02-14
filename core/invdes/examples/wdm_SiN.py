@@ -30,25 +30,23 @@ if __name__ == "__main__":
     # first we need to instantiate the a optimization object
     sim_cfg = DefaultSimulationConfig()
 
-    wdm_region_size = (6, 6)
+    wdm_region_size = (24, 24)
     port_len = 1.8
 
-    input_port_width = 0.48
-    output_port_width = 0.48
-    num_outports = 2
-    wl_cen = 1.55
-    wl_width = 0.02
-    n_wl = 2
-    exp_name = (
-        f"wdm_opt-port-{num_outports}_Si_eff_{wdm_region_size[0]}x{wdm_region_size[1]}"
-    )
+    input_port_width = 0.85
+    output_port_width = 0.85
+    num_outports = 4
+    wl_cen = 1.56
+    wl_width = 0.06
+    n_wl = 4
+    exp_name = f"wdm_opt-port-{num_outports}_SiN_neff1.7_{wdm_region_size[0]}x{wdm_region_size[1]}"
 
     sim_cfg.update(
         dict(
             solver="ceviche_torch",
             # border_width=[port_len, port_len, 2, 2],
             border_width=[0, 0, 2, 2],
-            resolution=50,
+            resolution=15,
             plot_root=f"./figs/{exp_name}",
             PML=[0.5, 0.5],
             neural_solver=None,
@@ -103,9 +101,9 @@ if __name__ == "__main__":
         wl{idx}_trans, wl{idx}_trans_p{j}, wl{idx}_refl_trans, wl{idx}_rad_trans_{dir}
         where idx starts at 1 in order of `wls`.
         """
-        assert len(wls) == len(
-            desired_out_slices
-        ), "wls and desired_out_slices must have same length"
+        assert len(wls) == len(desired_out_slices), (
+            "wls and desired_out_slices must have same length"
+        )
 
         cfg = {}
         for i, (wl, desired_out) in enumerate(zip(wls, desired_out_slices), start=1):
@@ -197,7 +195,7 @@ if __name__ == "__main__":
     )
 
     device = WDM(
-        material_r1="Si_eff",
+        material_r1="SiN_eff",
         sim_cfg=sim_cfg,
         box_size=wdm_region_size,
         port_len=(port_len, port_len),
@@ -262,7 +260,7 @@ if __name__ == "__main__":
             mode="cosine",
             name="sharpness",
             init_sharp=4,
-            final_sharp=8,
+            final_sharp=4,
         ),
         plot_cfgs=Config(
             plot=True,
@@ -295,7 +293,7 @@ if __name__ == "__main__":
         devOptimization=opt,
         optimizer=dict(
             name="Adam",
-            lr=0.05,
+            lr=0.1,
         ),
         run=Config(
             n_epochs=90,
@@ -303,7 +301,7 @@ if __name__ == "__main__":
         sharp_scheduler=Config(
             mode="cosine",
             name="sharpness",
-            init_sharp=8,
+            init_sharp=4,
             final_sharp=256,
         ),
         plot_cfgs=Config(
