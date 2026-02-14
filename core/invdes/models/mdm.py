@@ -317,7 +317,8 @@ class MDMOptimization(BaseOptimization):
 
         cfgs = DefaultConfig()  ## this is default configurations
         override_obj = obj_cfgs.get("override", False)
-        del obj_cfgs["override"]  # remove this key to avoid confusion later
+        if "override" in obj_cfgs:
+            del obj_cfgs["override"]  # remove this key to avoid confusion later
         if override_obj:
             print("Override default obj_cfgs with the provided obj_cfgs", flush=True)
             cfgs.obj_cfgs = {}
