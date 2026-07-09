@@ -15,7 +15,7 @@ from torch import Tensor, nn
 from torch.types import Device
 
 from .base_parametrization import BaseParametrization
-from .utils import HeavisideProjection
+from .utils import HeavisideProjection, SubpixelSmoothedProjection
 
 __all__ = ["LevelSetParameterization"]
 
@@ -335,13 +335,16 @@ class LevelSetInterp(object):
         ## first use the gaussian kernel to convolve the z0
         # z0: [len(x0), len(y0)]
         # gauss_kernel: [1, 1, kx, ky]
-        z0 = F.conv2d(
+        pad_x = self.gauss_kernel.shape[2] // 2
+        pad_y = self.gauss_kernel.shape[3] // 2
+        z0_padded = F.pad(
             self.z0.unsqueeze(0).unsqueeze(0),
+            (pad_y, pad_y, pad_x, pad_x),
+            mode="replicate",
+        )
+        z0 = F.conv2d(
+            z0_padded,
             self.gauss_kernel,
-            padding=(
-                self.gauss_kernel.shape[2] // 2,
-                self.gauss_kernel.shape[3] // 2,
-            ),
         )[
             0, 0
         ]  # [H, W]
@@ -376,7 +379,7 @@ class LevelSetInterp(object):
         return ls  # Level set surface with the same shape as z0
 
 
-class GetLevelSetEps(nn.Module):
+class GetLevelSetDensity(nn.Module):
     def __init__(self, fw_threshold, bw_threshold, mode, device):
         super().__init__()
         self.fw_threshold = fw_threshold
@@ -410,15 +413,15 @@ class GetLevelSetEps(nn.Module):
             device=design_param.device,
         )
         phi = phi_model.get_ls(x1=x_phi, y1=y_phi)
-        # # Calculates the permittivities from the level set surface.
+        # Calculates the normalized density from the level set surface.
         phi = phi + self.eta
-        eps_phi = self.proj(phi, sharpness, self.eta)
+        density_phi = self.proj(phi, sharpness, self.eta)
 
         # Reshapes the design parameters into a 2D matrix.
-        eps = torch.reshape(eps_phi, (nx_phi, ny_phi))
+        density = torch.reshape(density_phi, (nx_phi, ny_phi))
         phi = torch.reshape(phi, (nx_phi, ny_phi))
 
-        return eps, phi
+        return density, phi
 
 
 class LevelSetParameterization(BaseParametrization):
@@ -442,6 +445,9 @@ class LevelSetParameterization(BaseParametrization):
             ],
             init_method="random",
             denorm_mode="linear_eps",
+            dims=(0, 1),  # the levelset2d describes x-y plane.
+            extrude_direction="-",  # extrude in the negative z direction
+            extrude_angle=90.0,  # extrude vertically
         ),
         **kwargs,
     ):
@@ -458,7 +464,10 @@ class LevelSetParameterization(BaseParametrization):
 
         self.build_parameters(cfgs, self.design_region_cfg)
         self.reset_parameters(cfgs, self.design_region_cfg)
-        self.binary_projection = HeavisideProjection(**self.cfgs["binary_projection"])
+        # self.binary_projection = HeavisideProjection(**self.cfgs["binary_projection"])
+        self.binary_projection = SubpixelSmoothedProjection(
+            projection_midpoint=0.5, resolution=None
+        )
         self.eta = torch.tensor(
             [
                 0.5,
@@ -470,17 +479,23 @@ class LevelSetParameterization(BaseParametrization):
     def _prepare_parameters_levelset(
         self,
         rho_resolution: Tuple[int, int],
-        region_size: Tuple[float, float],
+        region_size: Tuple[float, float] | Tuple[float, float, float],
+        dims: Tuple[int, int] = (0, 1),
     ):
+        region_size = tuple(region_size)
+        region_size = tuple([region_size[d] for d in dims])
+        design_region_mask = [self.design_region_mask[d] for d in dims]
+        hr_design_region_mask = [self.hr_design_region_mask[d] for d in dims]
+
         n_rho = [
             int(region_s * res) + 1
             for region_s, res in zip(region_size, rho_resolution)
         ]
         ### this makes sure n_phi is the same as design_region_mask
         ## add 1 here due to leveset needs to have one more point than the design region
-        n_phi = [(m.stop - m.start) for m in self.design_region_mask]
+        n_phi = [(m.stop - m.start) for m in design_region_mask]
 
-        n_hr_phi = [(m.stop - m.start) for m in self.hr_design_region_mask]
+        n_hr_phi = [(m.stop - m.start) for m in hr_design_region_mask]
 
         rho = [
             torch.linspace(-region_s / 2, region_s / 2, n, device=self.operation_device)
@@ -517,14 +532,18 @@ class LevelSetParameterization(BaseParametrization):
         return param_dict
 
     def _build_parameters_levelset(self, param_cfg, region_cfg):
+
+        dims = sorted(
+            self.cfgs.get("dims", (0, 1))
+        )  # the dimensions that the level set is defined on, default to [0, 1] for x-y plane
+
         param_dict = self._prepare_parameters_levelset(
             tuple(param_cfg["rho_resolution"]),
             tuple(region_cfg["size"]),
+            dims=tuple(dims),
         )
         n_rho = param_dict["n_rho"]
-        ls_knots = nn.Parameter(
-            -0.05 * torch.ones(*n_rho, device=self.operation_device)
-        )
+        ls_knots = nn.Parameter(torch.zeros(*n_rho, device=self.operation_device))
 
         weight_dict = dict(ls_knots=ls_knots)
         return weight_dict, param_dict
@@ -564,9 +583,23 @@ class LevelSetParameterization(BaseParametrization):
                 # level_set_knots.fill_(0.05)
                 # print("this is the shape of level_set_knots", level_set_knots.shape, flush=True)
         if init_method == "random":
-            nn.init.normal_(weight_dict["ls_knots"], mean=0, std=0.01)
+            nn.init.normal_(weight_dict["ls_knots"], mean=0, std=0.0001)
+        elif init_method.startswith("random_"):
+            p = init_method.split("_")
+            if len(p) > 1:
+                p = float(p[-1])
+            else:
+                p = 0.01
+            nn.init.uniform_(weight_dict["ls_knots"], a=-p, b=p)
         elif init_method == "ones":
             nn.init.normal_(weight_dict["ls_knots"], mean=0.05, std=0.01)
+        elif init_method.startswith("constant"):
+            p = init_method.split("_")
+            if len(p) > 1:
+                p = float(p[-1])
+            else:
+                p = 0.0  # 0 means middle point
+            weight_dict["ls_knots"].data.fill_(p)
         elif init_method == "checkerboard":
             ## make a checkerboard pattern
             weight_dict["ls_knots"].data.fill_(-0.05)
@@ -594,7 +627,7 @@ class LevelSetParameterization(BaseParametrization):
             else:
                 p = 1
             # nn.init.normal_(weight_dict["ls_knots"], mean=-0.1, std=0.0001)
-            nn.init.normal_(weight_dict["ls_knots"], mean=-0.05, std=0.01)
+            nn.init.normal_(weight_dict["ls_knots"], mean=-0.3, std=0.01)
             ### create a map with center high, edge low as a ball using mesh grid
             x, y = torch.meshgrid(
                 torch.linspace(
@@ -616,12 +649,12 @@ class LevelSetParameterization(BaseParametrization):
             # mask = mask | mask_ring
             # weight_dict["ls_knots"].data[mask] = nn.init.normal_(weight_dict["ls_knots"].data[mask], mean=0.05, std=0.01)
             weight_dict["ls_knots"].data[mask] = nn.init.normal_(
-                weight_dict["ls_knots"].data[mask], mean=0.06, std=0.01
+                weight_dict["ls_knots"].data[mask], mean=0.3, std=0.01
             )
             # weight_dict["ls_knots"].data[mask] = (1-(x.abs()**p + y.abs()**p)[mask]) * 0.1
         elif init_method == "zeros":
-            nn.init.normal_(weight_dict["ls_knots"], mean=0, std=0.01)
-            weight_dict["ls_knots"].data -= 0.05
+            # nn.init.normal_(weight_dict["ls_knots"], mean=0, std=0.01)
+            weight_dict["ls_knots"].data.fill_(-0.25)
         elif init_method == "rectangle":
             weight = weight_dict["ls_knots"]
             # weight.data.fill_(-0.2)
@@ -716,32 +749,64 @@ class LevelSetParameterization(BaseParametrization):
                 r > (box_size_x / 2 - half_wg_width),
             )
             weight.data[quater_ring_mask] = 0.05
-        elif init_method == "crossing":
+        elif init_method.startswith("bending"):
+            width = init_method.split("_")
+            if len(width) > 1:
+                width = float(width[-1])
+            else:
+                width = 0.5
             rho_res = self.cfgs["rho_resolution"]
-            half_wg_width_x = int((0.48 / 2) * rho_res[0])
-            half_wg_width_y = int((0.48 / 2) * rho_res[1])
+            half_wg_width_x = int((width / 2) * rho_res[0])
+            half_wg_width_y = int((width / 2) * rho_res[1])
 
             weight = weight_dict["ls_knots"]
-            weight.data.fill_(-0.2)
+            weight.data.fill_(-0.3)
             weight.data[
                 weight.shape[0] // 2
                 - half_wg_width_x : weight.shape[0] // 2
                 + half_wg_width_x,
                 :,
-            ] = 0.05
+            ] = 0.3
             weight.data[
                 :,
                 weight.shape[1] // 2
                 - half_wg_width_y : weight.shape[1] // 2
                 + half_wg_width_y,
-            ] = 0.05
-            weight.data += torch.randn_like(weight) * 0.01
+            ] = 0.3
+        elif init_method.startswith("bending"):
+            # Add bending initialization logic here, e.g., bending_0.5, 0.5um width circular bending
+            width = init_method.split("_")
+            if len(width) > 1:
+                width = float(width[-1])
+            else:
+                width = 0.5
+            rho_res = self.cfgs["rho_resolution"]
+            weight = weight_dict["ls_knots"]
+            weight.data.fill_(-0.2)
+            box_size_x = region_cfg["size"][0]
+            box_size_y = region_cfg["size"][1]
+            x_ax = torch.linspace(
+                0, box_size_x, weight.data.shape[0], device=self.operation_device
+            )
+            y_ax = torch.linspace(
+                0, box_size_y, weight.data.shape[1], device=self.operation_device
+            )
+            x_ax, y_ax = torch.meshgrid(x_ax, y_ax)
+            r = torch.sqrt((x_ax) ** 2 + (y_ax) ** 2)
+
+            ## bending radius is determined by the region region size
+            bending_radius = min(box_size_x, box_size_y) / 2
+            half_wg_width = width / 2  # 0.48um waveguide width
+            bending_mask = torch.logical_and(
+                r < (bending_radius + half_wg_width),
+                r > (bending_radius - half_wg_width),
+            )
+            weight.data[bending_mask] = 0.2
+
         else:
             raise ValueError(f"Unsupported initialization method: {init_method}")
 
-    def _build_permittivity(
-        self, weights, rho, phi, n_phi, sharpness: float, ls_knots=None
-    ):
+    def _build_density(self, weights, rho, phi, n_phi, sharpness: float, ls_knots=None):
         if ls_knots is not None:
             assert (
                 ls_knots.shape == weights["ls_knots"].shape
@@ -763,21 +828,19 @@ class LevelSetParameterization(BaseParametrization):
         phi = phi_model.get_ls(x1=phi[0], y1=phi[1], shape=n_phi)  # [76, 2001]
 
         ## This is used to constrain the value to be [0, 1] for heaviside input
-        phi = torch.tanh(phi) * 0.5
+        # phi = torch.tanh(phi) * 0.5
         phi = phi.to(self.operation_device)
-        phi = phi + self.eta
-        eps_phi = self.binary_projection(phi, sharpness, self.eta)
+        phi = phi + self.eta  # already in [0, 1]
+        density_phi = phi
+        # density_phi = self.binary_projection(phi, sharpness, self.eta)
 
         self.phi = torch.reshape(phi, n_phi)
 
-        return eps_phi
+        return density_phi
 
-    def build_permittivity(self, weights, sharpness: float, ls_knots=None):
-        ## this is the high resolution, e.g., res=200, 310 permittivity
-        ## return:
-        #   1. we need the first one for gds dump out
-        #   2. we need the second one for evaluation, do not need to downsample it here. transform will handle it.
-        hr_permittivity = self._build_permittivity(
+    def build_density(self, weights, sharpness: float, ls_knots=None):
+        ## this is the high resolution, e.g., res=200, 310 normalized density
+        hr_density = self._build_density(
             weights,
             self.params["rho"],
             self.params["hr_phi"],
@@ -786,4 +849,7 @@ class LevelSetParameterization(BaseParametrization):
             ls_knots=ls_knots,
         )
 
-        return hr_permittivity
+        return hr_density
+
+    def build_permittivity(self, weights, sharpness: float, ls_knots=None):
+        return self.build_density(weights, sharpness, ls_knots=ls_knots)

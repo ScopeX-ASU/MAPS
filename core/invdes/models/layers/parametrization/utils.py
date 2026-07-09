@@ -233,7 +233,7 @@ class HeavisideProjection(nn.Module):
         self.upper_limit = torch.tensor(1.0)
         self.lower_limit = torch.tensor(0.0)
 
-    def forward(self, x: Tensor, beta: Tensor, eta: Tensor) -> Tensor:
+    def forward(self, x: Tensor, beta: Tensor, eta: Tensor, **kwargs) -> Tensor:
         if self.mode == "regular":
             x = (torch.tanh(beta * eta) + torch.tanh(beta * (x - eta))) / (
                 torch.tanh(beta * eta) + torch.tanh(beta * (1 - eta))
@@ -251,3 +251,163 @@ class HeavisideProjection(nn.Module):
             x, upper_limit=self.upper_limit, lower_limit=self.lower_limit
         )
         return x
+
+
+def tanh_projection(x: Tensor, beta: float | Tensor, eta: float | Tensor) -> Tensor:
+    """Numerically safe tanh projection matching fdtdx's projection convention."""
+    beta_t = torch.as_tensor(beta, dtype=x.dtype, device=x.device)
+    eta_t = torch.as_tensor(eta, dtype=x.dtype, device=x.device)
+    is_inf = torch.isinf(beta_t)
+    is_zero = beta_t == 0
+
+    safe_beta = torch.where(
+        is_inf | is_zero,
+        torch.ones((), dtype=x.dtype, device=x.device),
+        beta_t,
+    )
+    dividend = torch.tanh(safe_beta * eta_t) + torch.tanh(safe_beta * (x - eta_t))
+    divisor = torch.tanh(safe_beta * eta_t) + torch.tanh(safe_beta * (1 - eta_t))
+    projected = dividend / divisor
+
+    inf_projected = torch.where(x > eta_t, torch.ones_like(x), torch.zeros_like(x))
+    zero_projected = x.clamp(0, 1)
+    return torch.where(
+        is_zero, zero_projected, torch.where(is_inf, inf_projected, projected)
+    )
+
+
+def _gradient_2d_by_index(x: Tensor) -> tuple[Tensor, Tensor]:
+    """Torch equivalent of ``jnp.gradient`` for a 2D array with unit spacing."""
+    if x.ndim != 2:
+        raise ValueError(f"Expected a 2D tensor, got shape {tuple(x.shape)}")
+
+    grad0 = torch.empty_like(x)
+    grad1 = torch.empty_like(x)
+
+    if x.shape[0] == 1:
+        grad0.zero_()
+    else:
+        grad0[0] = x[1] - x[0]
+        grad0[-1] = x[-1] - x[-2]
+        if x.shape[0] > 2:
+            grad0[1:-1] = (x[2:] - x[:-2]) * 0.5
+
+    if x.shape[1] == 1:
+        grad1.zero_()
+    else:
+        grad1[:, 0] = x[:, 1] - x[:, 0]
+        grad1[:, -1] = x[:, -1] - x[:, -2]
+        if x.shape[1] > 2:
+            grad1[:, 1:-1] = (x[:, 2:] - x[:, :-2]) * 0.5
+
+    return grad0, grad1
+
+
+def subpixel_smoothed_projection(
+    rho_filtered: Tensor,
+    beta: float | Tensor,
+    eta: float | Tensor = 0.5,
+    resolution: float | Tensor = 1.0,
+) -> Tensor:
+    """Subpixel-smoothed projection adapted from fdtdx for 2D Torch tensors.
+
+    ``rho_filtered`` should already be spatially smooth. Around pixels that
+    contain the projected interface, this integrates a local fill fraction
+    instead of applying a pointwise Heaviside/tanh value. This keeps useful
+    interface gradients even for very large or infinite ``beta``.
+    """
+    if rho_filtered.ndim != 2:
+        raise ValueError(f"Expected a 2D tensor, got shape {tuple(rho_filtered.shape)}")
+
+    resolution_t = torch.as_tensor(
+        resolution, dtype=rho_filtered.dtype, device=rho_filtered.device
+    )
+    eta_t = torch.as_tensor(eta, dtype=rho_filtered.dtype, device=rho_filtered.device)
+    dx = 1 / resolution_t
+    dy = dx
+    smoothing_radius = 0.55 * dx
+
+    rho_projected = tanh_projection(rho_filtered, beta=beta, eta=eta_t)
+
+    grad0, grad1 = _gradient_2d_by_index(rho_filtered)
+    grad_norm_sq = (grad0 / dx).square() + (grad1 / dy).square()
+    nonzero_norm = grad_norm_sq.abs() > 0
+    grad_norm = torch.sqrt(
+        torch.where(nonzero_norm, grad_norm_sq, torch.ones_like(grad_norm_sq))
+    )
+    grad_norm_eff = torch.where(nonzero_norm, grad_norm, torch.ones_like(grad_norm))
+
+    distance = (eta_t - rho_filtered) / grad_norm_eff
+    needs_smoothing = nonzero_norm & (distance.abs() < smoothing_radius)
+
+    d_r = distance / smoothing_radius
+    safe_d_r = torch.where(needs_smoothing, d_r, torch.zeros_like(d_r))
+    safe_d_r2 = safe_d_r.square()
+    safe_d_r3 = safe_d_r2 * safe_d_r
+    safe_d_r5 = safe_d_r3 * safe_d_r2
+
+    fill = torch.where(
+        needs_smoothing,
+        0.5 - 15 / 16 * safe_d_r + 5 / 8 * safe_d_r3 - 3 / 16 * safe_d_r5,
+        torch.ones_like(safe_d_r),
+    )
+    fill_minus = torch.where(
+        needs_smoothing,
+        0.5 + 15 / 16 * safe_d_r - 5 / 8 * safe_d_r3 + 3 / 16 * safe_d_r5,
+        torch.ones_like(safe_d_r),
+    )
+
+    rho_minus = rho_filtered - smoothing_radius * grad_norm_eff * fill
+    rho_plus = rho_filtered + smoothing_radius * grad_norm_eff * fill_minus
+    rho_minus_projected = tanh_projection(rho_minus, beta=beta, eta=eta_t)
+    rho_plus_projected = tanh_projection(rho_plus, beta=beta, eta=eta_t)
+    rho_smoothed = (1 - fill) * rho_minus_projected + fill * rho_plus_projected
+    return torch.where(needs_smoothing, rho_smoothed, rho_projected)
+
+
+class SubpixelSmoothedProjection(nn.Module):
+    """2D subpixel-smoothed projection layer.
+
+    Compared with a pointwise tanh/Heaviside projection, this uses local
+    first-order interface fill fractions near threshold crossings. It is most
+    useful after a smoothing/filtering step and remains differentiable around
+    interfaces when ``beta`` is large.
+    """
+
+    def __init__(
+        self,
+        projection_midpoint: float = 0.5,
+        resolution: float | None = None,
+    ) -> None:
+        super().__init__()
+        self.projection_midpoint = projection_midpoint
+        self.resolution = resolution
+        self.subpixel_smoothed_projection_nograd = subpixel_smoothed_projection
+
+        self.subpixel_smoothed_projection_grad = subpixel_smoothed_projection
+
+    def forward(
+        self,
+        x: Tensor,
+        beta: float | Tensor,
+        eta: float | Tensor | None = None,
+        resolution: float | Tensor | None = None,
+    ) -> Tensor:
+        eta = self.projection_midpoint if eta is None else eta
+        resolution = self.resolution if resolution is None else resolution
+        if resolution is None:
+            raise ValueError("SubpixelSmoothedProjection requires a resolution")
+        if x.requires_grad:
+            x = self.subpixel_smoothed_projection_grad(
+                x, beta=beta, eta=eta, resolution=resolution
+            )
+        else:
+            with torch.inference_mode():
+                x = self.subpixel_smoothed_projection_nograd(
+                    x.data, beta=beta, eta=eta, resolution=resolution
+                )
+
+        return x
+
+    def extra_repr(self) -> str:
+        return f"projection_midpoint={self.projection_midpoint}, resolution={self.resolution}"

@@ -23,23 +23,44 @@ class DefaultConfig(DefaultOptimizationConfig):
                     wl_cen=1.55,
                     wl_width=0,
                     n_wl=1,
-                    plot_root="./figs/mmi",
+                    plot_root="./figs/bending",
                 ),
                 obj_cfgs=dict(
+                    # smatrix=dict(
+                    #     weight=1,
+                    #     #### objective is evaluated at this port
+                    #     in_slice_name=["in_slice_1", "in_slice_2", "in_slice_3"],
+                    #     # in_slice_name=["in_slice_1"],
+                    #     # out_slice_name=["out_slice_1"],
+                    #     out_slice_name=["out_slice_1", "out_slice_2", "out_slice_3"],
+                    #     #### objective is evaluated at all points by sweeping the wavelength and modes
+                    #     in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
+                    #     wl=[1.55],  #
+                    #     temp=[300],
+                    #     out_modes=(
+                    #         "Ez1",
+                    #     ),  # can evaluate on multiple output modes and get average transmission
+                    #     type="smatrix",  # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
+                    #     direction=["x+", "x+", "x+"],
+                    #     # direction=["x+"],
+                    # ),
                     smatrix=dict(
                         weight=1,
                         #### objective is evaluated at this port
-                        in_slice_name=["in_slice_1", "in_slice_2", "in_slice_3"],
-                        out_slice_name=["out_slice_1", "out_slice_2", "out_slice_3"],
+                        in_slice_name=["in_slice_1"],
+                        # in_slice_name=["in_slice_1"],
+                        # out_slice_name=["out_slice_1"],
+                        out_slice_name=["out_slice_1", "out_slice_2"],
                         #### objective is evaluated at all points by sweeping the wavelength and modes
                         in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                        wl=[1.55],
+                        wl=[1.55],  #
                         temp=[300],
                         out_modes=(
                             "Ez1",
                         ),  # can evaluate on multiple output modes and get average transmission
                         type="smatrix",  # the reason that the energy is not conserved is that the forward efficiency is caluculated in terms of the eigenmode coeff not the flux
-                        direction=["x+", "x+", "x+"],
+                        direction=["x+", "x+"],
+                        # direction=["x+"],
                     ),
                     # fwd_trans=dict(
                     #     weight=1,
@@ -146,37 +167,41 @@ class MMIOptimization(BaseOptimization):
         obj_cfgs=dict(),
         operation_device=torch.device("cuda:0"),
     ):
-        _design_region_cfgs = design_region_param_cfgs
-        design_region_param_cfgs = dict()
-        for region_name in device.design_region_cfgs.keys():
-            design_region_param_cfgs[region_name] = dict(
-                method="levelset",
-                rho_resolution=[25, 25],
-                transform=[
-                    # dict(type="mirror_symmetry", dims=[1]),
-                    dict(
-                        type="blur",
-                        mfs=0.1,
-                        resolutions=[hr_device.resolution, hr_device.resolution],
-                        dim="xy",
+        if not design_region_param_cfgs:
+            design_region_param_cfgs = dict()
+            for region_name in device.design_region_cfgs.keys():
+                design_region_param_cfgs[region_name] = dict(
+                    method="levelset",
+                    rho_resolution=[25, 25],
+                    transform=[
+                        dict(type="mirror_symmetry", dims=[1]),
+                        dict(
+                            type="fft",
+                            mfs=0.1,
+                            # mfs=0.2,
+                            resolutions=[hr_device.resolution, hr_device.resolution],
+                            dim="xy",
+                        ),
+                        dict(type="binarize"),
+                    ],
+                    init_method="random",
+                    denorm_mode="linear_eps",
+                    interpolation="gaussian_linear",
+                    binary_projection=dict(
+                        fw_threshold=100,
+                        bw_threshold=100,
+                        mode="regular",
                     ),
-                    dict(type="binarize"),
-                ],
-                init_method="random",
-                denorm_mode="linear_eps",
-                interpolation="bilinear",
-                binary_projection=dict(
-                    fw_threshold=100,
-                    bw_threshold=100,
-                    mode="regular",
-                ),
-            )
-            if region_name in _design_region_cfgs:
-                design_region_param_cfgs[region_name].update(
-                    _design_region_cfgs[region_name]
                 )
 
         cfgs = DefaultConfig()  ## this is default configurations
+        override_obj = obj_cfgs.pop(
+            "override", False
+        )  # remove this key to avoid confusion later
+        if override_obj:
+            print("Override default obj_cfgs with the provided obj_cfgs", flush=True)
+            cfgs.obj_cfgs = {}
+        ## here we accept new configurations and update the default configurations
         # for i in range(1, device.num_outports + 1):
         #     cfgs.obj_cfgs[f"fwd_trans_{i}"] = dict(
         #         weight=1,

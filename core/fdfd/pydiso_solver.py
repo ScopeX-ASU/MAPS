@@ -1,12 +1,3 @@
-"""
-Description:
-Author: Jiaqi Gu (jiaqigu@asu.edu)
-Date: 2025-11-05 21:21:42
-LastEditors: Jiaqi Gu (jiaqigu@asu.edu)
-LastEditTime: 2025-11-05 21:23:10
-FilePath: /MAPS_local/core/fdfd/pydiso_solver.py
-"""
-
 import warnings
 
 import numpy as np
@@ -47,6 +38,7 @@ class PardisoTypeConversionWarning(PardisoWarning, sp.SparseEfficiencyWarning):
 
 
 class MKLPardisoSolver:
+
     def __init__(self, A, matrix_type=None, factor=True, verbose=False):
         """An interface to the Intel MKL pardiso sparse matrix solver.
 

@@ -55,7 +55,7 @@ class EdgeCoupler(N_Ports):
                 type="box",
                 direction="x",
                 center=[-(port_len[0] + box_size[0]) / 2, 0],
-                size=[port_len[0] + 1 / sim_cfg["resolution"], port_width[0]],
+                size=[port_len[0], port_width[0]],
                 eps=eps_r_fn(wl_cen),
             ),
             out_port_1=dict(
@@ -101,23 +101,26 @@ class EdgeCoupler(N_Ports):
 
     def init_monitors(self, verbose: bool = True):
         rel_width = 2
-        pml = self.sim_cfg["PML"][0]
-        offset = 0.2 + pml
-        port_len = self.port_cfgs["in_port_1"]["size"][0]
         if verbose:
             logger.info("Start generating sources and monitors ...")
         src_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="in_slice_1",
-            rel_loc=offset / port_len,
+            rel_loc=0.4,
             rel_width=rel_width,
         )
         refl_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="refl_slice_1",
-            rel_loc=(offset + 0.05) / port_len,
+            rel_loc=0.41,
             rel_width=rel_width,
         )
+        # out_slice = self.build_port_monitor_slice(
+        #     port_name="out_port_1",
+        #     slice_name="out_port_1",
+        #     rel_loc=0.6,
+        #     rel_width=rel_width,
+        # )
         out_slice = self.build_port_monitor_slice(
             port_name="out_port_1",
             slice_name="out_slice_1",

@@ -17,6 +17,8 @@ from core.utils import print_stat
 from thirdparty.ceviche.constants import *
 from thirdparty.ceviche.utils import make_sparse
 
+from .cudss_spsolve import spsolve_cudss
+
 try:
     from .pydiso_solver import MKLPardisoSolver as PydisoSolver
 
@@ -142,6 +144,20 @@ def solve_linear(
         )
     else:
         raise ValueError(f"Solver type {solver_type} not supported")
+
+
+# def solve_linear(A, b, iterative_method=False, symmetry=False, **kwargs):
+#     """ Master function to call the others """
+
+#     if iterative_method and iterative_method is not None:
+#         # if iterative solver string is supplied, use that method
+#         return _solve_iterative(A, b, iterative_method=iterative_method, **kwargs)
+#     elif iterative_method and iterative_method is None:
+#         # if iterative_method is supplied as None, use the default
+#         return _solve_iterative(A, b, iterative_method=DEFAULT_ITERATIVE_METHOD)
+#     else:
+#         # otherwise, use a direct solver
+#         return _solve_direct(A, b, symmetry=symmetry)
 
 
 def _solve_direct(

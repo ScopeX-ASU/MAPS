@@ -1,15 +1,13 @@
+import builtins
 import collections
 import logging
 import math
-import os
 import random
-import traceback
-from collections import OrderedDict
+from dataclasses import asdict, dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Callable, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence, Tuple
 
 import autograd.numpy as npa
-import imageio.v2 as imageio
 import matplotlib.pyplot as plt
 import numpy as np
 import ryaml
@@ -19,12 +17,10 @@ import torch.fft
 import torch.nn.functional as F
 import torch.optim
 from pyutils.config import Config
-from pyutils.general import ensure_dir
 from torch import Tensor
 from torch.types import Device
+from torch.utils import dlpack
 from torch_sparse import spmm
-
-plt.rcParams["text.usetex"] = False
 
 train_configs = Config()
 from thirdparty.ceviche.constants import *
@@ -39,6 +35,71 @@ else:
 #     shape_cfg["size"] = field_size
 #     shape_cfg["grid_step"] = grid_step
 #     return shape_dict[shape_type](**shape_cfg)
+
+
+def _torch_to_jax(x: Tensor) -> Any:
+    """Convert a Torch tensor to a JAX array without a host copy when possible."""
+    try:
+        import jax.dlpack
+    except ImportError as exc:
+        raise ImportError("array_backend='jax' requires jax to be importable") from exc
+
+    x = x.detach().resolve_conj().contiguous()
+    try:
+        return jax.dlpack.from_dlpack(x)
+    except TypeError:
+        return jax.dlpack.from_dlpack(dlpack.to_dlpack(x))
+
+
+def _jax_to_torch(x: Any) -> Tensor:
+    """Convert a JAX array to Torch without a host copy when possible."""
+    try:
+        return dlpack.from_dlpack(x)
+    except TypeError:
+        import jax.dlpack
+
+        return dlpack.from_dlpack(jax.dlpack.to_dlpack(x))
+
+
+def _to_runtime_array(x: Any, backend) -> Any:
+    if not isinstance(x, Tensor):
+        return x
+    if backend == "jax":
+        return _torch_to_jax(x)
+    if backend == "torch":
+        return x.detach()
+    if backend == "numpy":
+        return x.detach().cpu().numpy()
+    raise ValueError(f"Unsupported array_backend: {backend!r}")
+
+
+def _to_torch(x: Any, *, device: torch.device | None = None) -> Tensor:
+    if isinstance(x, Tensor):
+        out = x.detach()
+    elif hasattr(x, "__dlpack__") and not isinstance(x, np.ndarray):
+        out = _jax_to_torch(x)
+    else:
+        out = torch.as_tensor(x)
+    if device is not None:
+        out = out.to(device)
+    return out
+
+
+def _to_runtime_cotangent(x: Any, backend) -> Any:
+    if x is None:
+        return None
+    if isinstance(x, Tensor):
+        return _to_runtime_array(x, backend)
+    return x
+
+
+def _to_torch_like(x: Any, ref: Tensor, *, complex_ok: bool = True) -> Tensor:
+    out = _to_torch(x, device=ref.device)
+    if complex_ok and torch.is_complex(ref) and not torch.is_complex(out):
+        out = out.to(ref.real.dtype)
+    if torch.is_complex(out):
+        return out
+    return out.to(ref.dtype if not torch.is_complex(ref) else ref.real.dtype)
 
 
 @lru_cache(maxsize=8)
@@ -76,6 +137,237 @@ def gaussian(device="cuda", **kwargs):
 shape_dict = {
     "gaussian": gaussian,
 }
+
+
+@dataclass
+class RectilinearGridMetadata:
+    shape: tuple[int, ...]
+    coords: tuple[np.ndarray, ...]
+    boundaries: tuple[np.ndarray, ...]
+    spacing: tuple[float, ...]
+    cell_weights: np.ndarray
+    is_uniform: bool
+    origin: tuple[float, ...]
+    extent: tuple[float, ...]
+    label: str = "grid"
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["coords"] = tuple(
+            np.asarray(axis, dtype=np.float64) for axis in self.coords
+        )
+        data["boundaries"] = tuple(
+            np.asarray(axis, dtype=np.float64) for axis in self.boundaries
+        )
+        data["cell_weights"] = np.asarray(self.cell_weights, dtype=np.float64)
+        return data
+
+
+def centers_to_boundaries(centers: np.ndarray) -> np.ndarray:
+    centers = np.asarray(centers, dtype=np.float64)
+    if centers.ndim != 1:
+        raise ValueError(f"Expected 1D centers, got shape {centers.shape}")
+    if centers.size == 0:
+        return np.zeros((0,), dtype=np.float64)
+    if centers.size == 1:
+        step = 1.0
+        return np.asarray(
+            [centers[0] - step / 2, centers[0] + step / 2], dtype=np.float64
+        )
+    midpoints = 0.5 * (centers[:-1] + centers[1:])
+    left = centers[0] - 0.5 * (centers[1] - centers[0])
+    right = centers[-1] + 0.5 * (centers[-1] - centers[-2])
+    return np.concatenate(([left], midpoints, [right])).astype(np.float64)
+
+
+def _cell_weights_from_boundaries(boundaries: tuple[np.ndarray, ...]) -> np.ndarray:
+    widths = [np.diff(np.asarray(axis, dtype=np.float64)) for axis in boundaries]
+    weight = widths[0]
+    for axis_width in widths[1:]:
+        reshape = [1] * weight.ndim + [axis_width.shape[0]]
+        weight = weight.reshape(weight.shape + (1,)) * axis_width.reshape(reshape)
+    return np.asarray(weight, dtype=np.float64)
+
+
+def build_rectilinear_grid_metadata(
+    coords: Sequence[np.ndarray] | None = None,
+    *,
+    boundaries: Sequence[np.ndarray] | None = None,
+    shape: Sequence[int] | None = None,
+    spacing: Sequence[float] | float | None = None,
+    extent: Sequence[float] | None = None,
+    label: str = "grid",
+) -> RectilinearGridMetadata:
+    if coords is None:
+        if shape is None:
+            raise ValueError("Either coords or shape must be provided.")
+        if spacing is None:
+            raise ValueError("Uniform grid construction requires spacing.")
+        shape = tuple(int(v) for v in shape)
+        if extent is None:
+            if isinstance(spacing, (int, float)):
+                spacing = tuple([float(spacing)] * len(shape))
+            else:
+                spacing = tuple(float(v) for v in spacing)
+            coords = tuple(
+                np.linspace(-(n - 1) / 2 * dl, (n - 1) / 2 * dl, n, dtype=np.float64)
+                for n, dl in zip(shape, spacing)
+            )
+        else:
+            extent = tuple(float(v) for v in extent)
+            coords = []
+            for n, axis_extent in zip(shape, extent):
+                if n == 1:
+                    coords.append(np.asarray([0.0], dtype=np.float64))
+                else:
+                    coords.append(
+                        np.linspace(
+                            -axis_extent / 2,
+                            axis_extent / 2,
+                            n,
+                            dtype=np.float64,
+                        )
+                    )
+            coords = tuple(coords)
+    else:
+        coords = tuple(np.asarray(axis, dtype=np.float64) for axis in coords)
+        shape = tuple(int(axis.size) for axis in coords)
+
+    if boundaries is None:
+        boundaries = tuple(centers_to_boundaries(axis) for axis in coords)
+    else:
+        boundaries = tuple(np.asarray(axis, dtype=np.float64) for axis in boundaries)
+
+    spacing_values = []
+    is_uniform = True
+    for axis in boundaries:
+        widths = np.diff(axis)
+        spacing_values.append(float(np.mean(widths)) if widths.size else 1.0)
+        if widths.size > 0 and not np.allclose(
+            widths, widths[0], atol=1e-12, rtol=1e-9
+        ):
+            is_uniform = False
+
+    extent_values = tuple(float(axis[-1] - axis[0]) for axis in boundaries)
+    origin = tuple(float(axis[0]) for axis in boundaries)
+    return RectilinearGridMetadata(
+        shape=tuple(shape),
+        coords=coords,
+        boundaries=boundaries,
+        spacing=tuple(spacing_values),
+        cell_weights=_cell_weights_from_boundaries(boundaries),
+        is_uniform=is_uniform,
+        origin=origin,
+        extent=extent_values,
+        label=label,
+    )
+
+
+def _torch_axis_interp(
+    values: Tensor,
+    src_coords: Tensor,
+    dst_coords: Tensor,
+    axis: int,
+) -> Tensor:
+    axis = axis if axis >= 0 else values.ndim + axis
+    if src_coords.numel() == 1:
+        expanded_shape = list(values.shape)
+        expanded_shape[axis] = int(dst_coords.numel())
+        return values.index_select(
+            axis, torch.zeros((1,), dtype=torch.long, device=values.device)
+        ).expand(*expanded_shape)
+
+    if torch.any(src_coords[1:] <= src_coords[:-1]):
+        raise ValueError("Source coordinates must be strictly increasing.")
+
+    moved = values.movedim(axis, -1)
+    flat = moved.reshape(-1, moved.shape[-1])
+    src = src_coords.to(device=values.device, dtype=values.real.dtype)
+    dst = dst_coords.to(device=values.device, dtype=values.real.dtype)
+
+    upper = torch.searchsorted(src, dst, right=False)
+    upper = torch.clamp(upper, 1, src.numel() - 1)
+    lower = upper - 1
+
+    x0 = src.index_select(0, lower)
+    x1 = src.index_select(0, upper)
+    denom = torch.where((x1 - x0).abs() < 1e-15, torch.ones_like(x1), x1 - x0)
+    t = ((dst - x0) / denom).to(values.real.dtype)
+
+    y0 = flat.index_select(1, lower)
+    y1 = flat.index_select(1, upper)
+    if torch.is_complex(values):
+        t = t.to(values.real.dtype)
+        interp = y0 + (y1 - y0) * t.unsqueeze(0).to(y0.dtype)
+    else:
+        interp = y0 + (y1 - y0) * t.unsqueeze(0)
+
+    new_shape = moved.shape[:-1] + (dst.numel(),)
+    return interp.reshape(new_shape).movedim(-1, axis)
+
+
+def resample_rectilinear_tensor(
+    values: Tensor | np.ndarray,
+    src_coords: Sequence[np.ndarray | Tensor],
+    dst_coords: Sequence[np.ndarray | Tensor],
+    *,
+    axes: Sequence[int] | None = None,
+) -> Tensor:
+    tensor = (
+        values
+        if isinstance(values, torch.Tensor)
+        else torch.as_tensor(np.array(values, copy=True))
+    )
+    src_coords_t = [
+        (
+            coord
+            if isinstance(coord, torch.Tensor)
+            else torch.as_tensor(np.array(coord, copy=True))
+        )
+        for coord in src_coords
+    ]
+    dst_coords_t = [
+        (
+            coord
+            if isinstance(coord, torch.Tensor)
+            else torch.as_tensor(np.array(coord, copy=True))
+        )
+        for coord in dst_coords
+    ]
+    if axes is None:
+        axes = tuple(range(tensor.ndim - len(src_coords_t), tensor.ndim))
+    if len(axes) != len(src_coords_t) or len(axes) != len(dst_coords_t):
+        raise ValueError("axes, src_coords, and dst_coords must have the same length.")
+    out = tensor
+    for axis, src_axis, dst_axis in zip(axes, src_coords_t, dst_coords_t):
+        if src_axis.shape[0] == dst_axis.shape[0] and torch.allclose(
+            src_axis.to(dtype=torch.float64), dst_axis.to(dtype=torch.float64)
+        ):
+            continue
+        out = _torch_axis_interp(out, src_axis, dst_axis, axis)
+    return out
+
+
+def grid_plane_weights(
+    grid_metadata: RectilinearGridMetadata | dict[str, Any] | None,
+    axis: int,
+) -> Tensor | None:
+    if grid_metadata is None:
+        return None
+    metadata = (
+        grid_metadata.to_dict() if hasattr(grid_metadata, "to_dict") else grid_metadata
+    )
+    boundaries = metadata["boundaries"]
+    widths = [np.diff(axis_values) * MICRON_UNIT for axis_values in boundaries]
+    transverse = [widths[idx] for idx in range(len(widths)) if idx != axis]
+    if len(transverse) == 0:
+        return None
+    weight = transverse[0]
+    for axis_width in transverse[1:]:
+        weight = weight.reshape(weight.shape + (1,)) * axis_width.reshape(
+            (1,) * weight.ndim + axis_width.shape
+        )
+    return torch.as_tensor(weight, dtype=torch.float32)
 
 
 @torch.compile
@@ -200,6 +492,423 @@ def sph_2_car(r: float, phi: float, theta: float = None) -> Tuple[float, float, 
     return x, y, z
 
 
+def _backward_edge_average(
+    current: torch.Tensor,
+    previous: torch.Tensor,
+    config,  # fdtdx SimulationConfig
+    axis: int,
+) -> torch.Tensor:
+    """Interpolate center-staggered samples back to an edge on a rectilinear grid.
+
+    For uniform grids this is the arithmetic mean.
+    For nonuniform rectilinear grids, the interpolation is weighted by local
+    half-widths, matching the JAX logic.
+    """
+    if config is None or not getattr(config, "has_nonuniform_grid", False):
+        return 0.5 * (current + previous)
+
+    grid = getattr(config, "resolved_grid", None)
+    # if config.has_symmetry:
+    #     grid = fdtdx.unfold_grid(grid, config.symmetry)
+    if grid is None:
+        return 0.5 * (current + previous)
+
+    widths = grid.cell_widths(axis)
+    widths = _jax_to_torch(widths)
+
+    # Match the JAX convention:
+    # previous_widths = concat([widths[:1], widths[:-1]])
+    previous_widths = torch.cat([widths[:1], widths[:-1]], dim=0)
+
+    current_half_width = 0.5 * widths
+    previous_half_width = 0.5 * previous_widths
+
+    # Broadcast widths over any leading batch dimensions.
+    # current is expected to be shaped (..., Nx, Ny, Nz) after slicing.
+    reshape_shape = [1] * current.ndim
+    reshape_shape[-3 + axis] = current.shape[-3 + axis]
+    current_half_width = current_half_width.reshape(*reshape_shape)
+    previous_half_width = previous_half_width.reshape(*reshape_shape)
+
+    return (current * previous_half_width + previous * current_half_width) / (
+        current_half_width + previous_half_width
+    )
+
+
+def pad_fields(
+    fields: torch.Tensor,
+    periodic_axes: tuple[bool, bool, bool],
+) -> torch.Tensor:
+    """Pads fields for boundary conditions.
+
+    Args:
+        fields: Tensor of shape (..., component, Nx, Ny, Nz), one axis for field component.
+        periodic_axes: Tuple of booleans indicating which spatial axes use periodic boundaries.
+
+    Returns:
+        Tensor of shape (..., component, Nx+2, Ny+2, Nz+2) with boundary conditions applied.
+    """
+    ori_shape = fields.shape
+    padded_fields = fields.flatten(0, -4)  # [..., component] -> merged batch-like axis
+
+    for i, periodic in enumerate(periodic_axes):
+        # pad_mode = "circular" if periodic else "constant"
+        pad_mode = "circular" if periodic else "replicate"
+
+        # torch.nn.functional.pad uses reverse spatial order:
+        # (z_left, z_right, y_left, y_right, x_left, x_right)
+        if i == 0:  # pad x axis
+            pad = (0, 0, 0, 0, 1, 1)
+        elif i == 1:  # pad y axis
+            pad = (0, 0, 1, 1, 0, 0)
+        else:  # pad z axis
+            pad = (1, 1, 0, 0, 0, 0)
+
+        padded_fields = F.pad(padded_fields, pad, mode=pad_mode, value=0.0)
+
+    padded_fields = padded_fields.view(*ori_shape[:-3], *padded_fields.shape[-3:])
+    return padded_fields
+
+
+def get_wrap_padding_axes(objects) -> tuple[bool, bool, bool]:
+    """Determines which axes should use wrap (periodic) padding."""
+    wrap_axes = [False, False, False]
+    for boundary in objects.boundary_objects:
+        if boundary.uses_wrap_padding:
+            wrap_axes[boundary.axis] = True
+    return tuple(wrap_axes)  # type: ignore
+
+
+def pad_fields_for_boundaries(fields: Tensor, objects, config):
+    """Pad fields and apply boundary-specific corrections.
+
+    Combines wrap/constant padding with boundary-specific corrections
+    (e.g. Bloch phase shifts) in a single call.
+    """
+    periodic_axes = get_wrap_padding_axes(objects)
+    padded = pad_fields(fields, periodic_axes)
+
+    # Apply boundary-specific ghost-cell corrections, notably Bloch phase shifts.
+    volume_shape = tuple(int(s) for s in fields.shape[-3:])
+    for boundary in getattr(objects, "boundary_objects", ()):
+        if not getattr(boundary, "uses_wrap_padding", False):
+            continue
+
+        needs_complex = bool(getattr(boundary, "needs_complex_fields", False))
+        if not needs_complex:
+            continue
+
+        if config.has_nonuniform_grid:
+            assert config.resolved_grid is not None
+            spacing = float(config.resolved_grid.min_spacing)
+        else:
+            spacing = config.uniform_spacing()
+
+        # if hasattr(config, "uniform_spacing"):
+        #     try:
+        #         spacing = config.uniform_spacing()
+        #     except Exception:
+        #         spacing = float(config.resolved_grid.min_spacing)
+        # else:
+        #     spacing = config.resolution
+
+        phase = boundary.get_bloch_phase(volume_shape, spacing)
+        phase = torch.as_tensor(phase, dtype=padded.dtype, device=padded.device)
+        ax = boundary.axis
+
+        idx = [slice(None)] * padded.ndim
+        idx[-3 + ax] = 0 if boundary.direction == "-" else -1
+        padded[tuple(idx)] = padded[tuple(idx)] * (
+            phase.conj() if boundary.direction == "-" else phase
+        )
+
+    return padded
+
+
+def interpolate_fields(
+    F_pad: torch.Tensor,
+    config: "SimulationConfig | None" = None,
+    is_E: bool = True,
+) -> torch.Tensor:
+    """Interpolates one vector field onto the E_z Yee grid point.
+
+    Target location:
+        (i, j, k + 1/2)
+
+    This mirrors the JAX logic:
+      - E_x, E_y: backward in transverse direction and forward in z
+      - E_z: already colocated
+      - H_x, H_y: backward in one transverse direction
+      - H_z: backward in x, backward in y, forward in z
+
+    On a uniform grid this reduces to the standard arithmetic averages.
+    """
+    F_x = F_pad.select(-4, 0)
+    F_y = F_pad.select(-4, 1)
+    F_z = F_pad.select(-4, 2)
+
+    if is_E:
+        # E_x: (i+1/2, j, k) -> (i, j, k+1/2)
+        # x backward, z forward
+        F_x_lower_z = _backward_edge_average(
+            current=F_x[..., 1:-1, 1:-1, 1:-1],
+            previous=F_x[..., :-2, 1:-1, 1:-1],
+            config=config,
+            axis=0,
+        )
+        F_x_upper_z = _backward_edge_average(
+            current=F_x[..., 1:-1, 1:-1, 2:],
+            previous=F_x[..., :-2, 1:-1, 2:],
+            config=config,
+            axis=0,
+        )
+        F_x_interp = 0.5 * (F_x_lower_z + F_x_upper_z)
+
+        # E_y: (i, j+1/2, k) -> (i, j, k+1/2)
+        # y backward, z forward
+        F_y_lower_z = _backward_edge_average(
+            current=F_y[..., 1:-1, 1:-1, 1:-1],
+            previous=F_y[..., 1:-1, :-2, 1:-1],
+            config=config,
+            axis=1,
+        )
+        F_y_upper_z = _backward_edge_average(
+            current=F_y[..., 1:-1, 1:-1, 2:],
+            previous=F_y[..., 1:-1, :-2, 2:],
+            config=config,
+            axis=1,
+        )
+        F_y_interp = 0.5 * (F_y_lower_z + F_y_upper_z)
+
+        # E_z: already at target
+        F_z_interp = F_z[..., 1:-1, 1:-1, 1:-1]
+
+    else:
+        # H_x: (i, j+1/2, k+1/2) -> (i, j, k+1/2)
+        # y backward only
+        F_x_interp = _backward_edge_average(
+            current=F_x[..., 1:-1, 1:-1, 1:-1],
+            previous=F_x[..., 1:-1, :-2, 1:-1],
+            config=config,
+            axis=1,
+        )
+
+        # H_y: (i+1/2, j, k+1/2) -> (i, j, k+1/2)
+        # x backward only
+        F_y_interp = _backward_edge_average(
+            current=F_y[..., 1:-1, 1:-1, 1:-1],
+            previous=F_y[..., :-2, 1:-1, 1:-1],
+            config=config,
+            axis=0,
+        )
+
+        # H_z: (i+1/2, j+1/2, k) -> (i, j, k+1/2)
+        # x backward, y backward, z forward
+        H_z_lower_z_x = _backward_edge_average(
+            current=F_z[..., 1:-1, 1:-1, 1:-1],
+            previous=F_z[..., :-2, 1:-1, 1:-1],
+            config=config,
+            axis=0,
+        )
+        H_z_lower_z_xy = _backward_edge_average(
+            current=H_z_lower_z_x,
+            previous=_backward_edge_average(
+                current=F_z[..., 1:-1, :-2, 1:-1],
+                previous=F_z[..., :-2, :-2, 1:-1],
+                config=config,
+                axis=0,
+            ),
+            config=config,
+            axis=1,
+        )
+
+        H_z_upper_z_x = _backward_edge_average(
+            current=F_z[..., 1:-1, 1:-1, 2:],
+            previous=F_z[..., :-2, 1:-1, 2:],
+            config=config,
+            axis=0,
+        )
+        H_z_upper_z_xy = _backward_edge_average(
+            current=H_z_upper_z_x,
+            previous=_backward_edge_average(
+                current=F_z[..., 1:-1, :-2, 2:],
+                previous=F_z[..., :-2, :-2, 2:],
+                config=config,
+                axis=0,
+            ),
+            config=config,
+            axis=1,
+        )
+
+        F_z_interp = 0.5 * (H_z_lower_z_xy + H_z_upper_z_xy)
+
+    return torch.stack(
+        [F_x_interp, F_y_interp, F_z_interp],
+        dim=-4,
+    )
+
+
+def yee_to_colocate_interpolate(
+    F: Tensor,
+    objects=None,
+    config=None,
+    is_E: bool = True,
+):
+    """Pad Yee-grid fields and interpolate them onto the colocated target point."""
+    F_pad = pad_fields_for_boundaries(F, objects, config)
+    interpolated_F = interpolate_fields(F_pad=F_pad, config=config, is_E=is_E)
+    return interpolated_F
+
+
+def _field_component_parity(
+    field_type: str,  # "E" or "H"
+    component: int,
+    axis: int,
+    wall: int,
+) -> int:
+    """
+    Mirror parity across a symmetry plane normal to `axis`.
+    wall: -1 = PEC, +1 = PMC
+    """
+    normal = component == axis
+    if wall == -1:  # PEC
+        if field_type == "E":
+            return 1 if normal else -1
+        return -1 if normal else 1
+    elif wall == 1:  # PMC
+        if field_type == "E":
+            return -1 if normal else 1
+        return 1 if normal else -1
+    raise ValueError(f"wall must be -1 (PEC) or +1 (PMC), got {wall}")
+
+
+def _stored_component_spec(components):
+    """
+    Keep the same canonical order as the source code:
+    Ex, Ey, Ez, Hx, Hy, Hz.
+    """
+    comp_names = ("Ex", "Ey", "Ez", "Hx", "Hy", "Hz")
+    comp_spec = (("E", 0), ("E", 1), ("E", 2), ("H", 0), ("H", 1), ("H", 2))
+    return [comp_spec[i] for i, name in enumerate(comp_names) if name in components]
+
+
+def _component_signs_torch(
+    spec,
+    touched: tuple[int, int, int],
+    ndim: int,
+    component_axis: int,
+    device,
+    dtype,
+):
+    out = {}
+    for a in range(3):
+        if touched[a] == 0:
+            continue
+        vals = [_field_component_parity(ft, ca, a, touched[a]) for (ft, ca) in spec]
+        shape = [1] * ndim
+        shape[component_axis] = len(vals)
+        out[a] = torch.tensor(vals, device=device, dtype=dtype).reshape(shape)
+    return out
+
+
+def _unfold_array_torch(
+    arr: torch.Tensor,
+    symmetry: tuple[int, int, int],
+    spatial_axes: tuple[int, int, int],
+    signs: dict[int, torch.Tensor] | None = None,
+) -> torch.Tensor:
+    """
+    Mirror-and-concatenate along each symmetric axis.
+    Differentiable: uses torch.flip / torch.cat / elementwise multiply only.
+    """
+    out = arr
+    for a in range(3):
+        if symmetry[a] == 0:
+            continue
+        ax = spatial_axes[a]
+        sign = 1.0 if signs is None else signs.get(a, 1.0)
+        mirror = torch.flip(out, dims=(ax,)) * sign
+        out = torch.cat([mirror, out], dim=ax)
+    return out
+
+
+def unfold_phasor(
+    phasor: torch.Tensor,
+    monitor,
+    components: Sequence[str] = ["Ex", "Ey", "Ez", "Hx", "Hy", "Hz"],
+    config=None,
+) -> torch.Tensor:
+    """
+    Differentiably unfold a PhasorDetector phasor tensor to the full domain.
+
+    Expected shapes:
+      - reduce_volume=False: (F, C, nx, ny, nz)
+      - reduce_volume=True : (F, C)
+
+    The function only handles the phasor tensor, exactly mirroring the source logic for
+    PhasorDetector:
+      - spatial phasor: flip + concatenate with per-component parity signs
+      - reduced phasor : multiply by the parity-derived reduction factor
+    """
+
+    if not config.has_symmetry:
+        return phasor
+    symmetry = tuple(config.symmetry)
+    if not any(s != 0 for s in symmetry):
+        return phasor
+
+    # Match the source logic: only symmetry planes actually touched by this monitor.
+    reduced_slice = monitor._grid_slice_tuple
+    touched = tuple(
+        symmetry[a] if (symmetry[a] != 0 and reduced_slice[a][0] == 0) else 0
+        for a in range(3)
+    )
+    if not any(s != 0 for s in touched):
+        return phasor
+
+    spec = _stored_component_spec(
+        monitor.components if components is None else components
+    )
+
+    phasor = phasor[None]
+    if getattr(monitor, "reduce_volume", False):
+        # Source logic: factor = ∏ (1 + parity) / 2 for each touched axis.
+        # Shape in the source is (1, F, C); component axis = 2.
+        parities = [
+            [
+                _field_component_parity(ft, ca, a, touched[a])
+                for a in range(3)
+                if touched[a]
+            ]
+            for ft, ca in spec
+        ]
+        factors = []
+        for per_comp in parities:
+            f = 1.0
+            for p in per_comp:
+                f *= (1.0 + p) / 2.0
+            factors.append(f)
+
+        factor = torch.tensor(
+            factors,
+            device=phasor.device,
+            dtype=phasor.dtype,
+        ).reshape((1, 1, len(factors)))
+
+        return phasor * factor
+
+    # Spatial phasor case: shape (1, F, C, nx, ny, nz), component axis = 2.
+    signs = _component_signs_torch(
+        spec=spec,
+        touched=touched,
+        ndim=phasor.ndim,
+        component_axis=2,
+        device=phasor.device,
+        dtype=phasor.dtype,
+    )
+    return _unfold_array_torch(phasor, touched, spatial_axes=(3, 4, 5), signs=signs)[0]
+
+
 def overlap(
     a,
     b,
@@ -247,6 +956,140 @@ def cross(a, b, direction="x"):
         raise ValueError("Invalid direction")
 
 
+def index_to_slice(idx):
+    arr = np.asarray(idx)
+    if arr.ndim == 0:
+        return slice(int(arr), int(arr) + 1)
+
+    if arr.ndim == 1:
+        return slice(int(arr[0]), int(arr[-1]) + 1)
+
+
+def get_eigenmode_coefficients_3d(
+    Ex,
+    Ey,
+    Ez,
+    Hx,
+    Hy,
+    Hz,
+    ht_m,
+    et_m,
+    monitor,
+    grid_step: float = 1,
+    energy: bool = False,
+    direction: str = "x+",
+    grid_metadata: RectilinearGridMetadata | dict[str, Any] | None = None,
+    cell_weights: Tuple[Tensor | np.ndarray] | None = None,
+):
+    ## dimensionless calculation, grid_step is forced to 1, same to fdtdx convention.
+    ## input E/H fields must be co-located already.
+
+    if isinstance(ht_m, np.ndarray) and isinstance(Ex, torch.Tensor):
+        ht_m = torch.from_numpy(ht_m).to(device=Ex.device, dtype=Ex.dtype)
+        et_m = torch.from_numpy(et_m).to(device=Ex.device, dtype=Ex.dtype)
+
+    # monitor_slice = tuple(index_to_slice(i) for i in monitor)
+    monitor_slice = monitor
+
+    Ex, Ey, Ez, Hx, Hy, Hz = (
+        Ex[monitor_slice].squeeze(),
+        Ey[monitor_slice].squeeze(),
+        Ez[monitor_slice].squeeze(),
+        Hx[monitor_slice].squeeze(),
+        Hy[monitor_slice].squeeze(),
+        Hz[monitor_slice].squeeze(),
+    )
+
+    E_sim = torch.stack((Ex, Ey, Ez), dim=0)
+    H_sim = torch.stack((Hx, Hy, Hz), dim=0)
+
+    E_m = et_m.squeeze().to(device=E_sim.device, dtype=E_sim.dtype)
+    H_m = ht_m.squeeze().to(device=H_sim.device, dtype=H_sim.dtype)
+
+    axis = {"x": 0, "y": 1, "z": 2}[direction[0]]
+
+    # Use the SAME area element as get_flux_3d.
+    # Physically, for a 2D plane, this should be dA = (grid_step * 1e-6) ** 2.
+    # dA = (grid_step * MICRON_UNIT) ** 2
+
+    if cell_weights is None:
+        cell_weights = grid_plane_weights(grid_metadata, axis)
+    else:
+        cell_weights = cell_weights[axis]
+        # print(cell_weights.shape, monitor_slice, axis)
+
+    ## we only need the area weights for transverse axis
+    ## axis here is the normal axis
+    plane_slice = monitor_slice[:axis] + monitor_slice[axis + 1 :]
+    cell_weights = cell_weights[plane_slice]
+    if cell_weights is None:
+        dA = 1
+    else:
+        dA = torch.as_tensor(cell_weights, dtype=E_sim.real.dtype, device=E_sim.device)
+        dA /= torch.mean(dA)
+
+    # Mode power, using the same convention as get_flux_3d:
+    # Pm = (0.5 * torch.sum(torch.cross(E_m, H_m.conj(), dim=0)[axis]) * dA).real.abs()
+    ## mode is normalized to have unit poynting flux, so Pm should be 1.
+    # print(Pm)
+
+    # Lorentz overlap numerator:
+    # ∫ (E_m* × H_sim + E_sim × H_m*) · n dA
+    overlap_a = torch.cross(E_m, H_sim.conj(), dim=0)[axis]
+    overlap_b = torch.cross(E_sim.conj(), H_m, dim=0)[axis]
+
+    # import matplotlib.pyplot as plt
+    # fig, axs = plt.subplots(5, 4)
+    # for c in range(3):
+    #     im = axs[c, 0].imshow(E_m[c].data.abs().cpu().numpy())
+    #     fig.colorbar(im, ax=axs[c, 0])
+    #     im = axs[c, 1].imshow(H_m[c].data.abs().cpu().numpy())
+    #     fig.colorbar(im, ax=axs[c, 1])
+    #     im = axs[c, 2].imshow(E_sim[c].data.abs().cpu().numpy())
+    #     fig.colorbar(im, ax=axs[c, 2])
+    #     im = axs[c, 3].imshow(H_sim[c].data.abs().cpu().numpy())
+    #     fig.colorbar(im, ax=axs[c, 3])
+
+    # im0 = axs[3, 0].imshow(overlap_a.data.abs().cpu().numpy())
+    # fig.colorbar(im0, ax=axs[3, 0])
+    # im1 = axs[3, 1].imshow(overlap_b.data.abs().cpu().numpy())
+    # fig.colorbar(im1, ax=axs[3, 1])
+    # im2 = axs[3, 2].imshow((overlap_a + overlap_b).data.abs().cpu().numpy())
+    # fig.colorbar(im2, ax=axs[3, 2])
+    # im3 = axs[3, 3].imshow((overlap_a - overlap_b).data.abs().cpu().numpy())
+    # fig.colorbar(im3, ax=axs[3, 3])
+
+    # im = axs[4, 0].imshow(dA.data.abs().cpu().numpy())
+    # fig.colorbar(im, ax=axs[4, 0])
+    # plt.savefig("overlap_debug.png", dpi=300)
+    # input()
+
+    if isinstance(dA, torch.Tensor):
+        a_p = torch.sum((overlap_a + overlap_b) * dA) / 4
+        a_m = torch.sum((overlap_a - overlap_b) * dA) / 4
+    else:
+        a_p = (torch.sum(overlap_a + overlap_b) * dA) / 4
+        a_m = (torch.sum(overlap_a - overlap_b) * dA) / 4
+
+    if energy:
+        power_p = torch.abs(a_p) ** 2
+        power_m = torch.abs(a_m) ** 2
+        return power_p, power_m
+        # if direction[1] == "+":
+        #     return power_p, 0
+        # elif direction[1] == "-":
+        #     return 0, power_m
+        # else:
+        #     raise ValueError("Invalid direction")
+
+    if direction[1] == "+":
+        return a_p, 0
+    elif direction[1] == "-":
+        return 0, a_m
+    else:
+        raise ValueError("Invalid direction")
+
+
 def get_eigenmode_coefficients(
     hx,
     hy,
@@ -261,7 +1104,7 @@ def get_eigenmode_coefficients(
     pol: str = "Ez",
 ):
     ### for Ez polarization: hx, hy, ez, ht_m is hx or hy, et_m is ez
-    ### for Hz polarization: ex, ey, hz, ht_m is hz, et_m is ex or ey
+    ### for Hx polarization: ex, ey, hz, ht_m is hz, et_m is ex or ey
     if isinstance(ht_m, np.ndarray) and isinstance(hx, torch.Tensor):
         ht_m = torch.from_numpy(ht_m).to(ez.device)
         et_m = torch.from_numpy(et_m).to(ez.device)
@@ -312,6 +1155,32 @@ def get_eigenmode_coefficients(
     dl = grid_step * MICRON_UNIT
     overlap1 = overlap(em, h, dl=dl, direction=direction)
     overlap2 = overlap(hm, e, dl=dl, direction=direction)
+
+    # import matplotlib.pyplot as plt
+
+    # fig, axs = plt.subplots(1, 4)
+    # print(ez)
+    # print(e)
+    # print(h)
+    # print(monitor)
+
+    # axs[0].plot(em[-1].data.abs().detach().cpu().numpy())
+    # axs[0].set_title("|em[-1]|")
+
+    # axs[1].plot(hm[0].data.abs().detach().cpu().numpy())
+    # axs[1].set_title("|hm[0]|")
+
+    # axs[2].plot(e[-1].data.abs().detach().cpu().numpy())
+    # axs[2].set_title("|e[-1]|")
+
+    # axs[3].plot(h[0].data.abs().detach().cpu().numpy())
+    # axs[3].set_title("|h[0]|")
+
+    # plt.tight_layout()
+
+    # plt.savefig("eigenmode_overlap_debug.png", dpi=300)
+    # input()
+
     normalization = overlap(em, hm, dl=dl, direction=direction)
     normalization = (2 * normalization) ** 0.5
     s_p = (overlap1 + overlap2) / 2 / normalization
@@ -1411,7 +2280,7 @@ class TemperatureScheduler:
 
 
 class SharpnessScheduler(object):
-    __mode_list__ = {"cosine", "quadratic", "exp2"}
+    __mode_list__ = {"cosine", "quadratic", "linear"}
 
     def __init__(
         self,
@@ -1431,22 +2300,22 @@ class SharpnessScheduler(object):
             mode in self.__mode_list__
         ), f"mode should be one of {self.__mode_list__}, but got {mode}"
 
-    def _step_cosine(self):
+    def _advance_step(self):
         self.current_step += 1
         if self.current_step > self.total_steps:
             self.current_step = self.total_steps
+
+    def _step_cosine(self):
+        self._advance_step()
         cos_inner = (math.pi * self.current_step) / self.total_steps
         cos_out = -math.cos(cos_inner) + 1
-        self.current_sharp = (
-            self.initial_sharp
-            + (self.final_sharp - self.initial_sharp) * (cos_out / 2) ** 1
-        )
+        self.current_sharp = self.initial_sharp + (
+            self.final_sharp - self.initial_sharp
+        ) * (cos_out / 2)
         return self.current_sharp
 
     def _step_quadratic(self):
-        self.current_step += 1
-        if self.current_step > self.total_steps:
-            self.current_step = self.total_steps
+        self._advance_step()
         self.current_sharp = (
             self.initial_sharp
             + (self.final_sharp - self.initial_sharp)
@@ -1454,25 +2323,21 @@ class SharpnessScheduler(object):
         )
         return self.current_sharp
 
-    def _step_exp2(self):
-        ## 1111,2222,4444,8888,16161616,....256256256
-        num_stages = int(math.log2(self.final_sharp))
-        steps_per_stages = int(self.total_steps // num_stages)
-        self.current_step += 1
-        if self.current_step > self.total_steps:
-            self.current_step = self.total_steps
-        self.current_sharp = min(
-            max(self.initial_sharp, 2 ** (self.current_step // steps_per_stages)),
-            self.final_sharp,
+    def _step_linear(self):
+        self._advance_step()
+        ratio = self.current_step / self.total_steps
+        self.current_sharp = (
+            self.initial_sharp + (self.final_sharp - self.initial_sharp) * ratio
         )
+        return self.current_sharp
 
     def step(self):
         if self.mode == "cosine":
             return self._step_cosine()
         elif self.mode == "quadratic":
             return self._step_quadratic()
-        elif self.mode == "exp2":
-            return self._step_exp2()
+        elif self.mode == "linear":
+            return self._step_linear()
         else:
             raise ValueError(
                 f"mode should be one of {self.__mode_list__}, but got {self.mode}"
@@ -1554,6 +2419,210 @@ class AspectRatioLoss(torch.nn.modules.loss._Loss):
         gap_penalty = gap_penalty.abs().sum()
 
         return gap_penalty + width_penalty
+
+
+class NormalizedMSELoss(torch.nn.modules.loss._Loss):
+    def __init__(self, reduce="mean"):
+        super(NormalizedMSELoss, self).__init__()
+
+        self.reduce = reduce
+
+    def forward(self, x, y):
+        ## x, y are binary patterns, 0, 1
+        ## if y is all 0, then this is invalid, so we add 0.5 bias to y to avoid zero division
+
+        error_energy = torch.norm((x - y), p=2, dim=(-1, -2))
+        field_energy = torch.norm(y - 0.5, p=2, dim=(-1, -2)) + 1e-6
+        return (error_energy / field_energy).mean()
+
+
+class NormalizedMSELoss2(torch.nn.modules.loss._Loss):
+    """
+    NMSE = ||x - y||_2^2 / (||y||_2^2 + eps)
+
+    Options:
+      - dims: tuple of dims to reduce over (default: all non-batch dims)
+      - reduction: "mean" | "sum" | "none"
+      - eps: small constant to avoid divide-by-zero
+      - ignore_zero_target: if True, set NMSE=0 for samples with ~zero target energy
+      - center_target: if True, use ||y - 0.5|| in the denominator (useful for strictly binary y)
+                       Note: this changes the metric (not the standard NMSE).
+    """
+
+    def __init__(
+        self,
+        dims=None,
+        reduction: str = "mean",
+        eps: float = 1e-12,
+        ignore_zero_target: bool = False,
+        center_target: bool = False,
+    ):
+        super().__init__(reduction=reduction)
+        self.dims = dims
+        self.eps = eps
+        self.ignore_zero_target = ignore_zero_target
+        self.center_target = center_target
+
+        if reduction not in ("mean", "sum", "none"):
+            raise ValueError("reduction must be 'mean' | 'sum' | 'none'")
+
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        # x, y must have the same shape
+        if x.shape != y.shape:
+            raise ValueError(f"shape mismatch: {x.shape} vs {y.shape}")
+
+        # By default, reduce over all non-batch dims (e.g., C/H/W for images).
+        if self.dims is None:
+            if x.ndim >= 2:
+                dims = tuple(range(1, x.ndim))
+            else:
+                dims = (0,)  # vector case with no batch
+        else:
+            dims = self.dims
+
+        # Squared error energy
+        err = x - y
+        num = torch.sum(err.abs() ** 2, dim=dims)
+
+        # Target energy (standard NMSE) or centered target energy (optional)
+        target_ref = (y - 0.5) if self.center_target else y
+        den = torch.sum(target_ref.abs() ** 2, dim=dims) + self.eps
+
+        nmse = num / den
+
+        # Optionally zero-out NMSE when the target energy is ~zero
+        if self.ignore_zero_target:
+            mask = den <= self.eps * 1.5
+            nmse = torch.where(mask, torch.zeros_like(nmse), nmse)
+
+        if self.reduction == "none":
+            return nmse
+        elif self.reduction == "mean":
+            return nmse.mean()
+        else:  # "sum"
+            return nmse.sum()
+
+
+class CenterNMSELoss(torch.nn.modules.loss._Loss):
+    def __init__(self, reduce="mean"):
+        super(CenterNMSELoss, self).__init__()
+
+        self.reduce = reduce
+
+    def forward(self, x, y):
+        x = x[
+            ...,
+            155:-155,
+            155:-155,
+        ]
+        y = y[
+            ...,
+            155:-155,
+            155:-155,
+        ]
+        error_energy = torch.norm((x - y), p=2, dim=(-1, -2))
+        field_energy = torch.norm(y, p=2, dim=(-1, -2)) + 1e-6
+        return (error_energy / field_energy).mean()
+
+
+class SlicedNormalizedMSELoss(torch.nn.modules.loss._Loss):
+    def __init__(self, reduce="mean"):
+        super(SlicedNormalizedMSELoss, self).__init__()
+
+        self.reduce = reduce
+
+    def forward(self, x, y, mask):
+        one_mask = mask != 0
+
+        error_energy = torch.norm((x - y) * one_mask, p=2, dim=(-1, -2))
+        field_energy = torch.norm(y * one_mask, p=2, dim=(-1, -2)) + 1e-6
+        return error_energy / field_energy
+
+
+class unityMaskMSELoss(torch.nn.modules.loss._Loss):
+    def __init__(self, reduce="mean"):
+        super(unityMaskMSELoss, self).__init__()
+
+        self.reduce = reduce
+
+    def forward(self, x, y, mask):
+        mask = mask.repeat(1, x.shape[1], 1, 1)
+        mask = mask != 0
+        zeros = torch.eq(mask, 0)
+        num_of_zeros = torch.sum(zeros).item()
+        total_num_elements = mask.numel()
+        num_effective_elements = total_num_elements - num_of_zeros
+        return (
+            F.mse_loss(x * mask, y * mask, reduction=self.reduce)
+            * total_num_elements
+            / num_effective_elements
+        )
+
+
+class PaddedMSELoss(torch.nn.modules.loss._Loss):
+    def __init__(self, reduce="mean"):
+        super(PaddedMSELoss, self).__init__()
+
+        self.reduce = reduce
+
+    def forward(self, x, y, mask):
+        mask = mask.repeat(1, x.shape[1], 1, 1)
+        mask = mask != 0
+        zeros = torch.eq(mask, 0)
+        num_of_zeros = torch.sum(zeros).item()
+        total_num_elements = mask.numel()
+        num_effective_elements = total_num_elements - num_of_zeros
+        return (
+            F.mse_loss(x * mask, y * mask, reduction=self.reduce)
+            * total_num_elements
+            / num_effective_elements
+        )
+
+
+class L2_Error(torch.nn.modules.loss._Loss):
+    def __init__(self):
+        super(L2_Error, self).__init__()
+
+    def forward(self, x, y, mask):
+        mask = mask.repeat(1, x.shape[1], 1, 1)
+        mask = mask != 0
+        error_filed = (x - y) * mask
+        error_energy = error_filed.pow(2).sum()
+        return error_energy
+
+
+class LpLoss(torch.nn.modules.loss._Loss):
+    def __init__(self, p=2):
+        super(LpLoss, self).__init__()
+        self.p = p
+
+    def forward(self, x, y, weight=None):
+        if weight is not None:
+            return (weight * (x - y).pow(self.p)).sum()
+        else:
+            return (x - y).pow(self.p).sum()
+
+
+class CurvatureLoss(torch.nn.modules.loss._Loss):
+    def __init__(self):
+        super(CurvatureLoss, self).__init__()
+        self.kernel = torch.tensor(
+            [
+                [-1.0 / 16, 5.0 / 16, -1.0 / 16],
+                [5.0 / 16, -1.0, 5.0 / 16],
+                [-1.0 / 16, 5.0 / 16, -1.0 / 16],
+            ]
+        )[None, None]
+
+    def forward(self, x):
+        # x [B, 1, H, W]
+        assert (
+            x.dim() == 4 and x.size(1) == 1
+        ), "Input tensor must be of shape [B, 1, H, W]"
+        if self.kernel.device != x.device:
+            self.kernel = self.kernel.to(x.device)
+        x = torch.conv2d(x, self.kernel)
+        return x.square().sum()
 
 
 def padding_to_tiles(x, tile_size):
@@ -1884,12 +2953,17 @@ def grid_average(e, monitor, direction: str = "x", autograd=False, pol: str = "E
 
                 e_yee_shifted = torch.mean(e[e_monitor], dim=0)
             else:
-                e_monitor = (
-                    monitor[0] + np.array([[-1], [0]]) + (0 if pol == "Ez" else 1),
-                    monitor[1],
-                )
+                # e_monitor = (
+                #     monitor[0] + np.array([[-1], [0]]) + (0 if pol == "Ez" else 1),
+                #     monitor[1],
+                # )
+                # e_monitor =
 
-                e_yee_shifted = mean(e[e_monitor], axis=0)
+                # e_yee_shifted = mean(e[e_monitor], axis=0)
+                if pol == "Ez":
+                    e_yee_shifted = (e[monitor] + e[monitor.x - 1, monitor.y]) / 2
+                else:
+                    e_yee_shifted = (e[monitor] + e[monitor.x + 1, monitor.y]) / 2
         elif isinstance(monitor, np.ndarray):
             e_monitor = monitor.nonzero()
             e_monitor = (e_monitor[0] + (-1 if pol == "Ez" else 1), e_monitor[1])
@@ -1912,11 +2986,16 @@ def grid_average(e, monitor, direction: str = "x", autograd=False, pol: str = "E
                 )
                 e_yee_shifted = torch.mean(e[e_monitor], dim=0)
             else:
-                e_monitor = (
-                    monitor[0],
-                    monitor[1] + np.array([[-1], [0]]) + (0 if pol == "Ez" else 1),
-                )
-                e_yee_shifted = mean(e[e_monitor], axis=0)
+                # e_monitor = (
+                #     monitor[0],
+                #     monitor[1] + np.array([[-1], [0]]) + (0 if pol == "Ez" else 1),
+                # )
+                # e_yee_shifted = mean(e[e_monitor], axis=0)
+
+                if pol == "Ez":
+                    e_yee_shifted = (e[monitor] + e[monitor.x, monitor.y - 1]) / 2
+                else:
+                    e_yee_shifted = (e[monitor] + e[monitor.x, monitor.y + 1]) / 2
         elif isinstance(monitor, np.ndarray):
             e_monitor = monitor.nonzero()
             e_monitor = (e_monitor[0], e_monitor[1] + (-1 if pol == "Ez" else 1))
@@ -1929,6 +3008,75 @@ def grid_average(e, monitor, direction: str = "x", autograd=False, pol: str = "E
             )
             e_yee_shifted = (e[e_monitor] + e[e_monitor_shifted]) / 2
     return e_yee_shifted
+
+
+def get_flux_3d(
+    Ex,
+    Ey,
+    Ez,
+    Hx,
+    Hy,
+    Hz,
+    grid_step: float,
+    monitor=None,
+    direction: str = "x",
+    grid_metadata: RectilinearGridMetadata | dict[str, Any] | None = None,
+    cell_weights: Tensor | np.ndarray | None = None,
+):
+
+    # monitor_slice = tuple(index_to_slice(i) for i in monitor)
+    monitor_slice = monitor
+    Ex, Ey, Ez, Hx, Hy, Hz = (
+        Ex[monitor_slice].squeeze(),
+        Ey[monitor_slice].squeeze(),
+        Ez[monitor_slice].squeeze(),
+        Hx[monitor_slice].squeeze(),
+        Hy[monitor_slice].squeeze(),
+        Hz[monitor_slice].squeeze(),
+    )
+    phasors_E = torch.stack((Ex, Ey, Ez), dim=0)
+    phasors_H = torch.stack((Hx, Hy, Hz), dim=0)
+    axis = {"x": 0, "y": 1, "z": 2}[direction[0]]
+    if cell_weights is None:
+        cell_weights = grid_plane_weights(grid_metadata, axis)
+    else:
+        cell_weights = cell_weights[axis]
+
+    ## we only need the area weights for transverse axis
+    ## axis here is the normal axis
+    plane_slice = monitor_slice[:axis] + monitor_slice[axis + 1 :]
+    cell_weights = cell_weights[plane_slice]
+
+    if cell_weights is None:
+        dA = 1
+    else:
+        dA = torch.as_tensor(
+            cell_weights,
+            dtype=phasors_E.real.dtype,
+            device=phasors_E.device,
+        )
+        dA /= torch.mean(dA)
+    # flux = (
+    #     0.5
+    #     * torch.cross(
+    #         phasors_E.squeeze(),
+    #         phasors_H.squeeze().conj(),
+    #         dim=0,
+    #     )[propagation_axis].sum()
+    #     * grid_step
+    #     * 1e-6
+    # )
+    flux_density = torch.cross(
+        phasors_E.squeeze(),
+        phasors_H.squeeze().conj(),
+        dim=0,
+    )[axis]
+    if isinstance(dA, torch.Tensor):
+        flux = 0.5 * torch.sum(flux_density * dA)
+    else:
+        flux = 0.5 * flux_density.sum() * dA
+
+    return flux.real
 
 
 def get_flux(
@@ -2028,12 +3176,14 @@ def get_shape_similarity(
 
 
 Slice = collections.namedtuple("Slice", "x y")
+Slice3D = collections.namedtuple("Slice3D", "x y z")
 
 
 @lru_cache(maxsize=64)
 def Si_eps(wavelength):
     """Returns the permittivity of silicon at the given wavelength"""
-    return 3.48**2
+    # return 3.48**2
+    return 3.4777**2
     return Si.epsilon(1 / wavelength)[0, 0].real
 
 
@@ -2057,13 +3207,24 @@ def Si_eff_eps(wavelength, width: float = 10, thickness: float = 0.22):
         assert (
             False
         ), "For 2.5D simulation, effective index is only related to thickness, the width-related effective index is solved by 2D FDFD itself, do not need to consider separately"
+        assert (
+            thickness == 0.22
+        ), f"only support thickness of 0.22 for narrow waveguide, but got {thickness}"
+        match width:
+            case 0.48:
+                permittivity = 2.411707**2  # from lumerical
+            case 0.8:
+                permittivity = 2.688673**2  # from lumerical
+            case _:
+                raise ValueError(f"Invalid width: {width}, only support 0.48 and 0.8")
     return permittivity
 
 
 @lru_cache(maxsize=64)
 def SiO2_eps(wavelength):
     """Returns the permittivity of silicon at the given wavelength"""
-    return 1.44**2
+    return 1.444**2
+    # return 1.44**2
     return SiO2.epsilon(1 / wavelength)[0, 0].real
 
 
@@ -2076,8 +3237,15 @@ def Air_eps(wavelength):
 @lru_cache(maxsize=64)
 def SiN_eps(wavelength):
     """Returns the permittivity of silicon at the given wavelength"""
-    return 2.45**2
+    return 2.45**2  #
     return SiO2.epsilon(1 / wavelength)[0, 0].real
+
+
+@lru_cache(maxsize=64)
+def Si3N4_eps(wavelength):
+    """Returns the permittivity of Si3N4 at the given wavelength"""
+    """https://doi.org/10.1038/s41467-025-64359-1"""
+    return 1.997**2
 
 
 @lru_cache(maxsize=64)
@@ -2093,14 +3261,186 @@ def TiO2_eps(wavelength):
     return 2.9**2
 
 
+@lru_cache(maxsize=64)
+def TFLN_eps(wavelength):
+    """Returns the permittivity of silicon at the given wavelength"""
+    return 2.2**2
+
+
+@lru_cache(maxsize=64)
+def TFLN_eff_eps(wavelength, **kwargs):
+    """Returns the permittivity of silicon at the given wavelength"""
+    return 2.120548**2
+
+
+@lru_cache(maxsize=64)
+def TiN_eps(wavelength):
+    """Returns the complex permittivity of TiN at the given wavelength."""
+    del wavelength
+    return complex(-10.0, 20.0)
+
+
 material_fn_dict = {
     "Si": Si_eps,
     "Si_eff": Si_eff_eps,
     "SiO2": SiO2_eps,
     "SiN": SiN_eps,
+    "Si3N4": Si3N4_eps,
     "SiN_eff": SiN_eff_eps,
     "Air": Air_eps,
+    "TiN": TiN_eps,
     "TiO2": TiO2_eps,
+    "TFLN": TFLN_eps,
+    "TFLN_eff": TFLN_eff_eps,
+}
+
+
+@dataclass(frozen=True)
+class MaterialHeatOpticSpec:
+    permittivity: float | complex | None = None
+    thermo_optic_coeff: float | None = None
+    thermal_conductivity: float | None = None
+    heat_capacity: float | None = None
+    electrical_conductivity: float | None = None
+
+
+@lru_cache(maxsize=64)
+def Si_k(_wavelength=None):
+    """Nominal thermal conductivity of silicon in W/(um*K)."""
+    return 148e-6
+
+
+@lru_cache(maxsize=64)
+def SiO2_k(_wavelength=None):
+    """Nominal thermal conductivity of silicon dioxide in W/(um*K)."""
+    return 1.38e-6
+
+
+@lru_cache(maxsize=64)
+def Air_k(_wavelength=None):
+    """Nominal thermal conductivity of air in W/(um*K)."""
+    return 0.026e-6
+
+
+@lru_cache(maxsize=64)
+def SiN_k(_wavelength=None):
+    """Nominal thermal conductivity of silicon nitride in W/(um*K)."""
+    return 30e-6
+
+
+@lru_cache(maxsize=64)
+def Si3N4_k(_wavelength=None):
+    """Nominal thermal conductivity of Si3N4 in W/(um*K)."""
+    return 30e-6
+
+
+@lru_cache(maxsize=64)
+def TiO2_k(_wavelength=None):
+    """Nominal thermal conductivity of TiO2 in W/(um*K)."""
+    return 11.7e-6
+
+
+@lru_cache(maxsize=64)
+def TFLN_k(_wavelength=None):
+    """Nominal thermal conductivity of thin-film lithium niobate in W/(um*K)."""
+    return 5.0e-6
+
+
+@lru_cache(maxsize=64)
+def TiN_k(_wavelength=None):
+    """Nominal thermal conductivity of TiN in W/(um*K)."""
+    return 28e-6
+
+
+thermal_conductivity_fn_dict = {
+    "Si": Si_k,
+    "Si_eff": Si_k,
+    "SiO2": SiO2_k,
+    "SiN": SiN_k,
+    "Si3N4": Si3N4_k,
+    "SiN_eff": SiN_k,
+    "Air": Air_k,
+    "TiN": TiN_k,
+    "TiO2": TiO2_k,
+    "TFLN": TFLN_k,
+    "TFLN_eff": TFLN_k,
+}
+
+
+@lru_cache(maxsize=64)
+def Si_dn_dT(_wavelength=None):
+    """Nominal silicon thermo-optic coefficient in 1/K."""
+    return 1.86e-4
+
+
+@lru_cache(maxsize=64)
+def SiO2_dn_dT(_wavelength=None):
+    """Nominal silicon dioxide thermo-optic coefficient in 1/K."""
+    return 1.0e-5
+
+
+@lru_cache(maxsize=64)
+def Air_dn_dT(_wavelength=None):
+    """Nominal air thermo-optic coefficient in 1/K."""
+    return 0.0
+
+
+@lru_cache(maxsize=64)
+def TiN_dn_dT(_wavelength=None):
+    """Nominal TiN thermo-optic coefficient in 1/K."""
+    return 0.0
+
+
+thermo_optic_coeff_fn_dict = {
+    "Si": Si_dn_dT,
+    "Si_eff": Si_dn_dT,
+    "SiO2": SiO2_dn_dT,
+    "Air": Air_dn_dT,
+    "TiN": TiN_dn_dT,
+}
+
+
+@lru_cache(maxsize=64)
+def Si_heat_capacity(_wavelength=None):
+    """Nominal silicon specific heat capacity in J/(kg*K)."""
+    return 710.0
+
+
+@lru_cache(maxsize=64)
+def SiO2_heat_capacity(_wavelength=None):
+    """Nominal silicon dioxide specific heat capacity in J/(kg*K)."""
+    return 709.0
+
+
+@lru_cache(maxsize=64)
+def Air_heat_capacity(_wavelength=None):
+    """Nominal air specific heat capacity in J/(kg*K)."""
+    return 1005.0
+
+
+@lru_cache(maxsize=64)
+def TiN_heat_capacity(_wavelength=None):
+    """Nominal TiN specific heat capacity in J/(kg*K)."""
+    return 598.0
+
+
+heat_capacity_fn_dict = {
+    "Si": Si_heat_capacity,
+    "Si_eff": Si_heat_capacity,
+    "SiO2": SiO2_heat_capacity,
+    "Air": Air_heat_capacity,
+    "TiN": TiN_heat_capacity,
+}
+
+
+@lru_cache(maxsize=64)
+def TiN_sigma(_wavelength=None):
+    """Nominal electrical conductivity of TiN in S/um."""
+    return 2.3
+
+
+electrical_conductivity_fn_dict = {
+    "TiN": TiN_sigma,
 }
 
 
@@ -2117,246 +3457,456 @@ def get_material_fn(material: str | float) -> Callable:
     return material_fn_dict[material]
 
 
+def get_thermal_conductivity_fn(material: str | float) -> Callable:
+    """Returns a callable thermal conductivity model in W/(um*K)."""
+    if isinstance(material, (float, int)):
+
+        def _material_fn(*args, **kwargs):
+            return float(material)
+
+        return _material_fn
+    if material not in thermal_conductivity_fn_dict:
+        raise ValueError(f"Invalid thermal material: {material}")
+    return thermal_conductivity_fn_dict[material]
+
+
+def get_thermo_optic_coeff_fn(material: str | float) -> Callable:
+    """Returns a callable thermo-optic coefficient model in 1/K."""
+    if isinstance(material, (float, int)):
+
+        def _material_fn(*args, **kwargs):
+            return float(material)
+
+        return _material_fn
+    if material not in thermo_optic_coeff_fn_dict:
+        raise ValueError(f"Invalid thermo-optic material: {material}")
+    return thermo_optic_coeff_fn_dict[material]
+
+
+def get_heat_capacity_fn(material: str | float) -> Callable:
+    """Returns a callable specific heat capacity model in J/(kg*K)."""
+    if isinstance(material, (float, int)):
+
+        def _material_fn(*args, **kwargs):
+            return float(material)
+
+        return _material_fn
+    if material not in heat_capacity_fn_dict:
+        raise ValueError(f"Invalid heat-capacity material: {material}")
+    return heat_capacity_fn_dict[material]
+
+
+def get_electrical_conductivity_fn(material: str | float) -> Callable:
+    """Returns a callable electrical conductivity model in S/um."""
+    if isinstance(material, (float, int)):
+
+        def _material_fn(*args, **kwargs):
+            return float(material)
+
+        return _material_fn
+    if material not in electrical_conductivity_fn_dict:
+        raise ValueError(f"Invalid electrical-conductivity material: {material}")
+    return electrical_conductivity_fn_dict[material]
+
+
+def get_material_heat_optic_spec(
+    material: str,
+    wavelength: float,
+) -> MaterialHeatOpticSpec:
+    """Returns known optical and thermal properties for a named material."""
+    permittivity = material_fn_dict.get(material)
+    thermo_optic = thermo_optic_coeff_fn_dict.get(material)
+    conductivity = thermal_conductivity_fn_dict.get(material)
+    capacity = heat_capacity_fn_dict.get(material)
+    electrical_conductivity = electrical_conductivity_fn_dict.get(material)
+    return MaterialHeatOpticSpec(
+        permittivity=None if permittivity is None else permittivity(wavelength),
+        thermo_optic_coeff=(
+            None if thermo_optic is None else float(thermo_optic(wavelength))
+        ),
+        thermal_conductivity=(
+            None if conductivity is None else float(conductivity(wavelength))
+        ),
+        heat_capacity=None if capacity is None else float(capacity(wavelength)),
+        electrical_conductivity=(
+            None
+            if electrical_conductivity is None
+            else float(electrical_conductivity(wavelength))
+        ),
+    )
+
+
+def convert_to_fdtdx_grid_shape_loc_slice(slice: Slice, direction: str = "x+"):
+    def _bounds(indexer):
+        if isinstance(indexer, builtins.slice):
+            if indexer.start is None or indexer.stop is None:
+                raise ValueError(f"Slice bounds must be concrete, got {indexer}")
+            return int(indexer.start), int(indexer.stop)
+        if np.isscalar(indexer):
+            start = int(indexer)
+            return start, start + 1
+        start = int(indexer[0])
+        stop = int(indexer[-1]) + 1
+        return start, stop
+
+    if direction[0] == "x":
+        y0, y1 = _bounds(slice.y)
+        z0, z1 = _bounds(slice.z)
+        partial_grid_shape = (
+            1,
+            int(y1 - y0),
+            int(z1 - z0),
+        )
+        x0, x1 = _bounds(slice.x)
+        grid_slice_tuple = (
+            (x0, x1),
+            (y0, y1),
+            (z0, z1),
+        )
+    elif direction[0] == "y":
+        x0, x1 = _bounds(slice.x)
+        z0, z1 = _bounds(slice.z)
+        partial_grid_shape = (
+            int(x1 - x0),
+            1,
+            int(z1 - z0),
+        )
+        y0, y1 = _bounds(slice.y)
+        grid_slice_tuple = (
+            (x0, x1),
+            (y0, y1),
+            (z0, z1),
+        )
+    elif direction[0] == "z":
+        x0, x1 = _bounds(slice.x)
+        y0, y1 = _bounds(slice.y)
+        partial_grid_shape = (
+            int(x1 - x0),
+            int(y1 - y0),
+            1,
+        )
+        z0, z1 = _bounds(slice.z)
+        grid_slice_tuple = (
+            (x0, x1),
+            (y0, y1),
+            (z0, z1),
+        )
+    else:
+        raise ValueError(f"Direction {direction} not supported")
+
+    return partial_grid_shape, grid_slice_tuple
+
+
 train_configs = Config()
 inverse_configs = Config()
 
 
-class BestKModelSaver(object):
-    def __init__(
-        self,
-        k: int = 1,
-        descend: bool = True,
-        truncate: int = 2,
-        metric_name: str = "acc",
-        format: str = "{:.2f}",
-    ):
-        super().__init__()
-        self.k = k
-        self.descend = descend
-        self.truncate = truncate
-        self.metric_name = metric_name
-        self.format = format
-        self.epsilon = 0.1**truncate
-        self.model_cache = OrderedDict()
-
-    def better_op(self, a, b):
-        if self.descend:
-            return a >= b + self.epsilon
-        else:
-            return a <= b - self.epsilon
-
-    def __insert_model_record(self, metric, dir, checkpoint_name, epoch=None):
-        metric = round(metric * 10**self.truncate) / 10**self.truncate
-        if len(self.model_cache) < self.k:
-            new_checkpoint_name = (
-                f"{checkpoint_name}_{self.metric_name}-"
-                + self.format.format(metric)
-                + f"{'' if epoch is None else '_epoch-' + str(epoch)}"
-            )
-            path = os.path.join(dir, new_checkpoint_name + ".pt")
-            self.model_cache[path] = (metric, epoch)
-            return path, None
-        else:
-            worst_metric, worst_epoch = sorted(
-                list(self.model_cache.values()),
-                key=lambda x: x[0],
-                reverse=False if self.descend else True,
-            )[0]
-            if self.better_op(metric, worst_metric):
-                del_checkpoint_name = (
-                    f"{checkpoint_name}_{self.metric_name}-"
-                    + self.format.format(worst_metric)
-                    + f"{'' if epoch is None else '_epoch-' + str(worst_epoch)}"
-                )
-                del_path = os.path.join(dir, del_checkpoint_name + ".pt")
-                try:
-                    del self.model_cache[del_path]
-                except:
-                    print(
-                        "[W] Cannot remove checkpoint: {} from cache".format(del_path),
-                        flush=True,
-                    )
-                new_checkpoint_name = (
-                    f"{checkpoint_name}_{self.metric_name}-"
-                    + self.format.format(metric)
-                    + f"{'' if epoch is None else '_epoch-' + str(epoch)}"
-                )
-                path = os.path.join(dir, new_checkpoint_name + ".pt")
-                self.model_cache[path] = (metric, epoch)
-                return path, del_path
-            # elif(acc == min_acc):
-            #     new_checkpoint_name = f"{checkpoint_name}_acc-{acc:.2f}{'' if epoch is None else '_epoch-'+str(epoch)}"
-            #     path = os.path.join(dir, new_checkpoint_name+".pt")
-            #     self.model_cache[path] = (acc, epoch)
-            #     return path, None
-            else:
-                return None, None
-
-    def get_topk_model_path(self, topk: int = 1):
-        if topk <= 0:
-            return []
-        if topk > len(self.model_cache):
-            topk = len(self.model_cache)
-        return [
-            i[0]
-            for i in sorted(
-                self.model_cache.items(), key=lambda x: x[1][0], reverse=self.descend
-            )[:topk]
-        ]
-
-    def save_model(
-        self,
-        model,
-        metric,
-        epoch=None,
-        path="./checkpoint/model.pt",
-        other_params=None,
-        save_model=False,
-        print_msg=True,
-    ):
-        """Save PyTorch model in path
-
-        Args:
-            model (PyTorch model): PyTorch model
-            acc (scalar): accuracy
-            epoch (scalar, optional): epoch. Defaults to None
-            path (str, optional): Full path of PyTorch model. Defaults to "./checkpoint/model.pt".
-            other_params (dict, optional): Other saved params. Defaults to None
-            save_model (bool, optional): whether save source code of nn.Module. Defaults to False
-            print_msg (bool, optional): Control of message print. Defaults to True.
-        """
-        dir = os.path.dirname(path)
-        ensure_dir(dir)
-        checkpoint_name = os.path.splitext(os.path.basename(path))[0]
-        if isinstance(metric, torch.Tensor):
-            metric = metric.data.item()
-        new_path, del_path = self.__insert_model_record(
-            metric, dir, checkpoint_name, epoch
-        )
-
-        if del_path is not None:
-            try:
-                os.remove(del_path)
-                print(f"[I] Model {del_path} is removed", flush=True)
-            except Exception as e:
-                if print_msg:
-                    print(f"[E] Model {del_path} failed to be removed", flush=True)
-                traceback.print_exc(e)
-
-        if new_path is None:
-            if print_msg:
-                if self.descend:
-                    best_list = list(reversed(sorted(list(self.model_cache.values()))))
-                else:
-                    best_list = list(sorted(list(self.model_cache.values())))
-                print(
-                    f"[I] Not best {self.k}: {best_list}, skip this model ("
-                    + self.format.format(metric)
-                    + f"): {path}",
-                    flush=True,
-                )
-        else:
-            try:
-                # torch.save(model.state_dict(), new_path)
-                if other_params is not None:
-                    saved_dict = other_params
-                else:
-                    saved_dict = {}
-                if save_model:
-                    saved_dict.update(
-                        {"model": model, "state_dict": model.state_dict()}
-                    )
-                    torch.save(saved_dict, new_path)
-                else:
-                    saved_dict.update({"model": None, "state_dict": model.state_dict()})
-                    torch.save(saved_dict, new_path)
-                if print_msg:
-                    if self.descend:
-                        best_list = list(
-                            reversed(sorted(list(self.model_cache.values())))
-                        )
-                    else:
-                        best_list = list(sorted(list(self.model_cache.values())))
-
-                    print(
-                        f"[I] Model saved to {new_path}. Current best {self.k}: {best_list}",
-                        flush=True,
-                    )
-            except Exception as e:
-                if print_msg:
-                    print(f"[E] Model failed to be saved to {new_path}", flush=True)
-                traceback.print_exc(e)
-        return new_path, del_path
-
-
-def dump_steady_field_mp4(
-    E, eps, filepath, fps: int = 20, dpi=150, total_time: float = 10
+def interface_field_penalty(
+    E: torch.Tensor,
+    eps: torch.Tensor,
+    interface_weights=(1.0, 1.0, 0.0),
+    normalize_weight=True,
+    reduction="sum",
+    eps_small=1e-12,
 ):
-    ### just apply phase shift to x and make it like a FDTD simulated video
-    ## total_time in s
-    ## wavelength = 1.55 um
-    ## we first calculate phase
-    total_frames = int(fps * total_time)
-    delta_phase = np.pi / 8
-    phases = torch.arange(0, total_frames, device=E.device) * delta_phase
-    # print(E.shape)
-    E = E.unsqueeze(0) * torch.exp(1j * phases[..., None, None])
-    E = E.cpu().numpy().real.transpose(0, 2, 1)
-    eps = eps.T
-
     """
-    E: (T, H, W) real-valued tensor (torch.Tensor or numpy.ndarray)
-    outfile: output mp4 filename
-    fps: video frame rate
-    dpi: resolution (bigger dpi = higher resolution)
-    vmin, vmax: value range for colormap (None = auto per entire sequence)
+    Penalize electric-field energy near material interfaces.
 
-    Colormap: RdBu (blue-negative → red-positive)
+    Args:
+        E:
+            (nfreq, 3, X, Y, Z), real or complex.
+        eps:
+            (X, Y, Z), permittivity.
+        interface_weights:
+            Relative importance of interface gradients along each axis.
+            Examples:
+                (1,1,1): full 3D
+                (1,1,0): ignore z interfaces
+                (1,0,0): only x interfaces
+                (0.5,1,0): anisotropic weighting
+        normalize_weight:
+            Normalize interface map to unit mean.
+        reduction:
+            "mean" or "sum".
     """
+    E = E.detach()  # don't backprop through E
+    if E.dim() == 4:
+        E = E.unsqueeze(0)  # add frequency dimension
+        assert E.shape[1] == 3, "E must have 3 components"
+    if torch.is_complex(E):
+        field_intensity = (E.abs() ** 2).sum(dim=1).mean(dim=0)
+    else:
+        field_intensity = (E**2).sum(dim=1).mean(dim=0)
+    field_intensity /= field_intensity.max() + 1e-12
+    if torch.is_complex(eps):
+        eps = eps.real
+    grads = torch.gradient(eps, dim=(0, 1, 2), edge_order=1)
 
-    T, H, W = E.shape
+    grad_mag_sq = torch.zeros_like(eps)
 
-    # global color limits for consistent color scaling
-    vmin = E.min()
-    vmax = E.max()
+    for w, g in zip(interface_weights, grads):
+        if w != 0:
+            grad_mag_sq += w * g.square()
 
-    writer = imageio.get_writer(filepath, fps=fps, macro_block_size=1)
+    interface_map = torch.sqrt(grad_mag_sq + eps_small)
 
-    # prepare a matplotlib figure for rendering frames
-    fig, ax = plt.subplots(figsize=(W / 100, H / 100), dpi=dpi)
-    ax.axis("off")
+    if normalize_weight:
+        interface_map = interface_map / (interface_map.mean() + eps_small)
 
-    for t in range(T):
-        ax.clear()
-        ax.axis("off")
+    penalty = field_intensity * interface_map
 
-        img = ax.imshow(
-            E[t],
-            cmap="RdBu",
-            vmin=vmin,
-            vmax=vmax,
-            origin="lower",
-            interpolation="bilinear",
+    if reduction == "mean":
+        return penalty.mean()
+    elif reduction == "sum":
+        return penalty.sum()
+    else:
+        raise ValueError(reduction)
+
+
+def energy_constraint_penalty(
+    fz: torch.Tensor,
+    epsilon_map: torch.Tensor,
+    rho: Optional[torch.Tensor] = None,
+    design_region_mask: Optional[torch.Tensor] = None,
+    *,
+    eps_core: Optional[float] = None,
+    eps_clad: Optional[float] = None,
+    reduction: str = "mean",
+    eps: float = 1e-12,
+    is_3d: bool = False,
+) -> torch.Tensor:
+    """
+    2D FDFD energy penalty. Penalize energy in low-index cladding.
+    https://opg.optica.org/oe/fulltext.cfm?uri=oe-29-8-12681
+
+    Args:
+        fz:
+            Complex tensor of shape [..., X, Y]. Single sample [X, Y] or batch [..., X, Y].
+        epsilon_map:
+            Real or complex tensor of shape [..., X, Y].
+        rho:
+            Optional design variable / material fraction in [0, 1], same shape as epsilon_map.
+            If None, inferred from epsilon_map using eps_core/eps_clad or min/max fallback.
+        design_region_mask:
+            Optional mask of shape [X, Y] or [..., X, Y].
+            - If provided, only masked region contributes.
+            - Can be bool or float.
+            - Typical convention: 1 inside design region, 0 outside.
+        eps_core / eps_clad:
+            Used only if rho is None, to infer rho from epsilon_map.
+        reduction:
+            "mean", "sum", or "none".
+        eps:
+            Numerical stability constant.
+
+    Returns:
+        Penalty scalar or per-sample tensor.
+    """
+    if is_3d:
+        if fz.shape[-3:] != epsilon_map.shape[-3:]:
+            raise ValueError(
+                f"fz and epsilon_map must share the same last three dims; "
+                f"got fz={fz.shape}, epsilon_map={epsilon_map.shape}"
+            )
+        if fz.shape[0] != 3:
+            raise ValueError(
+                f"fz must have 3 components (Ex, Ey, Ez) in the first dim for 3D; "
+                f"got fz={fz.shape}"
+            )
+        fz = fz.detach()  # don't backprop through fields in 3D FDTD
+        fz = fz.abs().square().sum(dim=0)  # sum over Ex, Ey, Ez
+    else:
+        if fz.shape[-2:] != epsilon_map.shape[-2:]:
+            raise ValueError(
+                f"fz and epsilon_map must share the same last two dims; "
+                f"got fz={fz.shape}, epsilon_map={epsilon_map.shape}"
+            )
+        fz = fz.abs().square()
+
+    if reduction not in {"mean", "sum", "none"}:
+        raise ValueError("reduction must be one of {'mean', 'sum', 'none'}")
+
+    # Optional design-region mask
+    if design_region_mask is not None:
+        epsilon_map = epsilon_map[design_region_mask]
+        fz = fz[design_region_mask]
+
+    # Real-valued energy weight
+    eps_w = epsilon_map.real if torch.is_complex(epsilon_map) else epsilon_map
+    eps_w = eps_w.to(dtype=fz.real.dtype, device=fz.device)
+
+    # |f|^2
+    field_energy = fz
+
+    if is_3d:
+        field_energy = field_energy.sum(dim=0)  # sum over Ex, Ey, Ez
+
+    # Infer rho if not explicitly provided
+    if rho is None:
+        if eps_core is not None and eps_clad is not None:
+            denom = float(eps_core - eps_clad)
+            if abs(denom) < eps:
+                raise ValueError("eps_core and eps_clad must be distinct.")
+            rho = (eps_w - float(eps_clad)) / denom
+        else:
+            emin = eps_w.amin(keepdim=True)
+            emax = eps_w.amax(keepdim=True)
+            denom = (emax - emin).clamp_min(eps)
+            rho = (eps_w - emin) / denom
+
+        # rho = rho.clamp(0.0, 1.0)
+    else:
+        rho = rho.to(dtype=fz.real.dtype, device=fz.device)
+        if rho.shape != eps_w.shape:
+            rho = rho.expand_as(eps_w)
+
+    total_energy = (eps_w * field_energy).sum()
+    low_index_energy = ((1.0 - rho) * eps_w * field_energy).sum()
+
+    penalty = low_index_energy / total_energy.clamp_min(eps)
+
+    if reduction == "mean":
+        return penalty.mean()
+    if reduction == "sum":
+        return penalty.sum()
+    return penalty
+
+
+def structure_simplify_penalty(
+    fz: torch.Tensor,
+    epsilon_map: torch.Tensor,
+    rho: Optional[torch.Tensor] = None,
+    design_region_mask: Optional[torch.Tensor] = None,
+    *,
+    eps_core: Optional[float] = None,
+    eps_clad: Optional[float] = None,
+    energy_threshold: float = 0.01,
+    reduction: str = "mean",
+    eps: float = 1e-12,
+    soft: bool = False,
+    temperature: float = 0.05,
+    is_3d: bool = False,
+) -> torch.Tensor:
+    """
+    Encourage removal of useless high-index structure in low-field regions.
+
+    Idea:
+        Penalize rho only where normalized field intensity is low.
+
+    Low-field definition:
+        I_norm = |fz|^2 / max(|fz|^2) within the active region
+        low-field if I_norm < energy_threshold
+
+    Args:
+        fz:
+            Complex tensor of shape [..., X, Y].
+        epsilon_map:
+            Real or complex tensor of shape [..., X, Y].
+        rho:
+            Optional design variable / material fraction in [0, 1].
+            If None, inferred from epsilon_map using eps_core/eps_clad or min/max fallback.
+        design_region_mask:
+            Optional mask of shape [X, Y] or [..., X, Y].
+            1 inside design region, 0 outside.
+        eps_core / eps_clad:
+            Used only if rho is None.
+        energy_threshold:
+            Low-field cutoff in normalized units. For example:
+            0.01 means pixels with intensity below 1% of the max intensity
+            are treated as low-field.
+        reduction:
+            "mean", "sum", or "none".
+        eps:
+            Numerical stability constant.
+        soft:
+            If False, use a hard threshold mask.
+            If True, use a smooth sigmoid transition around the threshold.
+        temperature:
+            Smoothness parameter for soft thresholding. Smaller = sharper.
+
+    Returns:
+        Scalar penalty or per-sample tensor.
+    """
+    if is_3d:
+        if fz.shape[-3:] != epsilon_map.shape[-3:]:
+            raise ValueError(
+                f"fz and epsilon_map must share the same last three dims; "
+                f"got fz={fz.shape}, epsilon_map={epsilon_map.shape}"
+            )
+        if fz.shape[0] != 3:
+            raise ValueError(
+                f"fz must have 3 components (Ex, Ey, Ez) in the first dim for 3D; "
+                f"got fz={fz.shape}"
+            )
+        fz = fz.detach()  # don't backprop through fields in 3D FDTD
+        fz = fz.abs().square().sum(dim=0)
+    else:
+        if fz.shape[-2:] != epsilon_map.shape[-2:]:
+            raise ValueError(
+                f"fz and epsilon_map must share the same last two dims; "
+                f"got fz={fz.shape}, epsilon_map={epsilon_map.shape}"
+            )
+        fz = fz.abs().square()
+
+    if reduction not in {"mean", "sum", "none"}:
+        raise ValueError("reduction must be one of {'mean', 'sum', 'none'}")
+
+    if design_region_mask is not None:
+        epsilon_map = epsilon_map[design_region_mask]
+        fz = fz[design_region_mask]
+
+    # Real-valued epsilon weight
+    eps_w = epsilon_map.real if torch.is_complex(epsilon_map) else epsilon_map
+    eps_w = eps_w.to(dtype=fz.real.dtype, device=fz.device)
+
+    # Infer rho if needed
+    if rho is None:
+        if eps_core is not None and eps_clad is not None:
+            denom = float(eps_core - eps_clad)
+            if abs(denom) < eps:
+                raise ValueError("eps_core and eps_clad must be distinct.")
+            rho = (eps_w - float(eps_clad)) / denom
+        else:
+            emin = eps_w.amin(dim=(-2, -1), keepdim=True)
+            emax = eps_w.amax(dim=(-2, -1), keepdim=True)
+            denom = (emax - emin).clamp_min(eps)
+            rho = (eps_w - emin) / denom
+        # rho = rho.clamp(0.0, 1.0)
+    else:
+        rho = rho.to(dtype=fz.real.dtype, device=fz.device)
+        if rho.shape != eps_w.shape:
+            rho = rho.expand_as(eps_w)
+
+    # Field intensity
+    intensity = fz
+
+    if is_3d:
+        intensity = intensity.sum(dim=0)  # sum over Ex, Ey, Ez
+
+    # Normalize by max intensity in the active region
+    active_intensity = intensity
+    intensity_max = active_intensity.amax(keepdim=True).clamp_min(eps)
+    intensity_norm = (intensity / intensity_max).clamp_min(0.0)
+
+    # Low-field selector
+    if soft:
+        # Smooth approximation to 1[intensity_norm < energy_threshold]
+        low_field_weight = torch.sigmoid(
+            (energy_threshold - intensity_norm) / max(temperature, eps)
         )
-        img = ax.imshow(
-            eps,
-            cmap="gray_r",
-            alpha=0.3,
-            origin="lower",
-            interpolation="bilinear",
-        )
+    else:
+        low_field_weight = (intensity_norm < energy_threshold).to(dtype=fz.real.dtype)
 
-        ### I need colorbar, scaled it to the image height , put on the right side
-        # cbar = fig.colorbar(img, ax=ax, orientation='vertical')
-        # cbar.ax.set_aspect('auto')
-        # cbar.ax.tick_params(labelsize=8)
+    # Penalize high-index material where the field is weak
+    weighted = rho * low_field_weight
 
-        fig.canvas.draw()
-        frame = np.frombuffer(fig.canvas.tostring_argb(), dtype=np.uint8)
-        frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (4,))
-        frame = frame[..., 1:]  # RGB -> drop alpha
+    numerator = weighted.sum()
+    denominator = (low_field_weight).sum().clamp_min(eps)
 
-        writer.append_data(frame)
+    penalty = numerator / denominator
 
-    writer.close()
-    plt.close(fig)
+    if reduction == "mean":
+        return penalty.mean()
+    if reduction == "sum":
+        return penalty.sum()
+    return penalty

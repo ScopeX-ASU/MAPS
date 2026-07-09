@@ -30,23 +30,25 @@ if __name__ == "__main__":
     # first we need to instantiate the a optimization object
     sim_cfg = DefaultSimulationConfig()
 
-    wdm_region_size = (24, 24)
+    mdm_region_size = (24, 24)
     port_len = 1.8
 
     input_port_width = 0.85
     output_port_width = 0.85
     num_outports = 4
-    wl_cen = 1.56
+    wl_cen = 1.541
     wl_width = 0.06
+    resolution = 15
     n_wl = 4
-    exp_name = f"wdm_opt-port-{num_outports}_SiN_neff1.7_{wdm_region_size[0]}x{wdm_region_size[1]}"
+    mode = "Hz1"
+    exp_name = f"wdm_opt-port-{num_outports}_SiN_neff1.7_{mdm_region_size[0]}x{mdm_region_size[1]}"
 
     sim_cfg.update(
         dict(
             solver="ceviche_torch",
             # border_width=[port_len, port_len, 2, 2],
             border_width=[0, 0, 2, 2],
-            resolution=15,
+            resolution=resolution,
             plot_root=f"./figs/{exp_name}",
             PML=[0.5, 0.5],
             neural_solver=None,
@@ -92,8 +94,8 @@ if __name__ == "__main__":
         ),
         weights=dict(trans=1.0, xtalk=-2.0, refl=-1.0, rad=-2.0),
         temp=300,
-        in_mode="Ez1",
-        out_modes=("Ez1",),
+        in_mode=mode,
+        out_modes=(mode,),
         prop_dir="x+",
     ):
         """
@@ -101,9 +103,9 @@ if __name__ == "__main__":
         wl{idx}_trans, wl{idx}_trans_p{j}, wl{idx}_refl_trans, wl{idx}_rad_trans_{dir}
         where idx starts at 1 in order of `wls`.
         """
-        assert len(wls) == len(desired_out_slices), (
-            "wls and desired_out_slices must have same length"
-        )
+        assert len(wls) == len(
+            desired_out_slices
+        ), "wls and desired_out_slices must have same length"
 
         cfg = {}
         for i, (wl, desired_out) in enumerate(zip(wls, desired_out_slices), start=1):
@@ -183,9 +185,11 @@ if __name__ == "__main__":
             xp="rad_slice_xp", xm="rad_slice_xm", yp="rad_slice_yp", ym="rad_slice_ym"
         ),
         weights=dict(trans=1, xtalk=-0.2, refl=-0.1, rad=-0.2),
+        # weights=dict(trans=1, xtalk=-0.2, refl=-0.0, rad=-0.0),
+        # weights=dict(trans=2.56, xtalk=-0.2*2.56, refl=-0.0, rad=-0.0),
         temp=300,
-        in_mode="Ez1",
-        out_modes=("Ez1",),
+        in_mode=mode,
+        out_modes=(mode,),
         prop_dir="x+",
     )
 
@@ -195,23 +199,25 @@ if __name__ == "__main__":
     )
 
     device = WDM(
-        material_r1="SiN_eff",
+        material_r1=1.74348913**2,
         sim_cfg=sim_cfg,
-        box_size=wdm_region_size,
+        box_size=mdm_region_size,
         port_len=(port_len, port_len),
         port_width=(input_port_width, output_port_width),
         num_outports=num_outports,
         port_box_margin=4.5,
+        mode=mode,
         device=operation_device,
     )
 
-    hr_device = device.copy(resolution=200)
+    # hr_device = device.copy(resolution=1000)
+    hr_device = device.copy(resolution=resolution)
 
     design_region_param_cfgs = dict()
     for region_name in device.design_region_cfgs.keys():
         design_region_param_cfgs[region_name] = dict(
             method="levelset",
-            rho_resolution=[50, 50],
+            rho_resolution=[resolution, resolution],
             transform=[
                 dict(
                     type="blur",
@@ -221,7 +227,8 @@ if __name__ == "__main__":
                 ),
                 dict(type="binarize"),
             ],  # there is no symmetry in this design region
-            init_method="ones",
+            # init_method="ones",
+            init_method="constant_0",
             denorm_mode="linear_eps",
             interpolation="gaussian_linear",
             binary_projection=dict(
@@ -241,20 +248,22 @@ if __name__ == "__main__":
         operation_device=operation_device,
     ).to(operation_device)
 
-    ## first use lbfgs with fixed sharpness to get a good initial design.
+    # print(opt.hr_eps_map.shape)
+
+    # first use lbfgs with fixed sharpness to get a good initial design.
     invdesign = InvDesign(
         devOptimization=opt,
         optimizer=dict(
             name="lbfgs",
-            lr=1,
+            lr=0.2,
             line_search_fn="strong_wolfe",
         ),
         run=Config(
-            n_epochs=10,
+            n_epochs=25,
         ),
         lr_scheduler=Config(
             name="cosine",
-            lr_min=1,
+            lr_min=0.1,
         ),
         sharp_scheduler=Config(
             mode="cosine",
@@ -268,7 +277,7 @@ if __name__ == "__main__":
             plot_name=f"{exp_name}",
             objs=[f"wl{i}_trans" for i in range(1, n_wl + 1)],
             field_keys=[
-                ("in_slice_1", wl, "Ez1", 300)
+                ("in_slice_1", wl, mode, 300)
                 for wl in np.linspace(
                     sim_cfg["wl_cen"] - sim_cfg["wl_width"] / 2,
                     sim_cfg["wl_cen"] + sim_cfg["wl_width"] / 2,
@@ -277,9 +286,12 @@ if __name__ == "__main__":
             ],
             in_slice_names=["in_slice_1" for _ in range(sim_cfg["n_wl"])],
             exclude_slice_names=[],
+            field_component="Ey",
+            eps_grad=True,
+            param_grad=True,
         ),
         checkpoint_cfgs=Config(
-            save_model=False,
+            save_model=True,
             ckpt_name=f"{exp_name}",
             dump_gds=True,
             gds_name=f"{exp_name}",
@@ -294,6 +306,10 @@ if __name__ == "__main__":
         optimizer=dict(
             name="Adam",
             lr=0.1,
+            # name="nesterov",
+            # lr=1,
+            # alg="bb_static",
+            # constraint_fn=lambda x: x.clamp_(-0.5, 0.5),
         ),
         run=Config(
             n_epochs=90,
@@ -301,8 +317,10 @@ if __name__ == "__main__":
         sharp_scheduler=Config(
             mode="cosine",
             name="sharpness",
-            init_sharp=4,
-            final_sharp=256,
+            # init_sharp=4,
+            # final_sharp=256,
+            init_sharp=1,
+            final_sharp=20,
         ),
         plot_cfgs=Config(
             plot=True,
@@ -310,7 +328,7 @@ if __name__ == "__main__":
             plot_name=f"{exp_name}",
             objs=[f"wl{i}_trans" for i in range(1, n_wl + 1)],
             field_keys=[
-                ("in_slice_1", wl, "Ez1", 300)
+                ("in_slice_1", wl, mode, 300)
                 for wl in np.linspace(
                     sim_cfg["wl_cen"] - sim_cfg["wl_width"] / 2,
                     sim_cfg["wl_cen"] + sim_cfg["wl_width"] / 2,
@@ -319,6 +337,9 @@ if __name__ == "__main__":
             ],
             in_slice_names=["in_slice_1" for _ in range(sim_cfg["n_wl"])],
             exclude_slice_names=[],
+            field_component="Ey",
+            eps_grad=True,
+            param_grad=True,
         ),
         checkpoint_cfgs=Config(
             save_model=False,

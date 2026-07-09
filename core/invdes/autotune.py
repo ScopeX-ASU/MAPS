@@ -6,9 +6,13 @@ basically, this should be like the training logic like in train_NN.py
 
 import os
 import pprint
-from concurrent.futures import ThreadPoolExecutor
+import sys
 from copy import deepcopy
 from typing import Callable, List
+
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../MAPS"))
+sys.path.insert(0, project_root)
+from concurrent.futures import ThreadPoolExecutor
 
 import optuna
 from pyutils.config import Config

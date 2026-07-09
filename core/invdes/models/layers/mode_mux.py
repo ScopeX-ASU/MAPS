@@ -63,22 +63,22 @@ class ModeCvtMux(N_Ports):
             in_port_1=dict(
                 type="box",
                 direction="x",
-                center=[-(port_len[0] + box_size[0] / 2) / 2, box_size[1] / 6],
-                size=[port_len[0] + box_size[0] / 2, port_width[0]],
+                center=[-(port_len[0] + box_size[0]) / 2, box_size[1] / 6],
+                size=[port_len[0], port_width[0]],
                 eps=eps_r1_fn(wl_cen),  # neff from Lumerical
             ),
             in_port_2=dict(
                 type="box",
                 direction="x",
-                center=[-(port_len[0] + box_size[0] / 2) / 2, -box_size[1] / 6],
-                size=[port_len[0] + box_size[0] / 2, port_width[0]],
+                center=[-(port_len[0] + box_size[0]) / 2, -box_size[1] / 6],
+                size=[port_len[0], port_width[0]],
                 eps=eps_r1_fn(wl_cen),  # neff from Lumerical
             ),
             out_port_1=dict(
                 type="box",
                 direction="x",
-                center=[(port_len[1] + box_size[0] / 2) / 2, 0],
-                size=[port_len[1] + box_size[0] / 2, port_width[1]],
+                center=[(port_len[1] + box_size[0]) / 2, 0],
+                size=[port_len[1], port_width[1]],
                 eps=eps_r1_fn(wl_cen),  # neff from Lumerical
             ),
         )

@@ -90,8 +90,8 @@ class EtchMMI(N_Ports):
             port_cfgs[f"in_port_{i}"] = dict(
                 type="box",
                 direction="x",
-                center=[-(port_len[0] + box_size[0] / 2) / 2, inport_y_coords[i - 1]],
-                size=[port_len[0] + box_size[0] / 2, port_width[0]],
+                center=[-(port_len[0] + box_size[0]) / 2, inport_y_coords[i - 1]],
+                size=[port_len[0], port_width[0]],
                 eps=eps_r1_fn(wl_cen),
             )
 
@@ -104,8 +104,8 @@ class EtchMMI(N_Ports):
             port_cfgs[f"out_port_{i}"] = dict(
                 type="box",
                 direction="x",
-                center=[(port_len[0] + box_size[0] / 2) / 2, outport_y_coords[i - 1]],
-                size=[port_len[0] + box_size[0] / 2, port_width[0]],
+                center=[(port_len[0] + box_size[0]) / 2, outport_y_coords[i - 1]],
+                size=[port_len[0], port_width[0]],
                 eps=eps_r1_fn(wl_cen),
             )
 

@@ -9,6 +9,19 @@ This repo is the official implementation of ["MAPS: Multi-Fidelity AI-Augmented 
 </p>
 
 ## News
+[2026/07/05] Released v0.0.4
+- Integrate fdtdx(https://github.com/ymahlau/fdtdx) solver to enable GPU-accelerated 3D FDTD and (broadband) adjoint optimization. *Currently depend on private internal fdtdx-adjoint library to support adjoint 3D FDTD inverse design*
+- Support reduced-degree-of-freedom FEM-based differentiable/adjoint HEAT solver to enable thermo-optical co-simulation and inverse design.
+- Add various 2.5D/3D Si/SiN device inverse design examples
+- Use Tidy3d for uniform/nonuniform Autogrid discretization/rasterization. fdtdx also supports rectilinear grid simulation.
+- Major update to Grid system: (Native optical grid, Native heat grid, Export uniform grid)
+- Major update to plot function that supports 3D view, multiple design region, grad plot.
+- Support differentiable 3D extrusion with certain sidewall angle from 2D geometry.
+- Support callback function in InvDes module.
+- Levelset parametrization uses SubpixelSmoothedProjection instead of Heaviside
+- Support 3D to 2.5D effective index simulation.
+- Support various NCG optimizers.
+
 [2025/11/05] Released v0.0.3
 - Integrate [pydiso](https://github.com/simpeg/pydiso) solver to enable reusing matrix symbolic factorization for speedup. For the same polarization (e.g., Ez), there is only one solver instance as all matrices have the same sparse structure to avoid memory explosion.
 - Add EtchMMI device with rectangles in the design region.
@@ -95,6 +108,16 @@ python core/invdes/examples/bending.py
 or
 ```
 python scripts/device/train.py
+```
+For 3D:
+```
+unset LD_LIBRARY_PATH;
+export CUDA_VISIBLE_DEVICES=0 python core/invdes/examples/bending_3d.py
+```
+If broadband 3D FDTD adjoint solve is needed (experimental)
+```
+unset LD_LIBRARY_PATH;
+export CUDA_VISIBLE_DEVICES=0 MAPS_ENABLE_BROADBAND_ADJOINT=1 python core/invdes/examples/bending_3d.py
 ```
 2. generate photonic device simulation datasets, e.g., generate 8 bending devices with perturbation applied
 ```

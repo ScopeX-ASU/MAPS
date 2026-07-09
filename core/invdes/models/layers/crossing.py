@@ -17,8 +17,8 @@ class Crossing(N_Ports):
         self,
         material_r1: str = "Si_eff",  # waveguide material
         material_r2: str = "SiO2",  # waveguide material
-        thickness_r1: float = 0.22,
-        thickness_r2: float = 0,
+        thickness_r1: float = 0.22,  # waveguide thickness
+        thickness_r2: float = 0,  # cladding/design background thickness
         material_bg: str = "SiO2",  # background material
         sim_cfg: dict = {
             "border_width": [
@@ -37,7 +37,11 @@ class Crossing(N_Ports):
         box_size: Tuple[float] = (1.5, 1.5),
         port_len: Tuple[float] = (1.8, 1.8),
         port_width: Tuple[float] = (0.48, 0.48),
+        port_height: Tuple[float] = (0, 0),
         device: torch.device = torch.device("cuda:0"),
+        is_3d: bool = False,
+        mode: str = "Ez1",
+        verbose: bool = True,
     ):
         # ----------------------------------
         # |                                |
@@ -48,6 +52,8 @@ class Crossing(N_Ports):
         # |                                |
         # |              [0]               |
         # ----------------------------------
+        self.is_3d = is_3d
+        self.mode = mode
         if box_size[0] != box_size[1]:
             warnings.warn(
                 "Crossing region width and length are not equal, this is not a square crossing region."
@@ -68,34 +74,52 @@ class Crossing(N_Ports):
             eps_r2_fn = lambda wl: material_r2
 
         eps_bg_fn = material_fn_dict[material_bg]
+        box_size = list(box_size)
+        grid_step = 1 / sim_cfg["resolution"]
 
         port_cfgs = dict(
             in_port_1=dict(
                 type="box",
                 direction="x",
-                center=[-(port_len[0] + box_size[0] / 2) / 2, 0],
-                size=[port_len[0] + box_size[0] / 2, port_width[0]],
+                center=[-(port_len[0] + box_size[0]) / 2 + grid_step / 2, 0]
+                + ([0] if is_3d else []),
+                size=(
+                    [port_len[0] + grid_step, port_width[0]]
+                    + ([port_height[0]] if is_3d else [])
+                ),
                 eps=eps_r1_fn(wl_cen),
             ),
             out_port_1=dict(
                 type="box",
                 direction="x",
-                center=[(port_len[0] + box_size[0] / 2) / 2, 0],
-                size=[port_len[0] + box_size[0] / 2, port_width[0]],
+                center=[(port_len[0] + box_size[0]) / 2 - grid_step / 2, 0]
+                + ([0] if is_3d else []),
+                size=(
+                    [port_len[0] + grid_step, port_width[0]]
+                    + ([port_height[0]] if is_3d else [])
+                ),
                 eps=eps_r1_fn(wl_cen),
             ),
             top_port=dict(
                 type="box",
                 direction="y",
-                center=[0, (port_len[1] + box_size[1] / 2) / 2],
-                size=[port_width[1], port_len[1] + box_size[1] / 2],
+                center=[0.0, (port_len[1] + box_size[1]) / 2 - grid_step / 2]
+                + ([0] if is_3d else []),
+                size=(
+                    [port_width[1], port_len[1] + grid_step]
+                    + ([port_height[1]] if is_3d else [])
+                ),
                 eps=eps_r1_fn(wl_cen),
             ),
             bot_port=dict(
                 type="box",
                 direction="y",
-                center=[0, -(port_len[1] + box_size[1] / 2) / 2],
-                size=[port_width[1], port_len[1] + box_size[1] / 2],
+                center=[0.0, -(port_len[1] + box_size[1]) / 2 + grid_step / 2]
+                + ([0] if is_3d else []),
+                size=(
+                    [port_width[1], port_len[1] + grid_step]
+                    + ([port_height[1]] if is_3d else [])
+                ),
                 eps=eps_r1_fn(wl_cen),
             ),
         )
@@ -105,7 +129,7 @@ class Crossing(N_Ports):
         design_region_cfgs = dict()
         design_region_cfgs["crossing_region"] = dict(
             type="box",
-            center=[0, 0],
+            center=[0, 0] + ([0] if is_3d else []),
             size=box_size,
             eps=eps_r1_fn(wl_cen),
             eps_bg=eps_r2_fn(wl_cen),
@@ -118,14 +142,18 @@ class Crossing(N_Ports):
             geometry_cfgs=geometry_cfgs,
             design_region_cfgs=design_region_cfgs,
             device=device,
+            verbose=verbose,
         )
 
     def init_monitors(self, verbose: bool = True):
         rel_width = 3
-        pml_x, pml_y = self.sim_cfg["PML"]
+        pml_x, pml_y, _ = self.sim_cfg["PML"]
         offset_x, offset_y = 0.2 + pml_x, 0.2 + pml_y
         port_len_x = self.port_cfgs["in_port_1"]["size"][0]
         port_len_y = self.port_cfgs["top_port"]["size"][1]
+        rel_height = None
+        if self.is_3d:
+            rel_height = 4.5
         if verbose:
             logger.info("Start generating sources and monitors ...")
         src_slice = self.build_port_monitor_slice(
@@ -133,34 +161,48 @@ class Crossing(N_Ports):
             slice_name="in_slice_1",
             rel_loc=offset_x / port_len_x,
             rel_width=rel_width,
+            rel_height=rel_height,
         )
         refl_slice = self.build_port_monitor_slice(
             port_name="in_port_1",
             slice_name="refl_slice_1",
             rel_loc=(offset_x + 0.05) / port_len_x,
             rel_width=rel_width,
+            rel_height=rel_height,
         )
         out_slice = self.build_port_monitor_slice(
             port_name="out_port_1",
             slice_name="out_slice_1",
             rel_loc=1 - offset_x / port_len_x,
             rel_width=rel_width,
+            rel_height=rel_height,
         )
         top_slice = self.build_port_monitor_slice(
             port_name="top_port",
             slice_name="top_slice",
             rel_loc=1 - offset_y / port_len_y,
             rel_width=rel_width,
+            rel_height=rel_height,
         )
         bot_slice = self.build_port_monitor_slice(
             port_name="bot_port",
             slice_name="bot_slice",
             rel_loc=offset_y / port_len_y,
             rel_width=rel_width,
+            rel_height=rel_height,
         )
         self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=rel_width)
-        radiation_monitor = self.build_radiation_monitor(monitor_name="rad_slice")
-        return src_slice, out_slice, refl_slice, top_slice, bot_slice, radiation_monitor
+        if not self.is_3d:
+            radiation_monitor = self.build_radiation_monitor(monitor_name="rad_slice")
+            return (
+                src_slice,
+                out_slice,
+                refl_slice,
+                top_slice,
+                bot_slice,
+                radiation_monitor,
+            )
+        return src_slice, out_slice, refl_slice, top_slice, bot_slice
 
     def norm_run(self, verbose: bool = True):
         if verbose:
@@ -168,7 +210,7 @@ class Crossing(N_Ports):
         # norm_run_sim_cfg = copy.deepcopy(self.sim_cfg)
         # norm_run_sim_cfg["numerical_solver"] = "solve_direct"
         norm_source_profiles = self.build_norm_sources(
-            source_modes=("Ez1",),
+            source_modes=(self.mode,),
             input_port_name="in_port_1",
             input_slice_name="in_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],
@@ -180,7 +222,7 @@ class Crossing(N_Ports):
         )
 
         norm_refl_profiles = self.build_norm_sources(
-            source_modes=("Ez1",),
+            source_modes=(self.mode,),
             input_port_name="in_port_1",
             input_slice_name="refl_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],
@@ -191,7 +233,7 @@ class Crossing(N_Ports):
             require_sim=False,
         )
         norm_monitor_profiles = self.build_norm_sources(
-            source_modes=("Ez1",),
+            source_modes=(self.mode,),
             input_port_name="out_port_1",
             input_slice_name="out_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],
@@ -202,7 +244,7 @@ class Crossing(N_Ports):
             require_sim=False,
         )
         norm_top_profiles = self.build_norm_sources(
-            source_modes=("Ez1",),
+            source_modes=(self.mode,),
             input_port_name="top_port",
             input_slice_name="top_slice",
             wl_cen=self.sim_cfg["wl_cen"],
@@ -213,7 +255,7 @@ class Crossing(N_Ports):
             require_sim=False,
         )
         norm_bot_profiles = self.build_norm_sources(
-            source_modes=("Ez1",),
+            source_modes=(self.mode,),
             input_port_name="bot_port",
             input_slice_name="bot_slice",
             wl_cen=self.sim_cfg["wl_cen"],

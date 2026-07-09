@@ -1,0 +1,23 @@
+name: MAPS
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11.10
+  - pip
+  - setuptools
+  - wheel
+  - cmake
+  - ninja
+  - pkg-config
+  - numpy=2.4.3
+  - scipy=1.17.1
+  - matplotlib=3.10.8
+  - h5py=3.14.0
+  - ipython=8.37.0
+  - pillow=11.3.0
+  - nlopt=2.8.0
+  - mkl-devel
+  - pymeep=*=mpi_mpich_*
+  - mpich
+  - pydiso=0.2.0
+  - pypardiso=0.4.7

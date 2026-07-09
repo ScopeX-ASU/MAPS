@@ -49,8 +49,7 @@ class CustomInvDesign(InvDesign):
         return feed_dict
 
 
-if __name__ == "__main__":
-    gpu_id = 0
+def generate_optical_diode(gpu_id, mfs):
     torch.cuda.set_device(gpu_id)
     operation_device = torch.device("cuda:" + str(gpu_id))
     torch.backends.cudnn.benchmark = True
@@ -58,17 +57,17 @@ if __name__ == "__main__":
     # first we need to instantiate the a optimization object
     sim_cfg = DefaultSimulationConfig()
 
-    opticaldiode_region_size = (6, 4)
-    port_len = 1.8
+    opticaldiode_region_size = (4, 4)
+    port_len = 2
 
-    input_port_width = 0.48
+    input_port_width = 0.5
     output_port_width = 0.8
     thickness_r1 = 0.22
     thickness_r2 = 0
-    init_mfs = 0.1
-    final_mfs = 0.1
+    init_mfs = mfs
+    final_mfs = mfs
 
-    exp_name = f"optical_diode_{thickness_r1}_{thickness_r2}_mfs={init_mfs}-{final_mfs}"
+    exp_name = f"optical_diode_mfs{mfs * 1000:.0f}_500_100ls"
 
     sim_cfg.update(
         dict(
@@ -76,7 +75,8 @@ if __name__ == "__main__":
             # border_width=[port_len, port_len, 2, 2],
             border_width=[0, 0, 2, 2],
             resolution=50,
-            plot_root=f"./figs/{exp_name}_{opticaldiode_region_size[0]}_{opticaldiode_region_size[1]}",
+            # plot_root=f"./figs/{exp_name}_{opticaldiode_region_size[0]}_{opticaldiode_region_size[1]}",
+            plot_root=f"./figs/{exp_name}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -87,7 +87,9 @@ if __name__ == "__main__":
     def fom_func(breakdown):
         ## maximization fom
         fom = 0
-        for _, obj in breakdown.items():
+        for name, obj in breakdown.items():
+            if "smatrix" in name:
+                continue
             fom = fom + obj["weight"] * obj["value"]
 
         ## add extra contrast ratio
@@ -109,11 +111,39 @@ if __name__ == "__main__":
         device=operation_device,
     )
 
-    hr_device = device.copy(resolution=310)
+    # hr_device = device.copy(resolution=310)
+    hr_device = device.copy(resolution=500)
     print(device)
+
+    design_region_param_cfgs = dict()
+    for region_name in device.design_region_cfgs.keys():
+        design_region_param_cfgs[region_name] = dict(
+            method="levelset",
+            rho_resolution=[100, 100],
+            transform=[
+                dict(type="mirror_symmetry", dims=[1]),
+                dict(
+                    type="blur",
+                    mfs=mfs,
+                    resolutions=[hr_device.resolution, hr_device.resolution],
+                    dim="xy",
+                ),
+                dict(type="binarize"),
+            ],
+            init_method="random",
+            denorm_mode="linear_eps",
+            interpolation="gaussian_linear",
+            binary_projection=dict(
+                fw_threshold=100,
+                bw_threshold=100,
+                mode="regular",
+            ),
+        )
+
     opt = OpticalDiodeOptimization(
         device=device,
         hr_device=hr_device,
+        design_region_param_cfgs=design_region_param_cfgs,
         sim_cfg=sim_cfg,
         operation_device=operation_device,
         obj_cfgs=obj_cfgs,
@@ -149,6 +179,14 @@ if __name__ == "__main__":
             ckpt_name=f"{exp_name}",
             dump_gds=True,
             gds_name=f"{exp_name}",
+            upsample_eps_to_1nm=True,
         ),
     )
     invdesign.optimize()
+
+
+if __name__ == "__main__":
+    gpu_id = 0
+    # for mfs in [0.07, 0.09, 0.11, 0.13, 0.15]:
+    for mfs in [0.11]:
+        generate_optical_diode(gpu_id, mfs)

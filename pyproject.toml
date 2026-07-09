@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "MAPS"
+version = "0.0.2"
+description = "MAPS photonics research codebase"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = []
+
+[tool.setuptools]
+include-package-data = true
+py-modules = [
+  "drvfixing",
+  "model_prediction",
+  "pailt",
+  "pattern_diversity",
+  "pattern_generation",
+  "pattern_opt",
+  "read_mat_file",
+  "train",
+  "train_NN",
+  "train_litho",
+  "usage_example",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*", "core*", "data*", "drc*", "thirdparty*"]
+namespaces = true

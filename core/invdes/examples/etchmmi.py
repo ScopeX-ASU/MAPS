@@ -49,8 +49,8 @@ if __name__ == "__main__":
             use_autodiff=False,
         )
     )
-    num_inports = 3
-    num_outports = 3
+    num_inports = 1
+    num_outports = 1
 
     target_unitary_smatrix = torch.randn(
         (num_inports, num_outports), dtype=torch.complex64, device=operation_device

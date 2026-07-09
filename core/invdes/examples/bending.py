@@ -39,11 +39,11 @@ if __name__ == "__main__":
     sim_cfg = DefaultSimulationConfig()
 
     bending_region_size = (2, 2)
-    port_len = 1.8
+    port_len = 2
 
     input_port_width = 0.5
     output_port_width = 0.5
-    exp_name = "bending_opt"
+    exp_name = "bending_opt80_500"
 
     sim_cfg.update(
         dict(
@@ -60,13 +60,14 @@ if __name__ == "__main__":
 
     device = Bending(
         sim_cfg=sim_cfg,
-        box_size=bending_region_size,
+        bending_region_size=bending_region_size,
         port_len=(port_len, port_len),
         port_width=(input_port_width, output_port_width),
         device=operation_device,
     )
 
-    hr_device = device.copy(resolution=310)
+    # hr_device = device.copy(resolution=310)
+    hr_device = device.copy(resolution=100)
     print(device)
     opt = BendingOptimization(
         device=device,
@@ -74,7 +75,7 @@ if __name__ == "__main__":
         sim_cfg=sim_cfg,
         operation_device=operation_device,
     ).to(operation_device)
-    # checkpoint = "./checkpoint/bending_init_try_err-0.9928_epoch-100.pt"
+
     checkpoint = None
     if checkpoint is not None:
         load_model(
@@ -90,28 +91,36 @@ if __name__ == "__main__":
         #     line_search_fn="strong_wolfe",
         #     weight_decay=0,
         # ),
-        optimizer=Config(
-            name="nesterov",
-            lr=1e-2,
-            use_bb=False,
+        # optimizer=Config(
+        #     name="nesterov",
+        #     lr=1e-2,
+        #     use_bb=False,
+        # ),
+        optimizer=dict(
+            name="Adam",
+            lr=2e-2,
+            weight_decay=0,
         ),
         run=Config(
             n_epochs=100,
         ),
         plot_cfgs=Config(
             plot=True,
-            interval=5,
+            interval=20,
             plot_name=f"{exp_name}",
             objs=["fwd_trans"],
             field_keys=[("in_slice_1", 1.55, "Ez1", 300)],
             in_slice_names=["in_slice_1"],
             exclude_slice_names=[],
+            eps_grad=True,
+            param_grad=True,
         ),
         checkpoint_cfgs=Config(
             save_model=False,
             ckpt_name=f"{exp_name}",
             dump_gds=True,
             gds_name=f"{exp_name}",
+            upsample_eps_to_1nm=True,
         ),
     )
     invdesign.optimize()

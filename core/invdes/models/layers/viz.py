@@ -8,7 +8,10 @@ FilePath: /MAPS/core/invdes/models/layers/viz.py
 import matplotlib.pylab as plt
 import matplotlib.pyplot as plot
 import numpy as np
+import torch
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+
+from core.utils import print_stat
 
 """ Utilities for plotting and visualization """
 
@@ -56,6 +59,8 @@ def abs(
     outline_val=None,
     alpha=1,
     font_size=9,
+    xlabel="x",
+    ylabel="y",
 ):
     """Plots the absolute value of 'val', optionally overlaying an outline of 'outline'"""
     if ax is None:
@@ -71,8 +76,8 @@ def abs(
     if outline is not None:
         ax.contour(outline.T, [outline_val], colors="w", alpha=outline_alpha)
 
-    ax.set_ylabel("y")
-    ax.set_xlabel("x")
+    ax.set_ylabel(ylabel)
+    ax.set_xlabel(xlabel)
     # divider = make_axes_locatable(ax)
     # cax = divider.append_axes("right", size="5%", pad=0.15)
     # if cbar:

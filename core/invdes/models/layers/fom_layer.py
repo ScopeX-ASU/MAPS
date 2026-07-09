@@ -31,9 +31,7 @@ class SimulatedFoM(nn.Module):
     ) -> Tensor:
         if self.adjoint_mode == "ceviche":
             ## we need to use autograd, jacobian to calculate gradients
-            raise NotImplementedError(
-                "ceviche adjoint mode is not supported, please use ceviche_torch as adjoint mode"
-            )
+            raise NotImplementedError("ceviche adjoint mode is not supported")
             fom = AdjointGradient.apply(
                 self.cal_obj_and_grad_fn,
                 self.adjoint_mode,
@@ -42,6 +40,14 @@ class SimulatedFoM(nn.Module):
             )
         elif self.adjoint_mode == "ceviche_torch":
             ## this function is completely differentiable, so we only need forward for torch
+            fom = self.cal_obj_and_grad_fn(
+                adjoint_mode=self.adjoint_mode,
+                need_item="need_value",
+                resolution=resolution,
+                permittivity_list=permittivity_list,
+                custom_source=custom_source,
+            )
+        elif self.adjoint_mode == "fdtdx":
             fom = self.cal_obj_and_grad_fn(
                 adjoint_mode=self.adjoint_mode,
                 need_item="need_value",

@@ -1,12 +1,21 @@
+import random
+from typing import Tuple
+
 import torch
 import torch.nn as nn
 from pyutils.lr_scheduler.warmup_cosine_restart import CosineAnnealingWarmupRestarts
-from pyutils.optimizer import SAM, NesterovAcceleratedGradientOptimizer
+from pyutils.optimizer.sam import SAM
 from pyutils.typing import Optimizer, Scheduler
 from torch.types import Device
 
 from core.invdes.models import *
-from core.invdes.optimizer import Adahessian, LevenbergMarquardt, Muon
+from core.invdes.optimizer import (
+    BASIC_NCG,
+    Adahessian,
+    Adam,
+    Muon,
+    NesterovAcceleratedGradientOptimizer,
+)
 from core.utils import (
     DAdaptAdam,
     ResolutionScheduler,
@@ -126,11 +135,13 @@ def make_optimizer(params, total_config=None) -> Optimizer:
             nesterov=True,
         )
     elif name == "adam":
-        optimizer = torch.optim.Adam(
+        optimizer = Adam(
             params,
             lr=config.lr,
             weight_decay=config.weight_decay,
             betas=getattr(config, "betas", (0.9, 0.999)),
+            eps=getattr(config, "eps", 1e-8),
+            init_v=getattr(config, "init_v", 0.0),
         )
     elif name == "adamw":
         optimizer = torch.optim.AdamW(
@@ -172,13 +183,21 @@ def make_optimizer(params, total_config=None) -> Optimizer:
             lr=config.lr,  # for now, only the lr is tunable, others arguments just use the default value
             line_search_fn=getattr(config, "line_search_fn", None),
             max_iter=getattr(config, "max_iter", 4),
+            max_eval=getattr(config, "max_eval", None),
             history_size=getattr(config, "history_size", 100),
+            tolerance_grad=getattr(config, "tolerance_grad", 1e-7),
+            tolerance_change=getattr(config, "tolerance_change", 1e-9),
         )
     elif name == "nesterov":
         optimizer = NesterovAcceleratedGradientOptimizer(
             params,
             lr=config.lr,
-            use_bb=getattr(config, "use_bb", True),
+            alg=getattr(config, "alg", "bb"),
+            constraint_fn=getattr(config, "constraint_fn", None),
+            block_tile_size=getattr(
+                config, "block_tile_size", getattr(config, "tile_size", None)
+            ),
+            block_blur_kernel_size=getattr(config, "block_blur_kernel_size", 3),
         )
     elif name == "adahessian":
         optimizer = Adahessian(
@@ -197,15 +216,88 @@ def make_optimizer(params, total_config=None) -> Optimizer:
             momentum=getattr(config, "momentum", 0.9),
             nesterov=getattr(config, "nesterov", True),
         )
-    elif name == "lm":
-        optimizer = LevenbergMarquardt(
+    elif name.lower() == "cg_fr":
+        optimizer = BASIC_NCG(
             params,
-            lr=config.lr,
-            attempts_per_step=getattr(config, "attempts_per_step", 5),
-            solve_method=getattr(config, "solve_method", "solve"),
-            damping_strategy=getattr(config, "damping_strategy", None),
-            sqrt_eps=getattr(config, "sqrt_eps", 1e-8),
+            method="FR",
+            line_search="Strong_Wolfe",
+            c1=getattr(config, "c1", 1e-4),
+            c2=getattr(config, "c2", 0.5),
+            lr=getattr(config, "lr", 0.2),
+            max_ls=getattr(config, "max_ls", 5),
         )
+    elif name.lower() == "cg_prp":
+        optimizer = BASIC_NCG(
+            params,
+            method="PRP",
+            line_search="Armijo",
+            c1=getattr(config, "c1", 1e-4),
+            c2=getattr(config, "c2", 0.9),
+            lr=getattr(config, "lr", 10),
+            rho=getattr(config, "rho", 0.5),
+            restart_interval=getattr(config, "restart_interval", None),
+        )
+    elif name.lower() == "cg_hs":
+        optimizer = BASIC_NCG(
+            params,
+            method="HS",
+            line_search="Strong_Wolfe",
+            c1=getattr(config, "c1", 1e-4),
+            c2=getattr(config, "c2", 0.4),
+            lr=getattr(config, "lr", 0.2),
+            max_ls=getattr(config, "max_ls", 5),
+        )
+    elif name.lower() == "cg_cd":
+        optimizer = BASIC_NCG(
+            params,
+            method="CD",
+            line_search="Armijo",
+            c1=getattr(config, "c1", 1e-4),
+            c2=getattr(config, "c2", 0.9),
+            lr=getattr(config, "lr", 1),
+            rho=getattr(config, "rho", 0.5),
+        )
+    elif name.lower() == "cg_ls":
+        optimizer = BASIC_NCG(
+            params,
+            method="LS",
+            line_search="Armijo",
+            c1=getattr(config, "c1", 1e-4),
+            c2=getattr(config, "c2", 0.9),
+            lr=getattr(config, "lr", 1),
+            rho=getattr(config, "rho", 0.5),
+        )
+    elif name.lower() == "cg_dy":
+        optimizer = BASIC_NCG(
+            params,
+            method="DY",
+            line_search="Strong_Wolfe",
+            c1=getattr(config, "c1", 1e-4),
+            c2=getattr(config, "c2", 0.9),
+            lr=getattr(config, "lr", 0.2),
+            max_ls=getattr(config, "max_ls", 5),
+        )
+    elif name.lower() == "cg_hz":
+        optimizer = BASIC_NCG(
+            params,
+            method="HZ",
+            line_search="Strong_Wolfe",
+            c1=getattr(config, "c1", 1e-4),
+            c2=getattr(config, "c2", 0.9),
+            lr=getattr(config, "lr", 0.2),
+            max_ls=getattr(config, "max_ls", 5),
+        )
+    elif name.lower() == "cg_hs-dy":
+        optimizer = BASIC_NCG(
+            params,
+            method="HS-DY",
+            line_search="Armijo",
+            c1=getattr(config, "c1", 1e-4),
+            c2=getattr(config, "c2", 0.9),
+            lr=getattr(config, "lr", 10),
+            rho=getattr(config, "rho", 0.5),
+        )
+
     else:
         raise NotImplementedError(name)
 

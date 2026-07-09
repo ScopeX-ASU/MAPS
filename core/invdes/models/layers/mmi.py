@@ -80,18 +80,26 @@ class MMI(N_Ports):
         eps_bg_fn = material_fn_dict[material_bg]
 
         port_cfgs = dict()
+        grid_step = 1 / sim_cfg["resolution"]
 
-        inport_y_coords = np.linspace(
-            -box_size[1] / 2 + port_width[0] / 2 + port_box_margin,
-            box_size[1] / 2 - port_width[0] / 2 - port_box_margin,
-            num_inports,
-        )
+        if num_inports == 1:
+            inport_y_coords = np.array([0.0])
+        else:
+            inport_y_coords = np.linspace(
+                -box_size[1] / 2 + port_width[0] / 2 + port_box_margin,
+                box_size[1] / 2 - port_width[0] / 2 - port_box_margin,
+                num_inports,
+            )
+
         for i in range(1, num_inports + 1):
             port_cfgs[f"in_port_{i}"] = dict(
                 type="box",
                 direction="x",
-                center=[-(port_len[0] + box_size[0] / 2) / 2, inport_y_coords[i - 1]],
-                size=[port_len[0] + box_size[0] / 2, port_width[0]],
+                center=[
+                    -(port_len[0] + box_size[0]) / 2 + grid_step / 2,
+                    inport_y_coords[i - 1],
+                ],
+                size=[port_len[0] + grid_step, port_width[0]],
                 eps=eps_r1_fn(wl_cen),
             )
 
@@ -104,15 +112,18 @@ class MMI(N_Ports):
             port_cfgs[f"out_port_{i}"] = dict(
                 type="box",
                 direction="x",
-                center=[(port_len[0] + box_size[0] / 2) / 2, outport_y_coords[i - 1]],
-                size=[port_len[0] + box_size[0] / 2, port_width[0]],
+                center=[
+                    (port_len[0] + box_size[0]) / 2 - grid_step / 2,
+                    outport_y_coords[i - 1],
+                ],
+                size=[port_len[0] + grid_step, port_width[0]],
                 eps=eps_r1_fn(wl_cen),
             )
 
         geometry_cfgs = dict()
 
         design_region_cfgs = dict()
-        design_region_cfgs["design_region_1"] = dict(
+        design_region_cfgs["mmi_region"] = dict(
             type="box",
             center=[0, 0],
             size=box_size,
@@ -130,7 +141,7 @@ class MMI(N_Ports):
         )
 
     def init_monitors(self, verbose: bool = True):
-        rel_width = 2
+        rel_width = 3
         if verbose:
             logger.info("Start generating sources and monitors ...")
         pml = self.sim_cfg["PML"][0]
@@ -182,6 +193,7 @@ class MMI(N_Ports):
                 wl_cen=self.sim_cfg["wl_cen"],
                 wl_width=self.sim_cfg["wl_width"],
                 n_wl=self.sim_cfg["n_wl"],
+                # solver=self.sim_cfg["solver"],
                 solver="ceviche",
                 plot=True,
                 require_sim=True,
@@ -197,6 +209,7 @@ class MMI(N_Ports):
                 wl_cen=self.sim_cfg["wl_cen"],
                 wl_width=self.sim_cfg["wl_width"],
                 n_wl=self.sim_cfg["n_wl"],
+                # solver=self.sim_cfg["solver"],
                 solver="ceviche",
                 plot=True,
                 require_sim=False,
@@ -211,6 +224,7 @@ class MMI(N_Ports):
                 wl_cen=self.sim_cfg["wl_cen"],
                 wl_width=self.sim_cfg["wl_width"],
                 n_wl=self.sim_cfg["n_wl"],
+                # solver=self.sim_cfg["solver"],
                 solver="ceviche",
                 plot=True,
                 require_sim=False,

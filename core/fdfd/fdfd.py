@@ -1064,6 +1064,8 @@ class fdfd_hz(fdfd_hz_ceviche):
         source_vec = self._grid_to_vec(source_z)
         eps_vec: torch.Tensor = self._grid_to_vec(self.eps_r)
 
+        # eps_vec = inject_loss_in_cladding(eps_vec, threshold=1.45**2)
+
         # create the A matrix for this polarization
         entries_a, indices_a, eps_matrix, eps_vec_xx, eps_vec_yy = self._make_A(eps_vec)
         self.eps_vec_xx = eps_vec_xx
@@ -1091,3 +1093,10 @@ class fdfd_hz(fdfd_hz_ceviche):
         Fy = Fy_vec.reshape(self.shape)
         Fz = Fz_vec.reshape(self.shape)
         return Fx, Fy, Fz
+
+
+def inject_loss_in_cladding(eps, threshold: float):
+    ## eps is real tensor, we want to inject lower index region with imaginary part to make it lossy
+    ## do not just add?, using multiplication?
+    eps_lossy = torch.where(eps < threshold, eps * (1 - 1j * 1e-1), eps * (1 + 0j))
+    return eps_lossy

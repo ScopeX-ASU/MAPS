@@ -299,7 +299,9 @@ class MDMOptimization(BaseOptimization):
                     transform=[
                         dict(
                             type="blur",
-                            mfs=0.05,
+                            # mfs=0.05,
+                            # mfs=0.15,
+                            mfs=0.08,
                             resolutions=[hr_device.resolution, hr_device.resolution],
                             dim="xy",
                         ),
@@ -307,6 +309,7 @@ class MDMOptimization(BaseOptimization):
                     ],
                     init_method="random",
                     denorm_mode="linear_eps",
+                    # interpolation="bilinear",
                     interpolation="gaussian_linear",
                     binary_projection=dict(
                         fw_threshold=100,
@@ -317,8 +320,10 @@ class MDMOptimization(BaseOptimization):
 
         cfgs = DefaultConfig()  ## this is default configurations
         override_obj = obj_cfgs.get("override", False)
-        if "override" in obj_cfgs:
-            del obj_cfgs["override"]  # remove this key to avoid confusion later
+        # del obj_cfgs["override"]  # remove this key to avoid confusion later
+        override_obj = obj_cfgs.pop(
+            "override", False
+        )  # remove this key to avoid confusion later
         if override_obj:
             print("Override default obj_cfgs with the provided obj_cfgs", flush=True)
             cfgs.obj_cfgs = {}

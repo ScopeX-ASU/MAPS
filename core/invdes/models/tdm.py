@@ -9,6 +9,8 @@ from core.invdes.models.base_optimization import (
 class DefaultConfig(DefaultOptimizationConfig):
     def __init__(self):
         super().__init__()
+        off_currents = [dict(heater_1=0.0)]
+        on_currents = [dict(heater_1=7.5e-3)]
         self.update(
             dict(
                 design_region_param_cfgs=dict(),
@@ -26,218 +28,173 @@ class DefaultConfig(DefaultOptimizationConfig):
                     wl_cen=1.55,
                     wl_width=0,
                     n_wl=1,
-                    plot_root="./figs/mdm",
+                    plot_root="./figs/tdm",
                 ),
                 obj_cfgs=dict(
-                    temp1_trans=dict(
+                    off_trans=dict(
                         weight=1,
-                        #### objective is evaluated at this port
                         in_slice_name="in_slice_1",
                         out_slice_name="out_slice_1",
-                        #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[300],
-                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                        out_modes=(
-                            "Ez1",
-                        ),  # can evaluate on multiple output modes and get average transmission
+                        currents=off_currents,
+                        in_mode="Ez1",
+                        out_modes=("Ez1",),
                         type="eigenmode",
                         direction="x+",
                     ),
-                    temp1_trans_p2=dict(
+                    off_cross_talk=dict(
                         weight=-1,
-                        #### objective is evaluated at this port
                         in_slice_name="in_slice_1",
                         out_slice_name="out_slice_2",
-                        #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[300],
-                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                        out_modes=(
-                            "Ez1",
-                        ),  # can evaluate on multiple output modes and get average transmission
+                        currents=off_currents,
+                        in_mode="Ez1",
+                        out_modes=("Ez1",),
                         type="flux",
                         direction="x+",
                     ),
-                    temp2_trans=dict(
+                    on_trans=dict(
                         weight=1,
-                        #### objective is evaluated at this port
                         in_slice_name="in_slice_1",
                         out_slice_name="out_slice_2",
-                        #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[360],
-                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                        out_modes=(
-                            "Ez1",
-                        ),  # can evaluate on multiple output modes and get average transmission
+                        currents=on_currents,
+                        in_mode="Ez1",
+                        out_modes=("Ez1",),
                         type="eigenmode",
                         direction="x+",
                     ),
-                    temp2_trans_p1=dict(
+                    on_cross_talk=dict(
                         weight=-1,
-                        #### objective is evaluated at this port
                         in_slice_name="in_slice_1",
                         out_slice_name="out_slice_1",
-                        #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[360],
-                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                        out_modes=(
-                            "Ez1",
-                        ),  # can evaluate on multiple output modes and get average transmission
+                        currents=on_currents,
+                        in_mode="Ez1",
+                        out_modes=("Ez1",),
                         type="flux",
                         direction="x+",
                     ),
-                    temp1_refl_trans=dict(
+                    off_refl=dict(
                         weight=-1,
-                        #### objective is evaluated at this port
                         in_slice_name="in_slice_1",
                         out_slice_name="refl_slice_1",
-                        #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[300],
-                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                        out_modes=(
-                            "Ez1",
-                        ),  # can evaluate on multiple output modes and get average transmission
+                        currents=off_currents,
+                        in_mode="Ez1",
+                        out_modes=("Ez1",),
                         type="flux_minus_src",
                         direction="x",
                     ),
-                    temp2_refl_trans=dict(
+                    on_refl=dict(
                         weight=-1,
-                        #### objective is evaluated at this port
                         in_slice_name="in_slice_1",
                         out_slice_name="refl_slice_1",
-                        #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[360],
-                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                        out_modes=(
-                            "Ez1",
-                        ),  # can evaluate on multiple output modes and get average transmission
+                        currents=on_currents,
+                        in_mode="Ez1",
+                        out_modes=("Ez1",),
                         type="flux_minus_src",
                         direction="x",
                     ),
-                    temp1_rad_trans_xp=dict(
+                    off_rad_xp=dict(
                         weight=-2,
-                        #### objective is evaluated at this port
                         in_slice_name="in_slice_1",
                         out_slice_name="rad_slice_xp",
-                        #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[300],
-                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                        out_modes=(
-                            "Ez1",
-                        ),  # can evaluate on multiple output modes and get average transmission
+                        currents=off_currents,
+                        in_mode="Ez1",
+                        out_modes=("Ez1",),
                         type="flux",
                         direction="x",
                     ),
-                    temp1_rad_trans_xm=dict(
+                    off_rad_xm=dict(
                         weight=-2,
-                        #### objective is evaluated at this port
                         in_slice_name="in_slice_1",
                         out_slice_name="rad_slice_xm",
-                        #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[300],
-                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                        out_modes=(
-                            "Ez1",
-                        ),  # can evaluate on multiple output modes and get average transmission
+                        currents=off_currents,
+                        in_mode="Ez1",
+                        out_modes=("Ez1",),
                         type="flux",
                         direction="x",
                     ),
-                    temp1_rad_trans_yp=dict(
+                    off_rad_yp=dict(
                         weight=-2,
-                        #### objective is evaluated at this port
                         in_slice_name="in_slice_1",
                         out_slice_name="rad_slice_yp",
-                        #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[300],
-                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                        out_modes=(
-                            "Ez1",
-                        ),  # can evaluate on multiple output modes and get average transmission
+                        currents=off_currents,
+                        in_mode="Ez1",
+                        out_modes=("Ez1",),
                         type="flux",
                         direction="y",
                     ),
-                    temp1_rad_trans_ym=dict(
+                    off_rad_ym=dict(
                         weight=-2,
-                        #### objective is evaluated at this port
                         in_slice_name="in_slice_1",
                         out_slice_name="rad_slice_ym",
-                        #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[300],
-                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                        out_modes=(
-                            "Ez1",
-                        ),  # can evaluate on multiple output modes and get average transmission
+                        currents=off_currents,
+                        in_mode="Ez1",
+                        out_modes=("Ez1",),
                         type="flux",
                         direction="y",
                     ),
-                    temp2_rad_trans_xp=dict(
+                    on_rad_xp=dict(
                         weight=-2,
-                        #### objective is evaluated at this port
                         in_slice_name="in_slice_1",
                         out_slice_name="rad_slice_xp",
-                        #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[360],
-                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                        out_modes=(
-                            "Ez1",
-                        ),  # can evaluate on multiple output modes and get average transmission
+                        currents=on_currents,
+                        in_mode="Ez1",
+                        out_modes=("Ez1",),
                         type="flux",
                         direction="x",
                     ),
-                    temp2_rad_trans_xm=dict(
+                    on_rad_xm=dict(
                         weight=-2,
-                        #### objective is evaluated at this port
                         in_slice_name="in_slice_1",
                         out_slice_name="rad_slice_xm",
-                        #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[360],
-                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                        out_modes=(
-                            "Ez1",
-                        ),  # can evaluate on multiple output modes and get average transmission
+                        currents=on_currents,
+                        in_mode="Ez1",
+                        out_modes=("Ez1",),
                         type="flux",
                         direction="x",
                     ),
-                    temp2_rad_trans_yp=dict(
+                    on_rad_yp=dict(
                         weight=-2,
-                        #### objective is evaluated at this port
                         in_slice_name="in_slice_1",
                         out_slice_name="rad_slice_yp",
-                        #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[360],
-                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                        out_modes=(
-                            "Ez1",
-                        ),  # can evaluate on multiple output modes and get average transmission
+                        currents=on_currents,
+                        in_mode="Ez1",
+                        out_modes=("Ez1",),
                         type="flux",
                         direction="y",
                     ),
-                    temp2_rad_trans_ym=dict(
+                    on_rad_ym=dict(
                         weight=-2,
-                        #### objective is evaluated at this port
                         in_slice_name="in_slice_1",
                         out_slice_name="rad_slice_ym",
-                        #### objective is evaluated at all points by sweeping the wavelength and modes
                         wl=[1.55],
-                        temp=[360],
-                        in_mode="Ez1",  # only one source mode is supported, cannot input multiple modes at the same time
-                        out_modes=(
-                            "Ez1",
-                        ),  # can evaluate on multiple output modes and get average transmission
+                        currents=on_currents,
+                        in_mode="Ez1",
+                        out_modes=("Ez1",),
                         type="flux",
                         direction="y",
+                    ),
+                    off_smatrix=dict(
+                        weight=0,
+                        in_slice_name=["in_slice_1"],
+                        out_slice_name=["out_slice_1", "out_slice_2"],
+                        in_mode="Ez1",
+                        wl=[1.55],
+                        currents=off_currents,
+                        out_modes=("Ez1",),
+                        type="smatrix",
+                        direction=["x+", "x+"],
                     ),
                 ),
             )
@@ -254,36 +211,43 @@ class TDMOptimization(BaseOptimization):
         obj_cfgs=dict(),
         operation_device=torch.device("cuda:0"),
     ):
-        _design_region_cfgs = design_region_param_cfgs
+        provided_design_region_param_cfgs = dict(design_region_param_cfgs)
         design_region_param_cfgs = dict()
         for region_name in device.design_region_cfgs.keys():
             design_region_param_cfgs[region_name] = dict(
                 method="levelset",
-                rho_resolution=[25, 25],
+                rho_resolution=[100, 100],
                 transform=[
-                    # dict(
-                    #     type="blur",
-                    #     mfs=0.04,
-                    #     resolutions=[hr_device.resolution, hr_device.resolution],
-                    #     dim="xy",
-                    # ),
+                    dict(
+                        type="blur",
+                        mfs=0.08,
+                        resolutions=[hr_device.resolution, hr_device.resolution],
+                        dim="xy",
+                    ),
                     dict(type="binarize"),
                 ],  # there is no symmetry in this design region
                 init_method="ones",
                 # init_method="random",
                 denorm_mode="linear_eps",
-                interpolation="bilinear",
+                interpolation="gaussian_linear",
                 binary_projection=dict(
                     fw_threshold=100,
                     bw_threshold=100,
+                    # mode="ste",
                     mode="regular",
                 ),
             )
-            if region_name in _design_region_cfgs:
+            if region_name in provided_design_region_param_cfgs:
                 design_region_param_cfgs[region_name].update(
-                    _design_region_cfgs[region_name]
+                    provided_design_region_param_cfgs[region_name]
                 )
         cfgs = DefaultConfig()  ## this is default configurations
+        override_obj = obj_cfgs.pop(
+            "override", False
+        )  # remove this key to avoid confusion later
+        if override_obj:
+            print("Override default obj_cfgs with the provided obj_cfgs", flush=True)
+            cfgs.obj_cfgs = {}
         ## here we accept new configurations and update the default configurations
         cfgs.update(
             dict(

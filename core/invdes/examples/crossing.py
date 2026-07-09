@@ -30,12 +30,13 @@ if __name__ == "__main__":
     sim_cfg = DefaultSimulationConfig()
 
     # crossing_region_size = (1.6, 1.6)
-    crossing_region_size = (3.4, 3.4)
-    port_len = 1.8
+    # crossing_region_size = (3.4, 3.4)
+    crossing_region_size = (2, 2)
+    port_len = 2
 
-    input_port_width = 0.48
-    output_port_width = 0.48
-    exp_name = "crossing_opt"
+    input_port_width = 0.5
+    output_port_width = 0.5
+    exp_name = "crossing_opt80_500"
 
     sim_cfg.update(
         dict(
@@ -58,7 +59,8 @@ if __name__ == "__main__":
         device=operation_device,
     )
 
-    hr_device = device.copy(resolution=310)
+    # hr_device = device.copy(resolution=310)
+    hr_device = device.copy(resolution=500)
     print(device)
 
     obj_cfgs = dict(
@@ -191,8 +193,14 @@ if __name__ == "__main__":
     ).to(operation_device)
     invdesign = InvDesign(
         devOptimization=opt,
+        optimizer=dict(
+            name="Adam",
+            lr=2e-2,
+            weight_decay=0,
+        ),
         run=Config(
             n_epochs=100,
+            # n_epochs=20,
         ),
         # optimizer=Config(
         #     name="lbfgs",
@@ -208,7 +216,7 @@ if __name__ == "__main__":
         ),
         plot_cfgs=Config(
             plot=True,
-            interval=5,
+            interval=20,
             plot_name=f"{exp_name}",
             objs=["fwd_trans"],
             field_keys=[("in_slice_1", 1.55, "Ez1", 300)],
@@ -220,6 +228,7 @@ if __name__ == "__main__":
             ckpt_name=f"{exp_name}",
             dump_gds=True,
             gds_name=f"{exp_name}",
+            upsample_eps_to_1nm=True,
         ),
     )
 

@@ -585,20 +585,20 @@ class BoxParameterization(BaseParametrization):
         else:
             raise ValueError(f"Unsupported initialization method: {init_method}")
 
-    def _build_permittivity(self, weights, sharpness: float):
+    def _build_density(self, weights, sharpness: float):
         boxes: Boxes = weights["boxes"]
-        eps = boxes.forward()
+        density = boxes.forward()
 
-        return eps
+        return density
 
-    def build_permittivity(self, weights, sharpness: float | None = None):
-        ## this is the high resolution, e.g., res=200, 310 permittivity
-        ## return:
-        #   1. we need the first one for gds dump out
-        #   2. we need the second one for evaluation, do not need to downsample it here. transform will handle it.
-        hr_permittivity = self._build_permittivity(
+    def build_density(self, weights, sharpness: float | None = None):
+        ## this is the high resolution, e.g., res=200, 310 normalized density
+        hr_density = self._build_density(
             weights,
             sharpness,
         )
 
-        return hr_permittivity
+        return hr_density
+
+    def build_permittivity(self, weights, sharpness: float | None = None):
+        return self.build_density(weights, sharpness)

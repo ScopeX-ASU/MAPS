@@ -11,23 +11,28 @@ from pyutils.typing import DataLoader, Optimizer, Scheduler
 from torch.types import Device
 from torch.utils.data import Sampler
 
-from core.invdes.models import *
-from core.invdes.models.layers import *
+from core.drc.models import *
 from core.train.datasets import *
+from core.train.datasets.ilt import ILTDataset
 from core.train.models import *
-from core.train.utils import SParamLoss
 
 from .utils import (
     AspectRatioLoss,
+    CenterNMSELoss,
     ComplexL1Loss,
     DAdaptAdam,
     DistanceLoss,
     GradientLoss,
+    L2_Error,
+    LpLoss,
     MaxwellResidualLoss,
     NL2NormLoss,
     NormalizedMSELoss,
+    NormalizedMSELoss2,
+    PaddedMSELoss,
     ResolutionScheduler,
     SharpnessScheduler,
+    SlicedNormalizedMSELoss,
     TemperatureScheduler,
     fab_penalty_ls_curve,
     fab_penalty_ls_gap,
@@ -496,6 +501,28 @@ def make_dataloader(
             )
             for split in ["train", "valid", "test"]
         )
+    elif name == "ilt":
+        train_dataset, validation_dataset, test_dataset = (
+            (
+                ILTDataset(
+                    root=configs.dataset.root,
+                    data_dir=configs.dataset.data_dir,  # e.g., mmi
+                    split=split,
+                    test_ratio=configs.dataset.test_ratio,
+                    patch_size=configs.dataset.patch_size,  # 128
+                    context=configs.dataset.context,  # 128
+                    stride=configs.dataset.stride,  # 32
+                    train_valid_split_ratio=configs.dataset.train_valid_split_ratio,  # [0.8, 0.2]
+                    processed_dir=configs.dataset.processed_dir,  # processed
+                    border_size=configs.dataset.border_size,
+                    transform=configs.dataset.transform,  # basic or augment
+                    target_resolution=configs.dataset.resolution,
+                )
+                if split in splits
+                else None
+            )
+            for split in ["train", "valid", "test"]
+        )
     else:
         train_dataset, test_dataset = get_dataset(
             name,
@@ -514,6 +541,7 @@ def make_dataloader(
         prefetch_factor=8,
         persistent_workers=True,
         shuffle=int(configs.dataset.shuffle),
+        drop_last=True,
         # collate_fn=collate_fn_keep_spatial_res,
         # sampler=MySampler(train_dataset, shuffle=int(configs.dataset.shuffle)),
     )
@@ -526,6 +554,7 @@ def make_dataloader(
         prefetch_factor=8,
         persistent_workers=True,
         shuffle=int(configs.dataset.shuffle),
+        drop_last=True,
         # collate_fn=collate_fn_keep_spatial_res,
         # sampler=MySampler(validation_dataset, shuffle=int(configs.dataset.shuffle)),
     )
@@ -538,6 +567,7 @@ def make_dataloader(
         prefetch_factor=8,
         persistent_workers=True,
         shuffle=int(configs.dataset.shuffle),
+        drop_last=True,
         # collate_fn=collate_fn_keep_spatial_res,
         # sampler=MySampler(test_dataset, shuffle=int(configs.dataset.shuffle)),
     )
@@ -545,11 +575,10 @@ def make_dataloader(
     return train_loader, validation_loader, test_loader
 
 
-def make_device(device: Device, sim_cfg):
+def make_device(device: Device):
     device_to_opt = eval(configs.model.device_type)(
-        sim_cfg=sim_cfg,
+        sim_cfg=configs.model.sim_cfg,
         device=device,
-        **configs.model.device_cfg,
     )
     return device_to_opt
 
@@ -627,14 +656,10 @@ def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
             if_constant_period=configs.model.if_constant_period,
             focal_constant=configs.model.focal_constant,
         ).to(device)
-    elif configs.model.name.lower().endswith("optimization"):
+    elif configs.model.name.lower() == "metacoupleroptimization":
         model = eval(configs.model.name)(
             device=kwargs["optDevice"],
-            hr_device=kwargs.get("hr_optDevice", None),
-            sim_cfg=kwargs["sim_cfg"],
-            operation_device=device,
-            design_region_param_cfgs=configs.model.design_region_param_cfgs,
-            obj_cfgs=configs.model.get("obj_cfg", {}),
+            sim_cfg=configs.model.sim_cfg,
         ).to(device)
     elif "simplecnn" in configs.model.name.lower():
         model = eval(configs.model.name)().to(device)
@@ -709,12 +734,35 @@ def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
             ffn=configs.model.ffn,
             ffn_dwconv=configs.model.ffn_dwconv,
         ).to(device)
+    elif configs.model.name.lower().endswith("iltmodel"):
+        model = eval(configs.model.name)(
+            device=device,
+            patch_size=configs.dataset.patch_size,
+            context=configs.dataset.context,
+            **configs.model,
+        ).to(device)
+    elif configs.model.name.lower() == "drvfixer":
+        model = eval(configs.model.name)(device=device, **configs.model).to(device)
     else:
         raise NotImplementedError(f"Not supported model name: {configs.model.name}")
     return model
 
 
-def make_optimizer(params, name: str = None, configs=None) -> Optimizer:
+def make_optimizer(
+    params, name: str = None, configs=None, no_decay_params=[]
+) -> Optimizer:
+    total_params = set(params)
+    if len(no_decay_params) > 0:
+        no_decay_params = set(no_decay_params)
+        decay_params = list(total_params - no_decay_params)
+        no_decay_params = list(no_decay_params)
+    else:
+        decay_params = list(total_params)
+
+    params = [
+        {"params": decay_params, "weight_decay": configs.weight_decay},
+        {"params": no_decay_params, "weight_decay": 0.0},
+    ]
     if name == "sgd":
         optimizer = torch.optim.SGD(
             params,
@@ -766,9 +814,9 @@ def make_optimizer(params, name: str = None, configs=None) -> Optimizer:
         )
     elif name == "lbfgs":
         optimizer = torch.optim.LBFGS(
-            params,
+            list(total_params),
             lr=configs.lr,  # for now, only the lr is tunable, others arguments just use the default value
-            line_search_fn=configs.line_search_fn,
+            line_search_fn=getattr(configs, "line_search_fn", "strong_wolfe"),
         )
     else:
         raise NotImplementedError(name)
@@ -815,8 +863,8 @@ def make_scheduler(
             optimizer,
             first_cycle_steps=configs.run.n_epochs,
             max_lr=configs.optimizer.lr,
-            min_lr=configs.lr_scheduler.lr_min,
-            warmup_steps=int(configs.lr_scheduler.warmup_steps),
+            min_lr=configs.scheduler.lr_min,
+            warmup_steps=int(configs.scheduler.warmup_steps),
         )
     elif name == "exp":
         scheduler = torch.optim.lr_scheduler.ExponentialLR(
@@ -833,14 +881,32 @@ def make_criterion(name: str = None, cfg=None) -> nn.Module:
     cfg = cfg or configs.criterion
     if name == "mse":
         criterion = nn.MSELoss()
+    elif name == "mse_sum":
+        criterion = nn.MSELoss(reduction="sum")
+    elif name == "bce_sum":
+        criterion = nn.BCELoss(reduction="sum")
+    elif name == "lploss":
+        criterion = LpLoss(p=cfg.p)
     elif name == "nmse":
         criterion = NormalizedMSELoss()
+    elif name == "nmse2":
+        criterion = NormalizedMSELoss2()
+    elif name == "cennmse":
+        criterion = CenterNMSELoss()
+    elif name == "snmse":
+        criterion = SlicedNormalizedMSELoss()
+    elif name == "padmse":
+        criterion = PaddedMSELoss(reduce="mean")
+    elif name == "l2err":
+        criterion = L2_Error()
     elif name == "cmae":
         criterion = ComplexL1Loss(norm=cfg.norm)
     elif name == "curl_loss":
         criterion = fab_penalty_ls_curve(alpha=cfg.weight, min_feature_size=0.02)
     elif name == "gap_loss":
-        criterion = fab_penalty_ls_gap(beta=1, min_feature_size=0.02)
+        criterion = fab_penalty_ls_gap(
+            beta=getattr(cfg, "beta", 1), min_feature_size=getattr(cfg, "mfs", 0.02)
+        )
     elif name == "nl2norm":
         criterion = NL2NormLoss()
     elif name == "masknl2norm":

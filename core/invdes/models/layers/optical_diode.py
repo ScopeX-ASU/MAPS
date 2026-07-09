@@ -59,16 +59,16 @@ class OpticalDiode(N_Ports):
             in_port_1=dict(
                 type="box",
                 direction="x",
-                center=[-(port_len[0] + box_size[0] / 2) / 2, 0],
-                size=[port_len[0] + box_size[0] / 2, port_width[0]],
+                center=[-(port_len[0] + box_size[0]) / 2, 0],
+                size=[port_len[0], port_width[0]],
                 eps=eps_r1_fn(wl_cen),
                 # eps=2.848152**2, # neff from Lumerical
             ),
             out_port_1=dict(
                 type="box",
                 direction="x",
-                center=[(port_len[1] + box_size[0] / 2) / 2, 0],
-                size=[port_len[1] + box_size[0] / 2, port_width[1]],
+                center=[(port_len[1] + box_size[0]) / 2, 0],
+                size=[port_len[1], port_width[1]],
                 eps=eps_r1_fn(wl_cen),
                 # eps=2.848152**2, # neff from Lumerical
             ),
@@ -147,7 +147,7 @@ class OpticalDiode(N_Ports):
         )
 
         norm_refl_profiles_1 = self.build_norm_sources(
-            source_modes=("Ez1",),
+            source_modes=("Ez1", "Ez3"),
             input_port_name="in_port_1",
             input_slice_name="refl_slice_1",
             wl_cen=self.sim_cfg["wl_cen"],
