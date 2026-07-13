@@ -21,6 +21,8 @@ This repo is the official implementation of ["MAPS: Multi-Fidelity AI-Augmented 
 - Levelset parametrization uses SubpixelSmoothedProjection instead of Heaviside
 - Support 3D to 2.5D effective index simulation.
 - Support various NCG optimizers.
+- Support nonuniform rectilinear grid 2d FDFD with precondition support, native grid objective.
+- Support polygon and edgebox for shape optimization
 
 [2025/11/05] Released v0.0.3
 - Integrate [pydiso](https://github.com/simpeg/pydiso) solver to enable reusing matrix symbolic factorization for speedup. For the same polarization (e.g., Ez), there is only one solver instance as all matrices have the same sparse structure to avoid memory explosion.
