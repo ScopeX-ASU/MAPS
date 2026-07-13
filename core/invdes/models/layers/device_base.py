@@ -491,7 +491,7 @@ class BaseDevice(object):
         return x[(..., *slices)]
 
 
-def get_two_ports(device, port_name):
+def get_two_ports(device, port_name, slice_name=None):
     port = device.port_cfgs[port_name]
     center = port["center"]
     size = port["size"]
@@ -523,6 +523,21 @@ def get_two_ports(device, port_name):
         raise ValueError(f"Center must be 2D or 3D, got {center}")
     sim_cfg = copy.deepcopy(device.sim_cfg)
     sim_cfg["cell_size"] = device.cell_size
+    if "optical_grid" in device.sim_cfg:
+        sim_cfg["optical_grid"] = copy.deepcopy(device.sim_cfg["optical_grid"])
+    native_grid = device.grid_info_dict.get("epsilon_map", {}).get("grid")
+    if "symmetry" in sim_cfg:
+        remove_symmetry = False
+        symmetry = sim_cfg["symmetry"]
+        if symmetry[0] != 0:
+            if center[0] != 0:
+                remove_symmetry = True
+        if symmetry[1] != 0:
+            if center[1] != 0:
+                remove_symmetry = True
+        if remove_symmetry:
+            sim_cfg.pop("symmetry")
+
     two_ports = N_Ports(
         eps_bg=device.eps_bg,
         port_cfgs={
@@ -536,8 +551,25 @@ def get_two_ports(device, port_name):
         },
         design_region_cfgs=dict(),
         sim_cfg=sim_cfg,
+        grid=native_grid,
         device=device.device,
     )
+    # Recreate the source monitor on the auxiliary device.  Reusing the
+    # source Slice object is unsafe because it may be indexed for a different
+    # grid; add_monitor_slice derives fresh native/export indices from the
+    # shared physical grid coordinates.
+    requested_slice_name = slice_name
+    for monitor_name, slice_info in device.port_monitor_slices_info.items():
+        if requested_slice_name is not None and monitor_name != requested_slice_name:
+            continue
+        if slice_info.get("direction", "")[0] != direction[0]:
+            continue
+        two_ports.add_monitor_slice(
+            monitor_name,
+            slice_info["center"],
+            slice_info["size"],
+            slice_info["direction"],
+        )
     return two_ports
 
 
@@ -644,14 +676,60 @@ def recenter_geometries(geometry_cfgs, extends):
     offset_z = -(extends[2][0] + extends[2][1]) / 2 if len(extends) == 3 else 0
 
     for name, geometry_cfg in geometry_cfgs.items():
-        center = geometry_cfg["center"]
-        new_center_x = center[0] + offset_x
-        new_center_y = center[1] + offset_y
-        if len(center) == 3:
-            new_center_z = center[2] + offset_z
-            geometry_cfg["center"] = [new_center_x, new_center_y, new_center_z]
+        if geometry_cfg["type"] == "sine_bend":
+            if geometry_cfg["axis"] == 0:
+                geometry_cfg["start"] = (
+                    geometry_cfg["start"][0] + offset_y,
+                    geometry_cfg["start"][1] + offset_z,
+                )
+                geometry_cfg["end"] = (
+                    geometry_cfg["end"][0] + offset_y,
+                    geometry_cfg["end"][1] + offset_z,
+                )
+                geometry_cfg["slab_bounds"] = (
+                    geometry_cfg["slab_bounds"][0] + offset_x,
+                    geometry_cfg["slab_bounds"][1] + offset_x,
+                )
+
+            elif geometry_cfg["axis"] == 1:
+                geometry_cfg["start"] = (
+                    geometry_cfg["start"][0] + offset_x,
+                    geometry_cfg["start"][1] + offset_z,
+                )
+                geometry_cfg["end"] = (
+                    geometry_cfg["end"][0] + offset_x,
+                    geometry_cfg["end"][1] + offset_z,
+                )
+                geometry_cfg["slab_bounds"] = (
+                    geometry_cfg["slab_bounds"][0] + offset_y,
+                    geometry_cfg["slab_bounds"][1] + offset_y,
+                )
+            elif geometry_cfg["axis"] == 2:
+                geometry_cfg["start"] = (
+                    geometry_cfg["start"][0] + offset_x,
+                    geometry_cfg["start"][1] + offset_y,
+                )
+                geometry_cfg["end"] = (
+                    geometry_cfg["end"][0] + offset_x,
+                    geometry_cfg["end"][1] + offset_y,
+                )
+                geometry_cfg["slab_bounds"] = (
+                    geometry_cfg["slab_bounds"][0] + offset_z,
+                    geometry_cfg["slab_bounds"][1] + offset_z,
+                )
+            else:
+                raise ValueError(
+                    f"Invalid axis {geometry_cfg['axis']} for sine_bend geometry."
+                )
         else:
-            geometry_cfg["center"] = [new_center_x, new_center_y]
+            center = geometry_cfg["center"]
+            new_center_x = center[0] + offset_x
+            new_center_y = center[1] + offset_y
+            if len(center) == 3:
+                new_center_z = center[2] + offset_z
+                geometry_cfg["center"] = [new_center_x, new_center_y, new_center_z]
+            else:
+                geometry_cfg["center"] = [new_center_x, new_center_y]
 
     new_extends = [
         (extends[0][0] + offset_x, extends[0][1] + offset_x),
@@ -660,6 +738,77 @@ def recenter_geometries(geometry_cfgs, extends):
     if len(extends) == 3:
         new_extends.append((extends[2][0] + offset_z, extends[2][1] + offset_z))
     return geometry_cfgs, new_extends
+
+
+def build_sine_bend_cell(cfg):
+    import gdstk
+
+    start = np.array(cfg["start"], dtype=float)
+    end = np.array(cfg["end"], dtype=float)
+    direction = cfg.get("direction", "x")  # "x" for x-faced, "y" for y-faced
+    n = int(cfg.get("num_samples", 100))
+    width = float(cfg["width"])
+
+    if n < 3:
+        raise ValueError("num_samples must be >= 3")
+    if direction not in ("x", "y"):
+        raise ValueError(f"direction must be 'x' or 'y', got {direction!r}")
+
+    if direction == "x":
+        x_start = start[0]
+        l_bend = end[0] - start[0]
+        x_bend = np.linspace(
+            x_start, x_start + l_bend, 100
+        )  # x coordinates of the top edge vertices
+        h_bend = abs(end[1] - start[1])
+        y_bend = (
+            (x_bend - x_start) * h_bend / l_bend
+            - h_bend * np.sin(2 * np.pi * (x_bend - x_start) / l_bend) / (np.pi * 2)
+        ) + (
+            start[1] if end[1] > start[1] else -start[1]
+        )  # y coordinates of the top edge vertices
+
+        # add path to the cell
+        cell = gdstk.Cell("bends")
+        # print(start, end)
+        # print(y_bend)
+        cell.add(
+            gdstk.FlexPath(
+                x_bend + (1j if end[1] > start[1] else -1j) * y_bend,
+                width,
+                layer=1,
+                datatype=0,
+            )
+        )
+    elif direction == "y":
+        y_start = start[1]
+        l_bend = end[1] - start[1]
+        y_bend = np.linspace(
+            y_start, y_start + l_bend, 100
+        )  # y coordinates of the top edge vertices
+        h_bend = end[0] - start[0]
+        x_bend = (
+            (y_bend - y_start) * h_bend / l_bend
+            - h_bend * np.sin(2 * np.pi * (y_bend - y_start) / l_bend) / (np.pi * 2)
+            + start[0]
+            if end[0] > start[0]
+            else -start[0]
+        )  # x coordinates of the top edge vertices
+
+        # add path to the cell
+        cell = gdstk.Cell("bends")
+        cell.add(
+            gdstk.FlexPath(
+                (1 if end[0] > start[0] else -1) * x_bend + 1j * y_bend,
+                width,
+                layer=1,
+                datatype=0,
+            )
+        )
+    else:
+        raise ValueError(f"direction must be 'x' or 'y', got {direction!r}")
+
+    return cell
 
 
 class N_Ports(BaseDevice):
@@ -745,6 +894,7 @@ class N_Ports(BaseDevice):
             "n_wl": 1,
             "plot_root": "./figs",
         },
+        grid=None,
         device="cuda:0",
         verbose: bool = True,
     ):
@@ -792,6 +942,10 @@ class N_Ports(BaseDevice):
         self.update_device_config(self.__class__.__name__, device_cfg)
         self.update_simulation_config(sim_cfg)
         self.sim_cfg = sim_cfg
+        # Optional native raster grid supplied by an existing device.  This
+        # is primarily used by normalization's extended two-port device so
+        # that both devices have identical native coordinates and cell widths.
+        self.native_grid = grid
         self.material_property_maps = {}
         self.conductivity_map = None
         self.electrical_conductivity_map = None
@@ -989,6 +1143,14 @@ class N_Ports(BaseDevice):
                 vertices=[_as_3(v, fill=0) for v in cfg["vertices"]],
                 height=cfg.get("height", td.inf),
             )
+        if geo_type == "sine_bend":
+            cell = build_sine_bend_cell(cfg)
+            return td.PolySlab.from_gds(
+                cell,
+                gds_layer=1,
+                axis=cfg.get("axis", 2),
+                slab_bounds=cfg.get("slab_bounds", None),
+            )[0]
         if geo_type == "cylinder":
             cylinder_kwargs = dict(
                 radius=cfg["radius"],
@@ -1101,6 +1263,19 @@ class N_Ports(BaseDevice):
                         [_vector(v) for v in cfg["vertices"]],
                         height=cfg.get("height", mp.inf),
                         material=mp.Medium(epsilon=scalar_value),
+                    )
+            case "sine_bend":
+                if use_tidy3d:
+                    geometry = td.Structure(
+                        geometry=self._tidy3d_geometry_from_cfg(cfg),
+                        medium=_tidy3d_medium_from_permittivity(
+                            scalar_value,
+                            freq=tidy3d_freq,
+                        ),
+                    )
+                else:
+                    raise ValueError(
+                        "sine bend geometry currently requires use_tidy3d=True."
                     )
             case "cylinder":
                 if use_tidy3d:
@@ -1391,6 +1566,22 @@ class N_Ports(BaseDevice):
             #     size=cell_size_3d if self.dim == 3 else _as_3(cell_size, fill=td.inf),
             # )
             td.config.simulation.use_local_subpixel = subpixel
+            # print(
+            #     center,
+            #     cell_size_3d,
+            #     list(geometry.values()),
+            #     (
+            #         self._tidy3d_grid_spec_for_raster(
+            #             spacing_values,
+            #             grid_spec_cfg=grid_spec_cfg,
+            #             override_structures=override_structures,
+            #         )
+            #         if grid is None and grid_info is None
+            #         else td.GridSpec.from_grid(
+            #             grid if grid is not None else grid_info["grid"]
+            #         )
+            #     ),
+            # )
             sim = td.Simulation(
                 center=center,
                 symmetry=self.sim_cfg.get("symmetry", (0, 0, 0)),
@@ -1498,6 +1689,7 @@ class N_Ports(BaseDevice):
                 boundaries=raster_boundaries,
                 grid=sim.grid,
             )
+            # print(raster_grid_info)
         else:
             print(
                 f"Using Meep to generate {map_name} with resolution {resolution} and cell size {cell_size}"
@@ -2012,6 +2204,9 @@ class N_Ports(BaseDevice):
 
         optical_grid_spec_cfg = self._optical_tidy3d_grid_spec_cfg()
 
+        if self.native_grid is not None and not use_tidy3d:
+            raise ValueError("A supplied native grid requires use_tidy3d=True")
+
         native_epsilon_map, native_grid_info = self.rasterize_geometry_map(
             cell_size=self.cell_size,
             geometry=self.geometry,
@@ -2021,6 +2216,7 @@ class N_Ports(BaseDevice):
             background_value=self.eps_bg,
             use_tidy3d=use_tidy3d,
             grid_spec_cfg=optical_grid_spec_cfg,
+            grid=self.native_grid,
             map_name="epsilon_map",
             subpixel=self.sim_cfg.get("subpixel", True),
         )
@@ -5224,7 +5420,9 @@ class N_Ports(BaseDevice):
         self._build_fdtdx_native_design_region_metadata(native_grid)
         return self.fdtdx_field_grid_metadata
 
-    def resample_map_between_coords(self, values, *, src_coords, dst_coords):
+    def resample_map_between_coords(
+        self, values, *, src_coords, dst_coords, mode: str = "polar"
+    ):
         if not isinstance(values, torch.Tensor):
             values_np = np.asarray(values)
             dtype = torch.complex64 if np.iscomplexobj(values_np) else torch.float32
@@ -5234,6 +5432,7 @@ class N_Ports(BaseDevice):
             src_coords=src_coords,
             dst_coords=dst_coords,
             axes=tuple(range(values.ndim - len(src_coords), values.ndim)),
+            mode=mode,
         )
 
     def _region_mask_to_index(self, region_mask):
@@ -5512,9 +5711,25 @@ class N_Ports(BaseDevice):
                 key=key,
             )
             if config.has_symmetry:
-                native_grid_indices = fdtdx.unfold_grid_slice(
-                    objects[source.name], config, info["symmetry_mid_abs"]
-                )
+                # print(objects[source.name].grid_slice)
+                ## we expand grid_slice only if the grid_slice is symmetric to the symmetry axis
+                if self._check_object_on_symmetry_axis(
+                    input_slice_name=slice_name,
+                    symmetry=self.sim_cfg.get("symmetry", (0, 0, 0)),
+                ):
+                    native_grid_indices = fdtdx.unfold_grid_slice(
+                        objects[source.name], config, info["symmetry_mid_abs"]
+                    )
+                else:
+                    # if the monitor is on the top half of the symmetry axis, we just use it. do not mirror it.
+                    ## simply because our slice has to be a continuous slice(start, stop), cannot have gap..
+                    native_grid_indices = tuple(
+                        slice(s.start + offset, s.stop + offset)
+                        for s, offset in zip(
+                            objects[source.name].grid_slice, info["symmetry_mid_abs"]
+                        )
+                    )
+                # print(native_grid_indices)
                 ## we record the reduced grid_slice for adjoint group check
                 self.port_monitor_slices_native_symmetry[slice_name] = objects[
                     source.name
@@ -5569,9 +5784,24 @@ class N_Ports(BaseDevice):
                 export_grid_indices = objects[source.name].grid_slice
 
         else:
-            ## for 2D FDFD, we only have uniform grid, so native = export
-            native_grid_indices = monitor_slice
-            export_grid_indices = monitor_slice
+            native_grid = self.grid_info_dict.get("epsilon_map")
+            export_grid = self.grid_info_dict.get("export_epsilon_map")
+            if native_grid is None or export_grid is None:
+                native_grid_indices = monitor_slice
+                export_grid_indices = monitor_slice
+            else:
+                native_grid_indices = self._monitor_slice_on_coords(
+                    center=center,
+                    size=size,
+                    direction=direction,
+                    coords=native_grid["coords"],
+                )
+                export_grid_indices = self._monitor_slice_on_coords(
+                    center=center,
+                    size=size,
+                    direction=direction,
+                    coords=export_grid["coords"],
+                )
 
         self.port_monitor_slices_native[slice_name] = native_grid_indices
         self.port_monitor_slices_export[slice_name] = export_grid_indices
@@ -5835,53 +6065,64 @@ class N_Ports(BaseDevice):
             "y",
         )
 
-        # quit()
-        def exclude_ports(slice_obj):
-            if isinstance(slice_obj.y, int):  # x is a range, y is a single value
-                y_coord = int(slice_obj.y)  # Fixed y coordinate
-                if isinstance(slice_obj.x, slice):
-                    slice_obj_x_range = np.arange(slice_obj.x.start, slice_obj.x.stop)
-                elif isinstance(slice_obj.x, np.ndarray):
-                    slice_obj_x_range = slice_obj.x
-                x_filtered = np.array(
-                    [x for x in slice_obj_x_range if not self.ports_regions[x, y_coord]]
-                )
-                y_filtered = np.array([slice_obj.y])  # y remains unchanged
-            elif isinstance(slice_obj.x, int):  # y is a range, x is a single value
-                x_coord = int(slice_obj.x)  # Fixed x coordinate
-                if isinstance(slice_obj.y, slice):
-                    slice_obj_y_range = np.arange(slice_obj.y.start, slice_obj.y.stop)
-                elif isinstance(slice_obj.y, np.ndarray):
-                    slice_obj_y_range = slice_obj.y
-                y_filtered = np.array(
-                    [y for y in slice_obj_y_range if not self.ports_regions[x_coord, y]]
-                )
-                x_filtered = np.array([slice_obj.x])  # x remains unchanged
-            else:
-                raise ValueError("Both x and y are single values")
+        def port_mask_for_grid(grid_name):
+            grid_info = self.grid_info_dict.get(grid_name)
+            if grid_info is None:
+                return self.ports_regions
+            shape = tuple(len(axis) for axis in grid_info["coords"])
+            if grid_name == "epsilon_map" and self.ports_regions.shape == shape:
+                return self.ports_regions
 
-            return Slice(x=x_filtered, y=y_filtered)
+            meshes = np.meshgrid(*grid_info["coords"], indexing="ij")
+            mask = np.zeros(shape, dtype=bool)
+            for port_cfg in self.port_cfgs.values():
+                center = np.asarray(_as_3(port_cfg["center"])[: self.dim])
+                size = np.asarray(_as_3(port_cfg["size"])[: self.dim])
+                normal_axis = _axis_index(port_cfg["direction"])
+                width_scale = np.full(self.dim, 2.0)
+                width_scale[normal_axis] = 1.0
+                port_mask = np.ones(shape, dtype=bool)
+                for axis in range(self.dim):
+                    port_mask &= np.abs(meshes[axis] - center[axis]) < (
+                        size[axis] / 2 * width_scale[axis]
+                    )
+                mask |= port_mask
+            return mask
 
-        self.port_monitor_slices_export[xp_slice_name] = (
-            self.port_monitor_slices_native[xp_slice_name]
-        ) = self.port_monitor_slices[xp_slice_name] = exclude_ports(
-            self.port_monitor_slices[xp_slice_name]
+        def index_array(indexer, axis_length):
+            if isinstance(indexer, slice):
+                return np.arange(*indexer.indices(axis_length), dtype=int)
+            return np.asarray(indexer, dtype=int).reshape(-1)
+
+        def exclude_ports(slice_obj, port_mask):
+            x_indices = index_array(slice_obj.x, port_mask.shape[0])
+            y_indices = index_array(slice_obj.y, port_mask.shape[1])
+            if x_indices.size == 1:
+                keep = ~port_mask[x_indices[0], y_indices]
+                return Slice(x=x_indices, y=y_indices[keep])
+            if y_indices.size == 1:
+                keep = ~port_mask[x_indices, y_indices[0]]
+                return Slice(x=x_indices[keep], y=y_indices)
+            raise ValueError("Radiation monitor must be a codimension-1 slice")
+
+        monitor_names = (
+            xp_slice_name,
+            xm_slice_name,
+            yp_slice_name,
+            ym_slice_name,
         )
-        self.port_monitor_slices_export[xm_slice_name] = (
-            self.port_monitor_slices_native[xm_slice_name]
-        ) = self.port_monitor_slices[xm_slice_name] = exclude_ports(
-            self.port_monitor_slices[xm_slice_name]
-        )
-        self.port_monitor_slices_export[yp_slice_name] = (
-            self.port_monitor_slices_native[yp_slice_name]
-        ) = self.port_monitor_slices[yp_slice_name] = exclude_ports(
-            self.port_monitor_slices[yp_slice_name]
-        )
-        self.port_monitor_slices_export[ym_slice_name] = (
-            self.port_monitor_slices_native[ym_slice_name]
-        ) = self.port_monitor_slices[ym_slice_name] = exclude_ports(
-            self.port_monitor_slices[ym_slice_name]
-        )
+        native_mask = port_mask_for_grid("epsilon_map")
+        export_mask = port_mask_for_grid("export_epsilon_map")
+        for slice_name in monitor_names:
+            native_slice = exclude_ports(
+                self.port_monitor_slices_native[slice_name], native_mask
+            )
+            export_slice = exclude_ports(
+                self.port_monitor_slices_export[slice_name], export_mask
+            )
+            self.port_monitor_slices_native[slice_name] = native_slice
+            self.port_monitor_slices_export[slice_name] = export_slice
+            self.port_monitor_slices[slice_name] = export_slice
         return (
             self.port_monitor_slices_export[xp_slice_name],
             self.port_monitor_slices_export[xm_slice_name],
@@ -6054,6 +6295,48 @@ class N_Ports(BaseDevice):
         print(ym_info)
         print(xp_plus_info)
         print(xp_minus_info)
+
+    def _check_object_on_symmetry_axis(self, input_slice_name, symmetry=(0, 0, 0)):
+        # source_slice_size = self.port_monitor_slices_info[input_slice_name]["size"]
+        source_slice_center = self.port_monitor_slices_info[input_slice_name]["center"]
+        cell_extend = self.cell_extend
+        if symmetry is not None:
+            ## either the source is symmetric along the axis, or the source is not across the symmetry axis
+            for axis, sym in enumerate(symmetry):
+                if sym != 0:
+                    xmin, xmax = cell_extend[axis]
+                    cell_center = (xmin + xmax) / 2
+                    if np.abs(source_slice_center[axis] - cell_center) > 1e-3:
+                        return False
+            return True
+        else:
+            return False
+
+    def _check_object_symmetry(self, input_slice_name, symmetry=(0, 0, 0)):
+        source_slice_size = self.port_monitor_slices_info[input_slice_name]["size"]
+        source_slice_center = self.port_monitor_slices_info[input_slice_name]["center"]
+        cell_extend = self.cell_extend
+        if symmetry is not None:
+            ## either the source is symmetric along the axis, or the source is not across the symmetry axis
+            for axis, sym in enumerate(symmetry):
+                if sym != 0:
+                    xmin, xmax = cell_extend[axis]
+                    slice_min = source_slice_center[axis] - source_slice_size[axis] / 2
+                    slice_max = source_slice_center[axis] + source_slice_size[axis] / 2
+                    cell_center = (xmin + xmax) / 2
+                    if (
+                        np.abs(source_slice_center[axis] - cell_center) < 1e-3
+                        or slice_min >= cell_center
+                    ):  # threshold 1nm
+                        pass
+                    elif slice_max <= cell_center:
+                        raise ValueError(
+                            f"Source slice {input_slice_name} is on the lower half of the symmetric domain (axis={axis}), which is not allowed in fdtdx"
+                        )
+                    else:
+                        raise ValueError(
+                            f"Source slice {input_slice_name} is not symmetric along axis {axis}, cell_center={cell_center}, slice_min={slice_min}, slice_max={slice_max}"
+                        )
 
     def insert_monitors_fdtd3d(
         self,
@@ -6231,6 +6514,11 @@ class N_Ports(BaseDevice):
                         constraints=constraints,
                         key=key,
                     )
+                    self._check_object_symmetry(
+                        input_slice_name,
+                        symmetry=self.sim_cfg.get("symmetry", (0, 0, 0)),
+                    )
+
                     if config.has_symmetry:
                         symmetry_mid_abs = info["symmetry_mid_abs"]
                         inv_permittivities = inv_permittivities[
@@ -6248,7 +6536,10 @@ class N_Ports(BaseDevice):
                         key=key,
                     )
                     # print(objects[name]._mode_H.shape)
-                    if config.has_symmetry:
+                    if config.has_symmetry and self._check_object_on_symmetry_axis(
+                        input_slice_name=input_slice_name,
+                        symmetry=self.sim_cfg.get("symmetry", (0, 0, 0)),
+                    ):
                         _mode_E = fdtdx.unfold_fields(
                             objects[name]._mode_E[0], self.sim_cfg["symmetry"], "E"
                         )
@@ -6477,6 +6768,9 @@ class N_Ports(BaseDevice):
             )
 
             # Compute scaling factor based on symmetry
+            self._check_object_symmetry(
+                source_slice_name, symmetry=self.sim_cfg.get("symmetry", (0, 0, 0))
+            )
             symmetry_factor = 1.0
             for axis, sym in enumerate(self.sim_cfg.get("symmetry", [0, 0, 0])):
                 if sym != 0:
@@ -6521,9 +6815,20 @@ class N_Ports(BaseDevice):
         power_scales: dict = None,
         source_modes: Tuple[int] = ("Ez1",),
         direction: str = "x+",
+        dxs=None,
+        dys=None,
     ):
         grid_step = grid_step or self.grid_step
         dl = grid_step * MICRON_UNIT
+        if dxs is None and dys is None:
+            epsilon_grid_info = self.grid_info_dict.get("epsilon_map")
+            if epsilon_grid_info is not None:
+                boundaries = epsilon_grid_info.get("boundaries")
+                if boundaries is not None and len(boundaries) >= 2:
+                    dxs = np.diff(np.asarray(boundaries[0], dtype=float))
+                    dys = np.diff(np.asarray(boundaries[1], dtype=float))
+        elif dxs is None or dys is None:
+            raise ValueError("dxs and dys must be provided together")
         mode_profiles = {}
 
         for wl in np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl):
@@ -6534,7 +6839,15 @@ class N_Ports(BaseDevice):
                 omega = 2 * np.pi * C_0 / (wl * MICRON_UNIT)
 
                 ht_m, et_m, _, mode = insert_mode(
-                    omega, dl, slice.x, slice.y, eps, m=source_mode, direction=direction
+                    omega,
+                    dl,
+                    slice.x,
+                    slice.y,
+                    eps,
+                    m=source_mode,
+                    direction=direction,
+                    dxs=dxs,
+                    dys=dys,
                 )
                 # print(ht_m)
                 # ht_m, et_m, _, mode = insert_mode_spins(
@@ -6626,13 +6939,31 @@ class N_Ports(BaseDevice):
         return source_profiles
 
     def create_simulation(
-        self, omega, dl, eps, NPML, solver="ceviche", pol: str = "Ez"
+        self,
+        omega,
+        dl,
+        eps,
+        NPML,
+        solver="ceviche",
+        pol: str = "Ez",
+        dxs=None,
+        dys=None,
     ):
+        if dxs is not None or dys is not None:
+            if dxs is None or dys is None:
+                raise ValueError("dxs and dys must be provided together")
+            # NPML_export is defined for the uniform export grid.  A
+            # rectilinear FDFD simulation, however, is assembled on the grid
+            # represented by dxs/dys and therefore needs the native-grid PML
+            # cell counts.  These counts are based on the requested physical
+            # PML thickness and are not interchangeable with export counts.
+            if all(np.isscalar(axis_count) for axis_count in NPML):
+                NPML = self.NPML
         if solver == "ceviche":
             if pol == "Ez":
-                return fdfd_ez(omega, dl, eps, NPML)
+                return fdfd_ez(omega, dl, eps, NPML, dxs=dxs, dys=dys)
             elif pol == "Hz":
-                return fdfd_hz(omega, dl, eps, NPML)
+                return fdfd_hz(omega, dl, eps, NPML, dxs=dxs, dys=dys)
             else:
                 raise ValueError(f"Pol {pol} not supported")
         elif solver == "ceviche_torch":
@@ -6648,6 +6979,8 @@ class N_Ports(BaseDevice):
                 neural_solver=self.sim_cfg.get("neural_solver", None),
                 numerical_solver=self.sim_cfg.get("numerical_solver", "solve_direct"),
                 use_autodiff=self.sim_cfg.get("use_autodiff", False),
+                dxs=dxs,
+                dys=dys,
             )
         else:
             raise ValueError(f"Solver {solver} not supported")
@@ -6723,6 +7056,8 @@ class N_Ports(BaseDevice):
         grid_step=None,
         solver: str = "ceviche",
         pol: str = "Ez",
+        dxs=None,
+        dys=None,
     ):
         """
         _summary_
@@ -6735,7 +7070,14 @@ class N_Ports(BaseDevice):
         dl = grid_step * MICRON_UNIT
         # simulation = fdfd_ez(omega, dl, eps, [self.NPML[0], self.NPML[1]])
         simulation = self.create_simulation(
-            omega, dl, eps, self.NPML_export, solver=solver, pol=pol
+            omega,
+            dl,
+            eps,
+            self.NPML,
+            solver=solver,
+            pol=pol,
+            dxs=dxs,
+            dys=dys,
         )
 
         if hasattr(simulation, "solver"):  # which means that it is a torch simulation
@@ -6759,6 +7101,8 @@ class N_Ports(BaseDevice):
         source_profiles,
         solver="ceviche",
         grid_step=None,
+        dxs=None,
+        dys=None,
     ):
         """_summary_
 
@@ -6788,6 +7132,8 @@ class N_Ports(BaseDevice):
                     grid_step=grid_step,
                     solver=solver,
                     pol=pol,
+                    dxs=dxs,
+                    dys=dys,
                 )
                 fields[(wl, mode)] = field_sol
             return fields
@@ -6840,11 +7186,12 @@ class N_Ports(BaseDevice):
 
         input_slice = self.port_monitor_slices[input_slice_name]
         direction = self.port_monitor_slices_info[input_slice_name]["direction"]
+        two_ports = get_two_ports(self, input_port_name, input_slice_name)
 
         if solver == "fdtdx":
             if require_sim:  # it is a light source
                 if source_type == "mode":
-                    source_profiles = self.insert_modes_fdtd3d(
+                    source_profiles = two_ports.insert_modes_fdtd3d(
                         input_slice_name,
                         None,
                         input_slice,
@@ -6856,7 +7203,7 @@ class N_Ports(BaseDevice):
                         direction=direction,
                     )
                 elif source_type == "gaussian_beam":
-                    source_profiles = self.insert_gaussian_beam_fdtd3d(
+                    source_profiles = two_ports.insert_gaussian_beam_fdtd3d(
                         input_slice_name,
                         None,
                         input_slice,
@@ -6871,9 +7218,9 @@ class N_Ports(BaseDevice):
                         grid_step=self.grid_step,
                     )
                 ## every FDTDX simulation need PhasorDetector(s) to record fields for this source (that requires simulation).
-                phasor_profiles = self.insert_monitors_fdtd3d(
+                phasor_profiles = two_ports.insert_monitors_fdtd3d(
                     input_slice_name,
-                    self.epsilon_map,
+                    two_ports.epsilon_map,
                     "field",
                     input_slice,
                     wl_cen=wl_cen,
@@ -6892,9 +7239,9 @@ class N_Ports(BaseDevice):
                 )
             # elif: # it is a monitor/detector, we do not place them in simulation, just need its mode_H and mode_E
             else:
-                source_profiles = self.insert_monitors_fdtd3d(
+                source_profiles = two_ports.insert_monitors_fdtd3d(
                     input_slice_name,
-                    self.epsilon_map,
+                    two_ports.epsilon_map,
                     "mode",
                     input_slice,
                     wl_cen=wl_cen,
@@ -6911,26 +7258,56 @@ class N_Ports(BaseDevice):
             self.port_sources_dict[input_slice_name] = source_profiles
 
         else:
-            in_port = get_two_ports(self, port_name=input_port_name)
-            in_port_eps = in_port.epsilon_map
             direction = self.port_monitor_slices_info[input_slice_name]["direction"]
+            # Mode profiles are inserted into the native full-device field and
+            # must therefore be generated with the native device shape.  The
+            # public monitor slice remains export-grid indexed for plotting.
+            native_grid_info = two_ports.grid_info_dict.get("epsilon_map")
+            input_slice_info = self.port_monitor_slices_info[input_slice_name]
+            native_input_slice = two_ports._monitor_slice_on_coords(
+                center=input_slice_info["center"],
+                size=input_slice_info["size"],
+                direction=input_slice_info["direction"],
+                coords=native_grid_info["coords"],
+            )
+            native_boundaries = native_grid_info.get("boundaries")
+            native_dxs = (
+                np.diff(np.asarray(native_boundaries[0], dtype=float)) * MICRON_UNIT
+            )
+            native_dys = (
+                np.diff(np.asarray(native_boundaries[1], dtype=float)) * MICRON_UNIT
+            )
 
             if direction[0] == "x":
-                output_slice = Slice(x=self.Nx - input_slice.x, y=input_slice.y)
+                output_slice = Slice(
+                    x=two_ports.Nx - native_input_slice.x, y=native_input_slice.y
+                )
+                if two_ports.Nx - native_input_slice.x > native_input_slice.x:
+                    direction = "x+"
+                else:
+                    direction = "x-"
             elif direction[0] == "y":
-                output_slice = Slice(x=input_slice.x, y=self.Ny - input_slice.y)
+                output_slice = Slice(
+                    x=native_input_slice.x, y=two_ports.Ny - native_input_slice.y
+                )
+                if two_ports.Ny - native_input_slice.y > native_input_slice.y:
+                    direction = "y+"
+                else:
+                    direction = "y-"
 
             def _norm_run(power_scales=None):
                 if source_type == "mode":
-                    source_profiles = self.insert_modes(
-                        in_port_eps,
-                        input_slice,
+                    source_profiles = two_ports.insert_modes(
+                        two_ports.epsilon_map,
+                        native_input_slice,
                         wl_cen=wl_cen,
                         wl_width=wl_width,
                         n_wl=n_wl,
                         power_scales=power_scales,
                         source_modes=source_modes,
                         direction=direction,
+                        dxs=native_dxs,
+                        dys=native_dys,
                     )  # {(wl, mode): [source, ht_m, et_m, scale], ...}
                     # print_stat(source_profiles[(1.55, 1)][0])
                     # monitor_profiles = self.insert_modes(
@@ -6945,8 +7322,8 @@ class N_Ports(BaseDevice):
                     # )  # {(wl, mode): [monitor, ht_m, et_m, scale], ...}
                 elif source_type == "plane_wave":
                     source_profiles = self.insert_plane_wave(
-                        in_port_eps,
-                        input_slice,
+                        two_ports.epsilon_map,
+                        native_input_slice,
                         wl_cen=wl_cen,
                         wl_width=wl_width,
                         n_wl=n_wl,
@@ -6956,8 +7333,13 @@ class N_Ports(BaseDevice):
                     )
 
                 # print_stat(monitor_profiles[(1.55, 1)][0])
-                fields = self.solve(
-                    in_port_eps, source_profiles, solver=solver
+                fields = two_ports.solve(
+                    two_ports.epsilon_map,
+                    source_profiles,
+                    solver=solver,
+                    grid_step=self.grid_step,
+                    dxs=native_dxs,
+                    dys=native_dys,
                 )  # [(wl, mode, Hx), ...], [(wl, mode, Hy), ...], [(wl, mode, Ez), ...]
                 # print_stat(fields[(1.55, 1)]["Ez"])
 
@@ -7002,6 +7384,11 @@ class N_Ports(BaseDevice):
                         grid_step=self.grid_step,
                         direction=direction,
                         pol=pol,
+                        cell_weights=(
+                            two_ports.fdtdx_native_cell_weights
+                            if two_ports.dim == 2
+                            else None
+                        ),
                     )
                     # print("norm flux:", flux)
                     if isinstance(flux, torch.Tensor):
@@ -7026,23 +7413,170 @@ class N_Ports(BaseDevice):
                 k: [e * input_scale[k] for e in v[:-1]] + [power] + [require_sim]
                 for k, v in source_profiles.items()
             }
+            # The auxiliary two-port rasterization can have a different
+            # native shape because Tidy3D snapping depends on the structures
+            # present in the simulation.  The normalized source is consumed
+            # later by simulations of the original device, so transfer its
+            # full-field source from the two-port native coordinates to the
+            # original device native coordinates.
+            source_grid = two_ports.grid_info_dict.get("epsilon_map")
+            target_grid = self.grid_info_dict.get("epsilon_map")
+            if source_grid is not None and target_grid is not None:
+                source_shape = tuple(len(axis) for axis in source_grid["coords"])
+                target_shape = tuple(len(axis) for axis in target_grid["coords"])
+                if source_shape != target_shape:
+                    for key, profile in source_profiles.items():
+                        source_field = profile[0]
+                        if tuple(source_field.shape[-self.dim :]) == source_shape:
+                            was_numpy = isinstance(source_field, np.ndarray)
+                            resampled_source = two_ports.resample_map_between_coords(
+                                source_field,
+                                src_coords=source_grid["coords"],
+                                dst_coords=target_grid["coords"],
+                            )
+                            if was_numpy:
+                                resampled_source = (
+                                    resampled_source.detach().cpu().numpy()
+                                )
+                            source_profiles[key][0] = resampled_source
+
+                        transverse_axis = 1 if direction[0] == "x" else 0
+                        target_input_slice = self._monitor_slice_on_coords(
+                            center=input_slice_info["center"],
+                            size=input_slice_info["size"],
+                            direction=input_slice_info["direction"],
+                            coords=target_grid["coords"],
+                        )
+
+                        def _slice_indices(value, length):
+                            if isinstance(value, (int, np.integer)):
+                                return np.asarray([int(value)])
+                            if isinstance(value, slice):
+                                return np.arange(length)[value]
+                            return np.asarray(value).reshape(-1)
+
+                        src_indices = _slice_indices(
+                            (native_input_slice.x, native_input_slice.y)[
+                                transverse_axis
+                            ],
+                            source_shape[transverse_axis],
+                        )
+                        dst_indices = _slice_indices(
+                            (target_input_slice.x, target_input_slice.y)[
+                                transverse_axis
+                            ],
+                            target_shape[transverse_axis],
+                        )
+                        src_transverse_coords = (
+                            source_grid["coords"][transverse_axis][src_indices],
+                        )
+                        dst_transverse_coords = (
+                            target_grid["coords"][transverse_axis][dst_indices],
+                        )
+                        for profile_index in (1, 2):
+                            mode_field = profile[profile_index]
+                            if mode_field.ndim != 1:
+                                continue
+                            if mode_field.shape[0] != len(src_transverse_coords[0]):
+                                continue
+                            was_numpy = isinstance(mode_field, np.ndarray)
+                            resampled_mode = two_ports.resample_map_between_coords(
+                                mode_field,
+                                src_coords=src_transverse_coords,
+                                dst_coords=dst_transverse_coords,
+                            )
+                            if was_numpy:
+                                resampled_mode = resampled_mode.detach().cpu().numpy()
+                            source_profiles[key][profile_index] = resampled_mode
             # source_profiles["require_sim"] = require_sim
             # input_SCALE, fields, source_profiles = _norm_run(power_scales=input_scale)
 
             if plot:
                 mode = list(fields.keys())[0][1]
+                plot_field = Fz * list(input_scale.values())[0]
+                plot_eps = two_ports.epsilon_map
+                plot_input_slice = two_ports.port_monitor_slices.get(
+                    input_slice_name, input_slice
+                )
+                plot_output_slice = two_ports.port_monitor_slices.get(
+                    input_slice_name, output_slice
+                )
+                native_grid = two_ports.grid_info_dict.get("epsilon_map")
+                export_grid = two_ports.grid_info_dict.get("export_epsilon_map")
+                if native_grid is not None and export_grid is not None:
+                    native_coords = native_grid["coords"]
+                    export_coords = export_grid["coords"]
+                    native_shape = tuple(len(axis) for axis in native_coords)
+                    export_shape = tuple(len(axis) for axis in export_coords)
+                    if (
+                        tuple(plot_field.shape[-2:]) == native_shape
+                        and native_shape != export_shape
+                    ):
+                        plot_field = two_ports.resample_map_between_coords(
+                            plot_field,
+                            src_coords=native_coords,
+                            dst_coords=export_coords,
+                        )
+                        plot_eps = two_ports.resample_map_between_coords(
+                            torch.as_tensor(
+                                plot_eps,
+                                device=(
+                                    plot_field.device
+                                    if isinstance(plot_field, torch.Tensor)
+                                    else None
+                                ),
+                            ),
+                            src_coords=native_coords,
+                            dst_coords=export_coords,
+                        )
+
+                    def _export_slice(native_slice):
+                        centers = []
+                        sizes = []
+                        for axis, axis_slice in enumerate(
+                            (native_slice.x, native_slice.y)
+                        ):
+                            if isinstance(axis_slice, (int, np.integer)):
+                                index = int(axis_slice)
+                                centers.append(float(native_coords[axis][index]))
+                                sizes.append(0.0)
+                            else:
+                                start = (
+                                    0 if axis_slice.start is None else axis_slice.start
+                                )
+                                stop = (
+                                    len(native_coords[axis])
+                                    if axis_slice.stop is None
+                                    else axis_slice.stop
+                                )
+                                boundaries = native_grid["boundaries"][axis]
+                                centers.append(
+                                    float((boundaries[start] + boundaries[stop]) / 2)
+                                )
+                                sizes.append(
+                                    float(boundaries[stop] - boundaries[start])
+                                )
+                        return two_ports._monitor_slice_on_coords(
+                            center=centers,
+                            size=sizes,
+                            direction=direction,
+                            coords=export_coords,
+                        )
+
+                    plot_input_slice = _export_slice(native_input_slice)
+                    plot_output_slice = _export_slice(output_slice)
                 plot_eps_field(
-                    Fz * list(input_scale.values())[0],
+                    plot_field,
                     mode,
-                    in_port_eps,
+                    plot_eps,
                     zoom_eps_factor=1,
                     filepath=os.path.join(
                         self.sim_cfg["plot_root"],
                         f"{self.config.device.type}_norm-{input_slice_name}.png",
                     ),
-                    x_width=self.cell_size[0],
-                    y_height=self.cell_size[1],
-                    monitors=[(input_slice, "r"), (output_slice, "b")],
+                    x_width=two_ports.cell_size[0],
+                    y_height=two_ports.cell_size[1],
+                    monitors=[(plot_input_slice, "r"), (plot_output_slice, "b")],
                     title=f"|{pol}|^2, Norm run at {input_slice_name}",
                     field_stat="intensity_real",
                 )

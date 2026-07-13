@@ -159,6 +159,7 @@ class SMatrixObjective(object):
                                 autograd=True,
                                 energy=self.energy,
                                 pol=pol,
+                                cell_weights=self.cell_weights,
                             )
                             if direction[1] == "+":
                                 s = s_p
@@ -343,6 +344,7 @@ class EigenmodeObjective(object):
                             autograd=True,
                             energy=self.energy,
                             pol=pol,
+                            cell_weights=self.cell_weights,
                         )
                     else:
                         Ex, Ey, Ez, Hx, Hy, Hz = (
@@ -645,6 +647,7 @@ class FluxNear2FarObjective(object):
                     direction=direction[0],
                     autograd=True,
                     pol=pol,
+                    cell_weights=self.cell_weights,
                 )
                 if isinstance(s, Tensor):
                     abs = torch.abs
@@ -784,6 +787,7 @@ class FluxObjective(object):
                         direction=direction[0],
                         autograd=True,
                         pol=pol,
+                        cell_weights=self.cell_weights,
                     )
                 else:
                     Ex, Ey, Ez, Hx, Hy, Hz = (

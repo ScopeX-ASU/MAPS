@@ -975,6 +975,15 @@ class BaseOptimization(nn.Module):
                 {}
             )  # different polarization and wavelength requires different simulation instances
 
+            native_grid_info = self.device.grid_info_dict.get("epsilon_map")
+            native_boundaries = native_grid_info.get("boundaries")
+            native_dxs = (
+                np.diff(np.asarray(native_boundaries[0], dtype=float)) * MICRON_UNIT
+            )
+            native_dys = (
+                np.diff(np.asarray(native_boundaries[1], dtype=float)) * MICRON_UNIT
+            )
+
             for wl in np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl):
                 for pol in in_pols:  # {Ez}, {Hz}, {Ez, Hz}
                     omega = 2 * np.pi * C_0 / (wl * MICRON_UNIT)
@@ -985,9 +994,11 @@ class BaseOptimization(nn.Module):
                             omega,
                             dl,
                             epsilon_map,
-                            self.device.NPML_export,
+                            self.device.NPML,
                             solver,
                             pol=pol,
+                            dxs=native_dxs,
+                            dys=native_dys,
                         )
                         simulations[(wl, pol, control_key)] = sim
         elif "fdtdx" in sim_cfg["solver"]:
@@ -1174,7 +1185,7 @@ class BaseOptimization(nn.Module):
         extended_Ez = self.objective.total_farfield_region_solutions.get(
             field_key, {}
         ).get(field_component, None)
-        if extended_Ez is not None:
+        if extended_Ez is not None and Ez.ndim == 3:
             Ez = torch.cat((Ez, extended_Ez), dim=0)
             x_shift_coord = extended_Ez.shape[0] * self.device.grid_step
             x_shift_idx = extended_Ez.shape[0]
@@ -1206,7 +1217,7 @@ class BaseOptimization(nn.Module):
                 eps_grad_map = eps_map.grad
         elif eps_grad is not None:
             eps_grad_map = eps_grad
-        if extended_Ez is not None:
+        if extended_Ez is not None and Ez.ndim == 3:
             extended_eps_map = (
                 torch.ones_like(extended_Ez, dtype=torch.float64) * self.device.eps_bg
             )
@@ -1224,7 +1235,7 @@ class BaseOptimization(nn.Module):
             Ez = Ez._value
         thermal_map = self._resolve_thermal_plot_map(field_key, thermal_map_name)
         heat_source_map = self._resolve_thermal_plot_map(field_key, "q_map")
-        if extended_Ez is not None and heat_source_map is not None:
+        if extended_Ez is not None and Ez.ndim == 3 and heat_source_map is not None:
             if not isinstance(heat_source_map, Tensor):
                 heat_source_map = torch.as_tensor(
                     heat_source_map,
@@ -1390,6 +1401,68 @@ class BaseOptimization(nn.Module):
                     x_shift_idx=x_shift_idx if extended_Ez is not None else 0,
                 )
         else:
+            # 2D FDFD fields may be retained on the native rectilinear grid.
+            # Plotting uses export-grid monitor indices, so resample every
+            # optical quantity used by the plot to that same grid first.
+            native_grid = self.device.grid_info_dict.get("epsilon_map")
+            export_grid = self.device.grid_info_dict.get("export_epsilon_map")
+            if native_grid is not None and export_grid is not None:
+                field_grid = native_grid if on_native_grid else export_grid
+                if on_native_grid:
+                    Ez = self.device.resample_map_between_coords(
+                        Ez,
+                        src_coords=field_grid["coords"],
+                        dst_coords=export_grid["coords"],
+                    )
+
+                def _resample_plot_map(values, source_grid):
+                    if values is None or source_grid is None:
+                        return values
+                    return self.device.resample_map_between_coords(
+                        values,
+                        src_coords=source_grid["coords"],
+                        dst_coords=export_grid["coords"],
+                    )
+
+                eps_map = _resample_plot_map(eps_map, native_grid)
+                base_eps_map = _resample_plot_map(base_eps_map, native_grid)
+                eps_grad_map = _resample_plot_map(eps_grad_map, native_grid)
+                thermal_map = _resample_plot_map(
+                    thermal_map,
+                    self.device.grid_info_dict.get("conductivity_map"),
+                )
+                heat_source_map = _resample_plot_map(
+                    heat_source_map,
+                    self.device.grid_info_dict.get("conductivity_map"),
+                )
+
+            if extended_Ez is not None:
+                Ez = torch.cat((Ez, extended_Ez), dim=0)
+                x_shift_coord = extended_Ez.shape[0] * self.device.grid_step
+                x_shift_idx = extended_Ez.shape[0]
+                extended_eps_map = (
+                    torch.ones_like(extended_Ez, dtype=eps_map.dtype)
+                    * self.device.eps_bg
+                )
+                eps_map = torch.cat((eps_map, extended_eps_map), dim=0)
+                base_eps_map = torch.cat((base_eps_map, extended_eps_map), dim=0)
+                if eps_grad_map is not None:
+                    eps_grad_map = torch.cat(
+                        (
+                            eps_grad_map,
+                            torch.zeros_like(extended_Ez, dtype=eps_grad_map.dtype),
+                        ),
+                        dim=0,
+                    )
+                if heat_source_map is not None:
+                    heat_source_map = torch.cat(
+                        (
+                            heat_source_map,
+                            torch.zeros_like(extended_Ez, dtype=heat_source_map.dtype),
+                        ),
+                        dim=0,
+                    )
+
             region_param_grad = None
             if len(self.device.design_region_cfgs) == 1:
                 only_region = next(iter(self.device.design_region_cfgs))

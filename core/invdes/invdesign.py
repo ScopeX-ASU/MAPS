@@ -47,6 +47,12 @@ def normalize_grad(g, mode="p95", eps=1e-12):
     raise ValueError(mode)
 
 
+def clamp_parameters(invdes, min_val=-0.5, max_val=0.5):
+    with torch.no_grad():
+        for param in invdes.devOptimization.parameters():
+            param.data.clamp_(min_val, max_val)
+
+
 class InvDesign:
     """
     default_cfgs is to set the default configurations
@@ -109,7 +115,7 @@ class InvDesign:
             load_ckpt=None,
             resume=False,
         ),
-        after_step_callbacks=None,
+        after_step_callbacks=[clamp_parameters],
     )
 
     def __init__(
@@ -275,9 +281,9 @@ class InvDesign:
 
         self.optimizer.step(self.closure)
         # clip parameter to -0.5, 0.5
-        with torch.no_grad():
-            for param in self.devOptimization.parameters():
-                param.clamp_(-0.5, 0.5)
+        # with torch.no_grad():
+        #     for param in self.devOptimization.parameters():
+        #         param.clamp_(-0.5, 0.5)
 
         if self.after_step_callbacks is not None:
             for callback in self.after_step_callbacks:
@@ -324,7 +330,7 @@ class InvDesign:
                     obj=output_dict["breakdown"][plot_cfgs.objs[j]]["value"],
                     plot_filename=plot_filename
                     + f"_{i}"
-                    + f"_{plot_cfgs.objs[j]}{suffix}.jpg",
+                    + f"_{plot_cfgs.objs[j]}{suffix}.png",
                     field_key=plot_cfgs.field_keys[j],
                     # field_component=pol,
                     field_component=(

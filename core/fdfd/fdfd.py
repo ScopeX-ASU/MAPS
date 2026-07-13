@@ -5,11 +5,11 @@ import torch
 from torch import Tensor, nn
 from torch_sparse import spmm
 
-from core.utils import Slice, get_flux
+from core.utils import Slice, get_flux, yee_to_colocate_interpolate_2d
 from thirdparty.ceviche import fdfd_ez as fdfd_ez_ceviche
 from thirdparty.ceviche import fdfd_hz as fdfd_hz_ceviche
 from thirdparty.ceviche.constants import *
-from thirdparty.ceviche.derivatives import create_sfactor
+from thirdparty.ceviche.derivatives import _stretched_widths, create_sfactor
 from thirdparty.ceviche.primitives import spsp_mult
 
 from .derivatives import compute_derivative_matrices
@@ -20,6 +20,17 @@ from .solver import SparseSolveTorch
 from .utils import sparse_mv, torch_sparse_to_scipy_sparse
 
 __all__ = ["fdfd", "fdfd_ez", "fdfd_hz"]
+
+
+def _rectilinear_flux_weights(dxs, dys):
+    """Return 2D monitor weights in the axis-normal tuple convention."""
+    if dxs is None and dys is None:
+        return None
+    if dxs is None or dys is None:
+        raise ValueError("dxs and dys must be supplied together for flux weighting")
+    # get_flux selects entry 0 for x-normal planes and entry 1 for y-normal
+    # planes; each entry is therefore the transverse cell-width array.
+    return (np.asarray(dys), np.asarray(dxs))
 
 
 class fdfd(nn.Module):
@@ -244,6 +255,8 @@ class fdfd_ez(fdfd_ez_ceviche):
         numerical_solver="solve_direct",
         use_autodiff: bool = False,
         sym_precond: bool = True,
+        dxs=None,
+        dys=None,
     ):
         self.power = power
         self.A = None
@@ -261,9 +274,18 @@ class fdfd_ez(fdfd_ez_ceviche):
         )
         if isinstance(eps_r, np.ndarray):
             eps_r = torch.from_numpy(eps_r)
-        super().__init__(omega, dL, eps_r, npml, bloch_phases=bloch_phases)
+        super().__init__(
+            omega,
+            dL,
+            eps_r,
+            npml,
+            bloch_phases=bloch_phases,
+            dxs=dxs,
+            dys=dys,
+        )
 
         self.Pl = self.Pr = None
+
         # if run this function, will enable symmetric precondictioner
         if sym_precond:
             self._make_precond()
@@ -302,11 +324,18 @@ class fdfd_ez(fdfd_ez_ceviche):
         Nx, Ny = self.shape
         Nx_pml, Ny_pml = self.npml
 
-        # Create the sfactor in each direction and for 'f' and 'b'
-        sxf = create_sfactor("f", self.omega, self.dL, Nx, Nx_pml)
-        syf = create_sfactor("f", self.omega, self.dL, Ny, Ny_pml)
-
-        self.Pl, self.Pr = create_symmetrizer(sxf, syf)
+        # Ez uses the primal widths used by the forward derivatives.
+        if self.dxs is None and self.dys is None:
+            sxf = create_sfactor("f", self.omega, self.dL, Nx, Nx_pml)
+            syf = create_sfactor("f", self.omega, self.dL, Ny, Ny_pml)
+            self.Pl, self.Pr = create_symmetrizer(sxf, syf)
+        else:
+            dxs = np.asarray(self.dxs)
+            dys = np.asarray(self.dys)
+            self.Pl, self.Pr = create_symmetrizer(
+                _stretched_widths(dxs, Nx_pml, self.omega, dual=False),
+                _stretched_widths(dys, Ny_pml, self.omega, dual=False),
+            )
 
     def _make_A(self, eps_vec: torch.Tensor):
         return super()._make_A(eps_vec.detach().cpu().numpy())
@@ -489,6 +518,7 @@ class fdfd_ez(fdfd_ez_ceviche):
                             frame_slice,
                             self.dL / MICRON_UNIT,
                             "x",
+                            cell_weights=_rectilinear_flux_weights(self.dxs, self.dys),
                         )
                     )  # absolute to ensure positive flux
                 for frame_slice in y_slices:
@@ -501,6 +531,7 @@ class fdfd_ez(fdfd_ez_ceviche):
                             frame_slice,
                             self.dL / MICRON_UNIT,
                             "y",
+                            cell_weights=_rectilinear_flux_weights(self.dxs, self.dys),
                         )
                     )  # in case that opposite direction cancel each other
                 total_flux = total_flux / 2  # 2 * total_flux --> total_flux
@@ -567,6 +598,7 @@ class fdfd_ez(fdfd_ez_ceviche):
         eps_vec: torch.Tensor = self._grid_to_vec(self.eps_r)
 
         # create the A matrix for this polarization
+        ## here we assume eps_r is colocated at Ez grid.
         entries_a, indices_a = self._make_A(eps_vec)
         self.A = (entries_a, indices_a)  # record the A matrix for later storage
         if slice_name == "adj" and mode == "adj" and temp == "adj":
@@ -582,6 +614,11 @@ class fdfd_ez(fdfd_ez_ceviche):
         Fx = Fx_vec.reshape(self.shape)
         Fy = Fy_vec.reshape(self.shape)
         Fz = Fz_vec.reshape(self.shape)
+
+        Fz, Fx, Fy = yee_to_colocate_interpolate_2d(
+            pol="Ez", Ez=Fz, Hx=Fx, Hy=Fy, periodic=True
+        )
+        ## solved Ez is at the eps_r location, Hx/y are interplated to the same location.
 
         return Fx, Fy, Fz
 
@@ -599,6 +636,8 @@ class fdfd_hz(fdfd_hz_ceviche):
         numerical_solver="solve_direct",
         use_autodiff: bool = False,
         sym_precond: bool = True,
+        dxs=None,
+        dys=None,
     ):
         self.power = power
         self.A = None
@@ -616,9 +655,18 @@ class fdfd_hz(fdfd_hz_ceviche):
         )
         if isinstance(eps_r, np.ndarray):
             eps_r = torch.from_numpy(eps_r)
-        super().__init__(omega, dL, eps_r, npml, bloch_phases=bloch_phases)
+        super().__init__(
+            omega,
+            dL,
+            eps_r,
+            npml,
+            bloch_phases=bloch_phases,
+            dxs=dxs,
+            dys=dys,
+        )
 
         self.Pl = self.Pr = None
+
         if sym_precond:
             self._make_precond()
 
@@ -651,8 +699,13 @@ class fdfd_hz(fdfd_hz_ceviche):
             roll = lambda x, axis, shift: torch.roll(x, shifts=shift, dims=axis)
         else:
             roll = lambda x, axis, shift: npa.roll(x, shift=shift, axis=axis)
-        eps_grid_xx = 1 / 2 * (eps_grid + roll(eps_grid, axis=1, shift=1))
-        eps_grid_yy = 1 / 2 * (eps_grid + roll(eps_grid, axis=0, shift=1))
+        # eps_grid_xx = 1 / 2 * (eps_grid + roll(eps_grid, axis=1, shift=1))
+        # eps_grid_yy = 1 / 2 * (eps_grid + roll(eps_grid, axis=0, shift=1))
+
+        ## [Jul 10 fix] should be forward grid average.
+        eps_grid_xx = 1 / 2 * (eps_grid + roll(eps_grid, axis=1, shift=-1))
+        eps_grid_yy = 1 / 2 * (eps_grid + roll(eps_grid, axis=0, shift=-1))
+
         eps_vec_xx = self._grid_to_vec(eps_grid_xx)
         eps_vec_yy = self._grid_to_vec(eps_grid_yy)
         eps_vec_xx = eps_vec_xx
@@ -676,11 +729,17 @@ class fdfd_hz(fdfd_hz_ceviche):
         Nx, Ny = self.shape
         Nx_pml, Ny_pml = self.npml
 
-        # Create the sfactor in each direction and for 'f' and 'b'
-        sxb = create_sfactor("b", self.omega, self.dL, Nx, Nx_pml)
-        syb = create_sfactor("b", self.omega, self.dL, Ny, Ny_pml)
-
-        self.Pl, self.Pr = create_symmetrizer(sxb, syb)
+        # Hz uses the dual widths used by the backward derivatives.
+        if self.dxs is None and self.dys is None:
+            sxb = create_sfactor("b", self.omega, self.dL, Nx, Nx_pml)
+            syb = create_sfactor("b", self.omega, self.dL, Ny, Ny_pml)
+            self.Pl, self.Pr = create_symmetrizer(sxb, syb)
+        else:
+            dxs = np.asarray(self.dxs)
+            dys = np.asarray(self.dys)
+            x_dual = _stretched_widths(dxs, Nx_pml, self.omega, dual=True)
+            y_dual = _stretched_widths(dys, Ny_pml, self.omega, dual=True)
+            self.Pl, self.Pr = create_symmetrizer(x_dual, y_dual)
 
     def _make_A_scipy(self, eps_vec):
         eps_vec = eps_vec.detach().cpu().numpy()
@@ -878,6 +937,7 @@ class fdfd_hz(fdfd_hz_ceviche):
                             self.dL / MICRON_UNIT,
                             "x",
                             pol="Hz",
+                            cell_weights=_rectilinear_flux_weights(self.dxs, self.dys),
                         )
                     )  # absolute to ensure positive flux
                 for frame_slice in y_slices:
@@ -891,6 +951,7 @@ class fdfd_hz(fdfd_hz_ceviche):
                             self.dL / MICRON_UNIT,
                             "y",
                             pol="Hz",
+                            cell_weights=_rectilinear_flux_weights(self.dxs, self.dys),
                         )
                     )  # in case that opposite direction cancel each other
                 total_flux = total_flux / 2  # 2 * total_flux --> total_flux
@@ -1067,6 +1128,7 @@ class fdfd_hz(fdfd_hz_ceviche):
         # eps_vec = inject_loss_in_cladding(eps_vec, threshold=1.45**2)
 
         # create the A matrix for this polarization
+        ## here assume eps_vec is colocated at Hz. we need to have backward average to get eps_vec_xx and eps_vec_yy at Ex and Ey
         entries_a, indices_a, eps_matrix, eps_vec_xx, eps_vec_yy = self._make_A(eps_vec)
         self.eps_vec_xx = eps_vec_xx
         self.eps_vec_yy = eps_vec_yy
@@ -1092,6 +1154,12 @@ class fdfd_hz(fdfd_hz_ceviche):
         Fx = Fx_vec.reshape(self.shape)
         Fy = Fy_vec.reshape(self.shape)
         Fz = Fz_vec.reshape(self.shape)
+
+        Fz, Fx, Fy = yee_to_colocate_interpolate_2d(
+            pol="Hz", Hz=Fz, Ex=Fx, Ey=Fy, periodic=True
+        )
+        # Ex/y are interpolated to the same location as Hz.
+
         return Fx, Fy, Fz
 
 

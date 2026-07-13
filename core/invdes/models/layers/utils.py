@@ -2699,12 +2699,18 @@ def get_modes(
     eps_cross_xx=None,
     pol: str = "Ez",
     direction: str = "x",
+    dxs=None,
+    dys=None,
+    weights=None,
 ):
     """Solve for the modes of a waveguide cross section
     ARGUMENTS
         eps_cross: the permittivity profile of the waveguide
         omega:     angular frequency of the modes
-        dL:        grid size of the cross section
+        dL:        grid size of the cross section in meters for the uniform case
+        dxs, dys:  optional x/y cell-width arrays in meters. For direct
+               get_modes calls, the supplied transverse widths must have
+               length eps_cross.size and the other axis must have length 1.
         npml:      number of PML points on each side of the cross section
         m:         number of modes to solve for
         filtering: whether to filter out evanescent modes
@@ -2717,12 +2723,20 @@ def get_modes(
 
     N = eps_cross.size
 
-    matrices = compute_derivative_matrices(omega, (N, 1), [npml, 0], dL=dL)
+    matrices = compute_derivative_matrices(
+        omega,
+        (N, 1),
+        [npml, 0],
+        dL=dL,
+        dxs=dxs,
+        dys=dys,
+    )
 
     Dxf, Dxb, Dyf, Dyb, Dzf, Dzb = matrices
 
     diag_eps_r = sp.spdiags(eps_cross.flatten(), [0], N, N)
     if pol == "Ez":
+        # https://empossible.net/wp-content/uploads/2019/08/Lecture-4c-Finite-Difference-Analysis-of-Waveguides.pdf Slide 48 E mode
         A = diag_eps_r + Dxf.dot(Dxb) * (1 / k0) ** 2
     elif pol == "Hz":
         diag_eps_r_xx_inv = sp.spdiags(1 / eps_cross_xx.flatten(), [0], N, N)
@@ -2736,9 +2750,10 @@ def get_modes(
     vals, vecs = solver_eigs(A, m, guess_value=n_max**2)
 
     if pol == "Hz":
-        if direction == "x":
-            vecs = np.roll(vecs, shift=1, axis=0)
-        elif direction == "y":
+        if direction[0] == "x":
+            # vecs = np.roll(vecs, shift=1, axis=0)
+            vecs = vecs
+        elif direction[0] == "y":
             vecs = (vecs + np.roll(vecs, shift=1, axis=0)) / 2
         # vecs = np.roll(vecs, shift=1, axis=0)
 
@@ -2751,7 +2766,16 @@ def get_modes(
     if vals.size == 0:
         raise BaseException("Could not find any eigenmodes for this waveguide")
 
-    vecs = normalize_modes(vecs)
+    if weights is not None:
+        weights = np.asarray(weights, dtype=float).reshape(-1)
+        if weights.size != vecs.shape[0]:
+            raise ValueError(
+                "Mode normalization weights must have one entry per cross-section point"
+            )
+        if np.any(~np.isfinite(weights)) or np.any(weights <= 0):
+            raise ValueError("Mode normalization weights must be finite and positive")
+        weights = weights / np.mean(weights)
+    vecs = normalize_modes(vecs, weights=weights)
 
     return vals, vecs
 
@@ -2767,6 +2791,9 @@ def insert_mode(
     m="Ez1",
     filtering=False,
     direction: str = "x",
+    single_direction: bool = True,
+    dxs=None,
+    dys=None,
 ):
     """Solve for the modes in a cross section of epsr at the location defined by 'x' and 'y'
 
@@ -2774,8 +2801,19 @@ def insert_mode(
     supplied, then a target array is created with the same shape as epsr, and the mode is
     inserted into it.
     """
-    direction = direction[0]
+    """
+    https://github.com/fancompute/ceviche/blob/master/notes/FDFD_notes.pdf (Figure 2)
+    Assume epsr is always at cell center [i+1/2, j+1/2],
+    Then for Ez polarization, et_m is ez, which is at [i+1/2, j+1/2], ht_m is also at [i+1/2, j+1/2]. ht_m is colocated with et_m as an estimation.
+    For Hz polarization,
+
+    ## for nonuniform mode solving, make sure the grid is fine enough, an example, Hz for 500nm Si_eff waveguide, we use autogrid, min_per_wvl=25, 15 will get very bad mode.
+    """
+    # direction = direction[0]
     # from angler import Simulation
+    if len(direction) == 1:
+        single_direction = False
+
     if isinstance(m, int):
         pol = "Ez"  # by default Ez mode
         logger.warning("The mode is not specified, by default, it is Ez mode")
@@ -2802,6 +2840,67 @@ def insert_mode(
         target = np.zeros(epsr.shape, dtype=complex)
     epsr_cross = epsr[x, y]
 
+    # For a one-way source, the phase-shifted profile is placed in the cell
+    # immediately before/after the source slice.  On a rectilinear grid the
+    # distance between cell centers is the average of the two neighboring
+    # cell widths, not a single global ``dx``.
+    propagation_spacing = dx
+    if single_direction and (dxs is not None or dys is not None):
+        if dxs is None or dys is None:
+            raise ValueError("dxs and dys must be provided together")
+        dxs = np.asarray(dxs, dtype=float)
+        dys = np.asarray(dys, dtype=float)
+        if dxs.ndim != 1 or dys.ndim != 1:
+            raise ValueError("dxs and dys must be one-dimensional arrays")
+
+        if direction[0] == "x":
+            propagation_index = x
+            propagation_widths = dxs
+        elif direction[0] == "y":
+            propagation_index = y
+            propagation_widths = dys
+        else:
+            raise ValueError(f"Invalid direction {direction}, should be 'x' or 'y'")
+
+        if not isinstance(propagation_index, (int, np.integer)):
+            raise ValueError(
+                "The propagation-axis index must be scalar when single_direction is enabled"
+            )
+        if propagation_index < 0 or propagation_index >= propagation_widths.size:
+            raise IndexError("The source slice is outside the propagation grid")
+
+        offset = -1 if direction[1] == "+" else 1
+        offset_index = propagation_index + offset
+        if offset_index < 0 or offset_index >= propagation_widths.size:
+            raise IndexError("The phase-offset cell is outside the propagation grid")
+        propagation_spacing = 0.5 * (
+            propagation_widths[propagation_index] + propagation_widths[offset_index]
+        )
+        if not np.isfinite(propagation_spacing) or propagation_spacing <= 0:
+            raise ValueError("Propagation cell widths must be finite and positive")
+
+    transverse_spacing = None
+    if dxs is not None or dys is not None:
+        if dxs is None or dys is None:
+            raise ValueError("dxs and dys must be provided together")
+        dxs = np.asarray(dxs, dtype=float)
+        dys = np.asarray(dys, dtype=float)
+        if dxs.ndim != 1 or dys.ndim != 1:
+            raise ValueError("dxs and dys must be one-dimensional arrays")
+        if direction[0] == "x":
+            transverse_spacing = dys[y]
+        elif direction[0] == "y":
+            transverse_spacing = dxs[x]
+        else:
+            raise ValueError(f"Invalid direction {direction}, should be 'x' or 'y'")
+        transverse_spacing = np.asarray(transverse_spacing, dtype=float).reshape(-1)
+        if transverse_spacing.size != epsr_cross.size:
+            raise ValueError(
+                "Transverse spacing must have the same number of entries as epsr_cross"
+            )
+        if np.any(~np.isfinite(transverse_spacing)) or np.any(transverse_spacing <= 0):
+            raise ValueError("Transverse spacing must contain finite positive values")
+
     if pol == "Hz":
         # if len(x.shape) == 0:  # x direction slice
         #     epsr_cross_xx = epsr_cross
@@ -2809,16 +2908,37 @@ def insert_mode(
         # elif len(y.shape) == 0:  # y direction slice
         #     epsr_cross_xx = (epsr_cross + np.roll(epsr_cross, shift=1)) / 2
         #     direction = "y"
-        if direction == "x":
-            epsr_cross_xx = epsr_cross
-        elif direction == "y":
-            epsr_cross_xx = (epsr_cross + np.roll(epsr_cross, shift=1)) / 2
+        if direction[0] == "x":
+            # epsr_cross_xx = epsr_cross
+            epsr_previous = np.roll(epsr_cross, shift=1)
+            if transverse_spacing is None:
+                epsr_cross_xx = (epsr_cross + epsr_previous) / 2
+            else:
+                width = transverse_spacing
+                previous_width = np.roll(width, shift=1)
+                # Interpolate to the interface between the current cell and
+                # its previous neighbour.  The value is weighted by the
+                # opposite cell-center distance.
+                epsr_cross_xx = (
+                    width * epsr_previous + previous_width * epsr_cross
+                ) / (width + previous_width)
+            # epsr_cross_xx = (epsr_cross + np.roll(epsr_cross, shift=-1)) / 2
+        elif direction[0] == "y":
+            epsr_previous = np.roll(epsr_cross, shift=1)
+            if transverse_spacing is None:
+                epsr_cross_xx = (epsr_cross + epsr_previous) / 2
+            else:
+                width = transverse_spacing
+                previous_width = np.roll(width, shift=1)
+                epsr_cross_xx = (
+                    width * epsr_previous + previous_width * epsr_cross
+                ) / (width + previous_width)
         else:
             raise ValueError(f"Invalid direction {direction}, should be 'x' or 'y'")
 
     else:
         epsr_cross_xx = None
-        direction = "x"
+        direction = "x" + direction[1:]
 
     ## see page 89 in https://empossible.net/wp-content/uploads/2019/08/Lecture-4f-FDFD-Extras.pdf
     ## E mode: -(Dxf @ Dxb + MU_0 * eps_0 * eps_r) Ez = gamma^2 Ez
@@ -2842,6 +2962,9 @@ def insert_mode(
         eps_cross_xx=epsr_cross_xx,
         pol=pol,
         direction=direction,
+        dxs=transverse_spacing,
+        dys=(np.ones(1) if transverse_spacing is not None else None),
+        weights=transverse_spacing,
     )
 
     # Compute transverse magnetic field as:
@@ -2872,10 +2995,51 @@ def insert_mode(
     if pol == "Ez":
         e = fz
         h = beta / omega / constants.MU_0 * e
-        target[x, y] = np.atleast_2d(e)[:, m - 1].squeeze()
+        mode_profile = np.atleast_2d(e)[:, m - 1].squeeze()
+        target[x, y] = mode_profile
+
     elif pol == "Hz":
         h = fz
         e = h * omega * constants.MU_0 / beta
-        target[x, y] = np.atleast_2d(h)[:, m - 1].squeeze()
+        mode_profile = np.atleast_2d(h)[:, m - 1].squeeze()
+        target[x, y] = mode_profile
+
+    if single_direction:
+        neff = beta / (omega / constants.C_0)
+        wl_cen = (
+            (2 * np.pi * constants.C_0) / omega / neff
+        )  # effective wavelength in waveguide in unit of meter
+        mode_profile = mode_profile * np.exp(
+            -1j * 2 * np.pi / wl_cen * propagation_spacing - 1j * np.pi
+        )
+        offset = -1 if direction[1] == "+" else 1
+
+        if direction[0] == "x":
+            target[x + offset, y] = mode_profile
+        elif direction[0] == "y":
+            target[x, y + offset] = mode_profile
+
+    # import matplotlib.pyplot as plt
+
+    # fig, axes = plt.subplots(1, 4, figsize=(10, 5))
+    # im0 = axes[0].plot(
+    #     np.real(epsr_cross),
+    # )
+    # axes[0].set_title("Real part of epsr_cross")
+    # axes[1].plot(
+    #     dxs if dxs is not None else np.full(epsr_cross.shape[0], dx), label="dxs"
+    # )
+    # axes[1].set_title("dxs, Propagation widths")
+    # axes[2].plot(
+    #     dys if dys is not None else np.full(epsr_cross.shape[1], dx), label="dys"
+    # )
+    # axes[2].set_title("dys, Transverse widths")
+    # axes[3].plot(np.abs(mode_profile), label="Mode profile")
+    # plt.legend()
+    # plt.tight_layout()
+    # print(x, y, epsr.shape)
+    # print("Debug: [insert_modes] saved figures in 'insert_modes_debug.png'")
+    # plt.savefig("insert_modes_debug.png")
+    # exit(0)
 
     return h[:, m - 1], e[:, m - 1], beta, target

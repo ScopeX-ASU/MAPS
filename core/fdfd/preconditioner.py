@@ -11,16 +11,19 @@ import scipy.sparse as sp
 ## sc-pml and the nonuniform grid are both examples of diagonal scaling operators...we can symmetrize them both
 
 
-def create_symmetrizer(sxf, syf):
-    """
-    #usage should be symmetrized_A = Pl@A@Pr
-    https://github.com/zhaonat/py-maxwell-fd3d/blob/main/pyfd3d/preconditioner.py
+def create_symmetrizer(x_widths, y_widths):
+    """Return ``Pl`` and ``Pr`` such that ``Pl @ A @ Pr`` is symmetric.
+
+    The widths must be the effective widths used by the relevant forward
+    derivative.  They are primal widths for Ez and dual widths for Hz.
     """
 
-    sxf = sxf[:, None]
-    syf = syf[None, :]
+    x_widths = np.asarray(x_widths, dtype=np.complex128)
+    y_widths = np.asarray(y_widths, dtype=np.complex128)
+    if x_widths.ndim != 1 or y_widths.ndim != 1:
+        raise ValueError("grid widths must be one-dimensional")
 
-    numerator = np.sqrt((syf * sxf)).flatten()
+    numerator = np.sqrt((x_widths[:, None] * y_widths[None, :])).flatten()
 
     M = len(numerator)
 

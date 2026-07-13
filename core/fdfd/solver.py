@@ -131,33 +131,32 @@ def solve_linear(
     **kwargs,
 ):
     """Master function to call different solvers"""
-
     if solver_type == "direct":
         return _solve_direct(
-            A, b, symmetry=symmetry, clear=clear, double=double, use_pydiso=use_pydiso
+            A,
+            b,
+            symmetry=symmetry,
+            clear=clear,
+            double=double,
+            use_pydiso=use_pydiso,
         )
-    elif solver_type == "iterative":
-        return _solve_iterative(A, b, iterative_method=iterative_method, **kwargs)
-    elif solver_type == "iterative_nn":
+    if solver_type == "iterative":
+        return _solve_iterative(
+            A,
+            b,
+            iterative_method=iterative_method or DEFAULT_ITERATIVE_METHOD,
+            **kwargs,
+        )
+    if solver_type == "iterative_nn":
         return _solve_iterative_with_nn_init(
-            A, b, neural_solver, eps, iterative_method=iterative_method, **kwargs
+            A,
+            b,
+            neural_solver=neural_solver,
+            eps=eps,
+            iterative_method=iterative_method or DEFAULT_ITERATIVE_METHOD,
+            **kwargs,
         )
-    else:
-        raise ValueError(f"Solver type {solver_type} not supported")
-
-
-# def solve_linear(A, b, iterative_method=False, symmetry=False, **kwargs):
-#     """ Master function to call the others """
-
-#     if iterative_method and iterative_method is not None:
-#         # if iterative solver string is supplied, use that method
-#         return _solve_iterative(A, b, iterative_method=iterative_method, **kwargs)
-#     elif iterative_method and iterative_method is None:
-#         # if iterative_method is supplied as None, use the default
-#         return _solve_iterative(A, b, iterative_method=DEFAULT_ITERATIVE_METHOD)
-#     else:
-#         # otherwise, use a direct solver
-#         return _solve_direct(A, b, symmetry=symmetry)
+    raise ValueError(f"Unknown solver type: {solver_type}")
 
 
 def _solve_direct(
@@ -172,7 +171,7 @@ def _solve_direct(
             matrix_type = "complex_symmetric"
         else:
             mtype = 13
-            matrix_type = "complex_unsymmetric"
+            matrix_type = "complex_nonsymmetric"
         if use_pydiso and HAS_PYDISO:
             pSolve = PydisoSolver(A, matrix_type=matrix_type, factor=False)
         elif HAS_MKL:
@@ -264,26 +263,25 @@ class SparseSolveTorchFunction(torch.autograd.Function):
         numerical_solver,
         shape,
         use_autodiff=False,
-        eps: Tensor | None = None,  # 2D array of eps_r, can be used in neural solver
-        pol: str = "Ez",  # Ez or Hz
+        eps: Tensor | None = None,
+        pol: str = "Ez",
         double: bool = False,
         _solver_cache: dict | None = None,
         _A_cache: dict | None = None,
     ):
         ### entries_a: values of the sparse matrix A
         ### indices_a: row/column indices of the sparse matrix A
-        ### eps_diag: For Ez diagonal of A, e.g., -omega**2 * epr_0 * eps_r
+        ### eps_diag: For Ez, diagonal of A; for Hz, this should be a sparse matrix
         ctx.use_autodiff = use_autodiff
         if use_autodiff:
-            assert (
-                numerical_solver == "none"
-            ), f"numerical_solver {numerical_solver} is not supported when use_autodiff is True"
+            assert numerical_solver == "none", (
+                f"numerical_solver {numerical_solver} is not supported "
+                "when use_autodiff is True"
+            )
         Jz = b / (1j * omega)
         if isinstance(Jz, np.ndarray) and neural_solver is not None:
             if neural_solver["fwd_solver"] is not None:
                 Jz = torch.from_numpy(Jz).to(neural_solver["fwd_solver"].device)
-            else:
-                pass  # we will not use Jz
         if Jz.dtype == torch.complex128:
             Jz = Jz.to(torch.complex64)
         if isinstance(b, Tensor):
@@ -294,7 +292,7 @@ class SparseSolveTorchFunction(torch.autograd.Function):
 
         # epsilon = torch.tensor([EPSILON_0,], dtype=eps_diag.dtype, device=eps_diag.device)
         # omega = torch.tensor([omega,], dtype=eps_diag.dtype, device=eps_diag.device)
-        # eps = (eps_diag / (-EPSILON_0 * omega**2)).reshape(shape) # here there is an assumption that the eps_vec is a square matrix
+        # eps = (eps_diag / (-EPSILON_0 * omega**2)).reshape(shape)
         Jz = Jz.reshape(shape)
 
         if Pl is not None and Pr is not None:
@@ -304,7 +302,6 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             ctx.precond_A = A
         else:
             symmetry = False
-
         if not double:
             b = (b / SCALE).astype(np.complex64)
             A = (A / SCALE).astype(np.complex64)
