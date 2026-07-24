@@ -927,6 +927,7 @@ class BaseOptimization(nn.Module):
 
         ### create static forward computational graph from eps to J, no actual execution.
         sim_cfg = self.sim_cfg
+
         epsilon_map = (
             epsilon_map if epsilon_map is not None else self.device.epsilon_map
         )
@@ -935,6 +936,7 @@ class BaseOptimization(nn.Module):
             obj_cfgs,
             heat_source_names=heat_source_names,
         )
+
         self.control_states = control_states
         self.control_states_by_key = {
             state["control_key"]: state for state in control_states
@@ -1055,6 +1057,7 @@ class BaseOptimization(nn.Module):
         )
 
         obj_cfgs = copy.deepcopy(obj_cfgs)
+
         self.objective.add_objective(obj_cfgs)
 
         ### create static backward computational graph from J to eps, no actual execution.'

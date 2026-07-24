@@ -109,12 +109,33 @@ def filter_modes(values, vectors, filters=None):
     return values[keep_indeces], vectors[:, keep_indeces]
 
 
-def normalize_modes(vectors):
-    """Normalize each `vec` in `vectors` such that `sum(|vec|^2)=1`
-        vectors: array with shape (n_points, n_vectors)
-    NOTE: eigs already normalizes for you, so you technically dont need this function
+def normalize_modes(vectors, weights=None):
+    """Normalize each vector with an optional physical quadrature weight.
+
+    With ``weights=None`` this preserves the legacy Euclidean normalization.
+    For a rectilinear cross section, pass the transverse cell widths so that
+    the normalization represents the physical integral
+    ``sum(abs(vec)**2 * weights)``.
+
+    Args:
+        vectors: Array with shape ``(n_points, n_vectors)``.
+        weights: Optional one-dimensional array of length ``n_points``.
+
+    The unweighted form is retained for backward compatibility. Eigensolvers
+    already normalize their output, so this is mainly needed when a physical
+    quadrature measure is required.
     """
-    powers = np.sum(np.square(np.abs(vectors)), axis=0)
+    if weights is None:
+        powers = np.sum(np.square(np.abs(vectors)), axis=0)
+    else:
+        weights = np.asarray(weights, dtype=float).reshape(-1)
+        if weights.size != vectors.shape[0]:
+            raise ValueError(
+                "Normalization weights must have one entry per mode-grid point"
+            )
+        if np.any(~np.isfinite(weights)) or np.any(weights <= 0):
+            raise ValueError("Normalization weights must be finite and positive")
+        powers = np.sum(np.square(np.abs(vectors)) * weights[:, None], axis=0)
 
     return vectors / np.sqrt(powers)
 

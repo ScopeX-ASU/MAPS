@@ -263,13 +263,59 @@ def build_rectilinear_grid_metadata(
     )
 
 
+InterpMode = ["cartesian", "polar"]
+
+
+def _wrapped_phase_delta(phi1: Tensor, phi0: Tensor) -> Tensor:
+    """
+    Return phase difference wrapped to [-pi, pi].
+    """
+    return torch.atan2(torch.sin(phi1 - phi0), torch.cos(phi1 - phi0))
+
+
+def _interp_complex_cartesian(y0: Tensor, y1: Tensor, t: Tensor) -> Tensor:
+    """
+    Linear interpolation in the complex plane.
+    y0, y1: [N]
+    t: [M]
+    returns: [N, M]
+    """
+    return y0 + (y1 - y0) * t.unsqueeze(0).to(y0.dtype)
+
+
+def _interp_complex_polar(
+    y0: Tensor, y1: Tensor, t: Tensor, eps: float = 1e-12
+) -> Tensor:
+    a0 = torch.abs(y0)
+    a1 = torch.abs(y1)
+
+    # Magnitude is always interpolated linearly
+    a = a0 + (a1 - a0) * t.unsqueeze(0).to(a0.dtype)
+
+    # Wrapped phase interpolation
+    phi0 = torch.angle(y0)
+    phi1 = torch.angle(y1)
+    dphi = torch.atan2(torch.sin(phi1 - phi0), torch.cos(phi1 - phi0))
+    phi = phi0 + dphi * t.unsqueeze(0).to(phi0.dtype)
+
+    polar_val = torch.polar(a, phi)
+
+    # Fallback to cartesian where phase is unreliable
+    use_polar = (a0 > eps) & (a1 > eps)
+    cart_val = y0 + (y1 - y0) * t.unsqueeze(0).to(y0.dtype)
+
+    return torch.where(use_polar, polar_val, cart_val)
+
+
 def _torch_axis_interp(
     values: Tensor,
     src_coords: Tensor,
     dst_coords: Tensor,
     axis: int,
+    mode: InterpMode = "polar",
 ) -> Tensor:
     axis = axis if axis >= 0 else values.ndim + axis
+
     if src_coords.numel() == 1:
         expanded_shape = list(values.shape)
         expanded_shape[axis] = int(dst_coords.numel())
@@ -280,8 +326,12 @@ def _torch_axis_interp(
     if torch.any(src_coords[1:] <= src_coords[:-1]):
         raise ValueError("Source coordinates must be strictly increasing.")
 
+    if mode not in ("cartesian", "polar"):
+        raise ValueError(f"Unsupported mode: {mode}")
+
     moved = values.movedim(axis, -1)
     flat = moved.reshape(-1, moved.shape[-1])
+
     src = src_coords.to(device=values.device, dtype=values.real.dtype)
     dst = dst_coords.to(device=values.device, dtype=values.real.dtype)
 
@@ -296,9 +346,12 @@ def _torch_axis_interp(
 
     y0 = flat.index_select(1, lower)
     y1 = flat.index_select(1, upper)
+
     if torch.is_complex(values):
-        t = t.to(values.real.dtype)
-        interp = y0 + (y1 - y0) * t.unsqueeze(0).to(y0.dtype)
+        if mode == "cartesian":
+            interp = _interp_complex_cartesian(y0, y1, t)
+        else:
+            interp = _interp_complex_polar(y0, y1, t)
     else:
         interp = y0 + (y1 - y0) * t.unsqueeze(0)
 
@@ -312,6 +365,7 @@ def resample_rectilinear_tensor(
     dst_coords: Sequence[np.ndarray | Tensor],
     *,
     axes: Sequence[int] | None = None,
+    mode: InterpMode = "polar",
 ) -> Tensor:
     tensor = (
         values
@@ -334,17 +388,21 @@ def resample_rectilinear_tensor(
         )
         for coord in dst_coords
     ]
+
     if axes is None:
         axes = tuple(range(tensor.ndim - len(src_coords_t), tensor.ndim))
+
     if len(axes) != len(src_coords_t) or len(axes) != len(dst_coords_t):
         raise ValueError("axes, src_coords, and dst_coords must have the same length.")
+
     out = tensor
     for axis, src_axis, dst_axis in zip(axes, src_coords_t, dst_coords_t):
         if src_axis.shape[0] == dst_axis.shape[0] and torch.allclose(
             src_axis.to(dtype=torch.float64), dst_axis.to(dtype=torch.float64)
         ):
             continue
-        out = _torch_axis_interp(out, src_axis, dst_axis, axis)
+        out = _torch_axis_interp(out, src_axis, dst_axis, axis, mode=mode)
+
     return out
 
 
@@ -760,6 +818,95 @@ def yee_to_colocate_interpolate(
     return interpolated_F
 
 
+def _avg_adjacent_1d(
+    a: torch.Tensor, axis: int, periodic: bool = True, direction=-1
+) -> torch.Tensor:
+    """
+    Average adjacent samples along one axis while preserving shape.
+    Differentiable in PyTorch.
+
+    If periodic=True: uses wrap-around averaging.
+    If periodic=False: interior is averaged, boundary is copied through.
+    """
+    if a.ndim == 0 or a.shape[axis] <= 1:
+        return a
+
+    if periodic:
+        return 0.5 * (a + torch.roll(a, shifts=-direction, dims=axis))
+
+    out = a.clone()
+
+    # backward interior: out[..., i, ...] = 0.5 * (a[..., i, ...] + a[..., i-1, ...])
+    # forward interior: out[..., i, ...] = 0.5 * (a[..., i, ...] + a[..., i+1, ...])
+    idx_cur = [slice(None)] * a.ndim
+    idx_prev = [slice(None)] * a.ndim
+
+    if direction == -1:
+        idx_cur[axis] = slice(1, None)
+        idx_prev[axis] = slice(0, -1)
+        out[tuple(idx_cur)] = 0.5 * (a[tuple(idx_cur)] + a[tuple(idx_prev)])
+
+        # boundary: copy through
+        idx0 = [slice(None)] * a.ndim
+        idx0[axis] = 0
+        out[tuple(idx0)] = a[tuple(idx0)]
+    elif direction == 1:
+        idx_cur[axis] = slice(0, -1)
+        idx_prev[axis] = slice(1, None)
+        out[tuple(idx_cur)] = 0.5 * (a[tuple(idx_cur)] + a[tuple(idx_prev)])
+
+        # boundary: copy through
+        idx_last = [slice(None)] * a.ndim
+        idx_last[axis] = -1
+        out[tuple(idx_last)] = a[tuple(idx_last)]
+
+    return out
+
+
+def yee_to_colocate_interpolate_2d(
+    *,
+    pol: str,
+    Ez: torch.Tensor = None,
+    Hx: torch.Tensor = None,
+    Hy: torch.Tensor = None,
+    Hz: torch.Tensor = None,
+    Ex: torch.Tensor = None,
+    Ey: torch.Tensor = None,
+    periodic: bool = True,
+) -> Tuple[torch.Tensor, ...]:
+    """
+    Collocate 2D Fx/y fields onto the Fz grid.
+
+    For pol="Ez":
+        Ez stays as-is
+        Hx averaged along y
+        Hy averaged along x
+
+    For pol="Hz":
+        Hz stays as-is
+        Ex averaged along y
+        Ey averaged along x
+    """
+
+    if pol == "Ez":
+        if Ez is None or Hx is None or Hy is None:
+            raise ValueError("Need Ez, Hx, Hy for pol='Ez'")
+        Ez_c = Ez
+        Hx_c = _avg_adjacent_1d(Hx, axis=1, periodic=periodic, direction=-1)  # y-axis
+        Hy_c = _avg_adjacent_1d(Hy, axis=0, periodic=periodic, direction=-1)  # x-axis
+        return Ez_c, Hx_c, Hy_c
+
+    if pol == "Hz":
+        if Hz is None or Ex is None or Ey is None:
+            raise ValueError("Need Hz, Ex, Ey for pol='Hz'")
+        Hz_c = Hz
+        Ex_c = _avg_adjacent_1d(Ex, axis=1, periodic=periodic, direction=+1)  # y-axis
+        Ey_c = _avg_adjacent_1d(Ey, axis=0, periodic=periodic, direction=+1)  # x-axis
+        return Hz_c, Ex_c, Ey_c
+
+    raise ValueError(f"Unsupported pol={pol}")
+
+
 def _field_component_parity(
     field_type: str,  # "E" or "H"
     component: int,
@@ -983,6 +1130,9 @@ def get_eigenmode_coefficients_3d(
 ):
     ## dimensionless calculation, grid_step is forced to 1, same to fdtdx convention.
     ## input E/H fields must be co-located already.
+    assert (
+        isinstance(direction, str) and len(direction) == 2
+    ), f"direction must be a string, got {type(direction)}"
 
     if isinstance(ht_m, np.ndarray) and isinstance(Ex, torch.Tensor):
         ht_m = torch.from_numpy(ht_m).to(device=Ex.device, dtype=Ex.dtype)
@@ -1039,7 +1189,7 @@ def get_eigenmode_coefficients_3d(
     overlap_b = torch.cross(E_sim.conj(), H_m, dim=0)[axis]
 
     # import matplotlib.pyplot as plt
-    # fig, axs = plt.subplots(5, 4)
+    # fig, axs = plt.subplots(5, 4, figsize=(15, 15))
     # for c in range(3):
     #     im = axs[c, 0].imshow(E_m[c].data.abs().cpu().numpy())
     #     fig.colorbar(im, ax=axs[c, 0])
@@ -1049,6 +1199,10 @@ def get_eigenmode_coefficients_3d(
     #     fig.colorbar(im, ax=axs[c, 2])
     #     im = axs[c, 3].imshow(H_sim[c].data.abs().cpu().numpy())
     #     fig.colorbar(im, ax=axs[c, 3])
+    #     axs[c, 0].set_title(f"E_m[{c}]")
+    #     axs[c, 1].set_title(f"H_m[{c}]")
+    #     axs[c, 2].set_title(f"E_sim[{c}]")
+    #     axs[c, 3].set_title(f"H_sim[{c}]")
 
     # im0 = axs[3, 0].imshow(overlap_a.data.abs().cpu().numpy())
     # fig.colorbar(im0, ax=axs[3, 0])
@@ -1058,10 +1212,17 @@ def get_eigenmode_coefficients_3d(
     # fig.colorbar(im2, ax=axs[3, 2])
     # im3 = axs[3, 3].imshow((overlap_a - overlap_b).data.abs().cpu().numpy())
     # fig.colorbar(im3, ax=axs[3, 3])
+    # axs[3, 0].set_title("overlap_a")
+    # axs[3, 1].set_title("overlap_b")
+    # axs[3, 2].set_title("overlap_a + overlap_b")
+    # axs[3, 3].set_title("overlap_a - overlap_b")
 
     # im = axs[4, 0].imshow(dA.data.abs().cpu().numpy())
     # fig.colorbar(im, ax=axs[4, 0])
+    # axs[4, 0].set_title("dA")
+    # plt.tight_layout()
     # plt.savefig("overlap_debug.png", dpi=300)
+    # print("[DEBUG get_eigenmode_coeff_3d] ./overlap_debug.png saved")
     # input()
 
     if isinstance(dA, torch.Tensor):
@@ -1102,6 +1263,8 @@ def get_eigenmode_coefficients(
     autograd=False,
     energy=False,
     pol: str = "Ez",
+    is_field_colocated: bool = True,
+    cell_weights=None,
 ):
     ### for Ez polarization: hx, hy, ez, ht_m is hx or hy, et_m is ez
     ### for Hx polarization: ex, ey, hz, ht_m is hz, et_m is ex or ey
@@ -1118,31 +1281,44 @@ def get_eigenmode_coefficients(
         abs = torch.abs
         ravel = torch.ravel
 
+    field_monitor = Ellipsis if monitor is None else monitor
+
     if direction[0] == "x":
-        h = (0.0, ravel(hy[monitor]), 0)
+        h = (0.0, ravel(hy[field_monitor]), 0)
         if pol == "Ez":
             hm = (0.0, ht_m, 0.0)
             em = (0.0, 0.0, et_m)
         elif pol == "Hz":
             hm = (0.0, 0.0, ht_m)
             em = (0.0, -et_m, 0.0)
-        # The E-field is not co-located with the H-field in the Yee cell. Therefore,
-        # we must sample at two neighboring pixels in the propataion direction and
-        # then interpolate:
-        e_yee_shifted = grid_average(ez, monitor, direction, autograd=autograd, pol=pol)
+        if is_field_colocated:
+            e_yee_shifted = ez[field_monitor]
+        else:
+            # The E-field is not co-located with the H-field in the Yee cell. Therefore,
+            # we must sample at two neighboring pixels in the propataion direction and
+            # then interpolate:
+            e_yee_shifted = grid_average(
+                ez, monitor, direction, autograd=autograd, pol=pol
+            )
 
     elif direction[0] == "y":
-        h = (ravel(hx[monitor]), 0, 0)
+        h = (ravel(hx[field_monitor]), 0, 0)
         if pol == "Ez":
             hm = (-ht_m, 0.0, 0.0)
             em = (0.0, 0.0, et_m)
         elif pol == "Hz":
             hm = (0.0, 0.0, ht_m)
             em = (et_m, 0.0, 0.0)
-        # The E-field is not co-located with the H-field in the Yee cell. Therefore,
-        # we must sample at two neighboring pixels in the propataion direction and
-        # then interpolate:
-        e_yee_shifted = grid_average(ez, monitor, direction, autograd=autograd, pol=pol)
+
+        if is_field_colocated:
+            e_yee_shifted = ez[field_monitor]
+        else:
+            # The E-field is not co-located with the H-field in the Yee cell. Therefore,
+            # we must sample at two neighboring pixels in the propataion direction and
+            # then interpolate:
+            e_yee_shifted = grid_average(
+                ez, monitor, direction, autograd=autograd, pol=pol
+            )
 
     e = (0.0, 0.0, e_yee_shifted)
 
@@ -1152,39 +1328,82 @@ def get_eigenmode_coefficients(
     # print("this is the type of em: ", type(em[2])) # ndarray
     # print("this is the type of hy: ", type(hy[monitor])) # torch.Tensor
 
-    dl = grid_step * MICRON_UNIT
-    overlap1 = overlap(em, h, dl=dl, direction=direction)
-    overlap2 = overlap(hm, e, dl=dl, direction=direction)
+    if cell_weights is None:
+        dl = grid_step * MICRON_UNIT
+        overlap1 = overlap(em, h, dl=dl, direction=direction)
+        overlap2 = overlap(hm, e, dl=dl, direction=direction)
+        normalization = overlap(em, hm, dl=dl, direction=direction)
+    else:
+        transverse_axis = 1 if direction[0] == "x" else 0
+        if isinstance(cell_weights, (tuple, list)):
+            cell_weights = cell_weights[0 if direction[0] == "x" else 1]
+        if monitor is None:
+            weights = cell_weights
+        elif hasattr(monitor, "x") and hasattr(monitor, "y"):
+            weights = cell_weights[monitor[transverse_axis]]
+        elif isinstance(monitor, (tuple, list)):
+            weights = cell_weights[monitor[transverse_axis]]
+        else:
+            weights = cell_weights[monitor]
+
+        def weighted_overlap(first, second):
+            first_conj = tuple(
+                (
+                    torch.conj(value)
+                    if isinstance(value, torch.Tensor)
+                    else (
+                        np.conj(value)
+                        if isinstance(value, (torch.Tensor, np.ndarray))
+                        else value
+                    )
+                )
+                for value in first
+            )
+            density = cross(first_conj, second, direction=direction)
+            if isinstance(density, torch.Tensor):
+                weights_local = torch.as_tensor(
+                    weights, dtype=density.real.dtype, device=density.device
+                )
+            else:
+                weights_local = weights
+            return (density * weights_local).sum()
+
+        overlap1 = weighted_overlap(em, h)
+        overlap2 = weighted_overlap(hm, e)
+        normalization = weighted_overlap(em, hm)
 
     # import matplotlib.pyplot as plt
+    # fig, axs = plt.subplots(3, 4, figsize=(15, 13))
+    # for c in range(3):
+    #     if torch.is_tensor(em[c]):
+    #         im = axs[c, 0].plot(em[c].data.real.cpu().numpy())
 
-    # fig, axs = plt.subplots(1, 4)
-    # print(ez)
-    # print(e)
-    # print(h)
-    # print(monitor)
+    #     if torch.is_tensor(hm[c]):
+    #         im = axs[c, 1].plot(hm[c].data.real.cpu().numpy())
 
-    # axs[0].plot(em[-1].data.abs().detach().cpu().numpy())
-    # axs[0].set_title("|em[-1]|")
+    #     if torch.is_tensor(e[c]):
+    #         im = axs[c, 2].plot(e[c].data.real.cpu().numpy())
 
-    # axs[1].plot(hm[0].data.abs().detach().cpu().numpy())
-    # axs[1].set_title("|hm[0]|")
+    #     if torch.is_tensor(h[c]):
+    #         im = axs[c, 3].plot(h[c].data.real.cpu().numpy())
 
-    # axs[2].plot(e[-1].data.abs().detach().cpu().numpy())
-    # axs[2].set_title("|e[-1]|")
-
-    # axs[3].plot(h[0].data.abs().detach().cpu().numpy())
-    # axs[3].set_title("|h[0]|")
+    #     axs[c, 0].set_title(f"E_m[{c}]")
+    #     axs[c, 1].set_title(f"H_m[{c}]")
+    #     axs[c, 2].set_title(f"E_sim[{c}]")
+    #     axs[c, 3].set_title(f"H_sim[{c}]")
 
     # plt.tight_layout()
-
-    # plt.savefig("eigenmode_overlap_debug.png", dpi=300)
+    # plt.savefig("overlap_debug_2d.png", dpi=100)
+    # print("[DEBUG get_eigenmode_coeff_2d] ./overlap_debug_2d.png saved")
     # input()
 
-    normalization = overlap(em, hm, dl=dl, direction=direction)
-    normalization = (2 * normalization) ** 0.5
+    ## [07/15/2026 FIXED] this abs here is critical to ensure there is no random sign flip
+    ## without abs, the fields can have random sign flip without changing eigenmode coeff...
+    normalization = ((2 * normalization) ** 0.5).abs()
     s_p = (overlap1 + overlap2) / 2 / normalization
     s_m = (overlap1 - overlap2) / 2 / normalization
+
+    # print(f"overlap1: {overlap1.item():.4e}, overlap2: {overlap2.item():.4e}, normalization: {normalization.item():.4e}, h_mid: {h[-1][h[-1].shape[0]//2].item():.4e}, e_mid: {e[1][e[1].shape[0]//2].item():.4e}, s_p: {s_p.item():.4e}")
 
     if energy:
         s_p = abs(s_p) ** 2
@@ -3088,6 +3307,8 @@ def get_flux(
     direction: str = "x",
     autograd=False,
     pol: str = "Ez",
+    is_field_colocated: bool = True,
+    cell_weights=None,
 ):
     if autograd:
         ravel = npa.ravel
@@ -3100,6 +3321,7 @@ def get_flux(
         real = torch.real
 
     if direction[0] == "x":
+        transverse_axis = 1
         if monitor is None:
             # no need to slice and ravel
             h = (0, hy, 0)
@@ -3107,6 +3329,7 @@ def get_flux(
         else:
             h = (0, ravel(hy[monitor]), 0)
     elif direction[0] == "y":
+        transverse_axis = 0
         if monitor is None:
             h = (hx, 0, 0)
         else:
@@ -3117,14 +3340,57 @@ def get_flux(
     if monitor is None:
         e_yee_shifted = ez
     else:
-        e_yee_shifted = grid_average(ez, monitor, direction, autograd=autograd, pol=pol)
+        if is_field_colocated:
+            e_yee_shifted = ez[monitor]
+        else:
+            e_yee_shifted = grid_average(
+                ez, monitor, direction, autograd=autograd, pol=pol
+            )
 
     e = (0.0, 0.0, e_yee_shifted)
 
     if pol == "Hz":
         ## swap e and h
         e, h = h, e
-    s = 0.5 * real(overlap(e, h, dl=grid_step * MICRON_UNIT, direction=direction))
+    if cell_weights is None:
+        s = 0.5 * real(overlap(e, h, dl=grid_step * MICRON_UNIT, direction=direction))
+    else:
+        if isinstance(cell_weights, (tuple, list)):
+            cell_weights = cell_weights[0 if direction[0] == "x" else 1]
+        weights = cell_weights
+        if monitor is not None:
+            if hasattr(monitor, "x") and hasattr(monitor, "y"):
+                monitor_axis = monitor[transverse_axis]
+            elif isinstance(monitor, (tuple, list)):
+                monitor_axis = monitor[transverse_axis]
+            else:
+                monitor_axis = monitor
+            weights = weights[monitor_axis]
+        if isinstance(e_yee_shifted, torch.Tensor):
+            if isinstance(weights, torch.Tensor):
+                weights = weights.to(
+                    device=e_yee_shifted.device,
+                    dtype=e_yee_shifted.real.dtype,
+                )
+            elif isinstance(weights, np.ndarray):
+                weights = torch.as_tensor(
+                    weights,
+                    device=e_yee_shifted.device,
+                    dtype=e_yee_shifted.real.dtype,
+                )
+        flux_density = cross(
+            tuple(
+                (
+                    np.conj(v)
+                    if isinstance(v, np.ndarray)
+                    else torch.conj(v) if isinstance(v, torch.Tensor) else v
+                )
+                for v in e
+            ),
+            h,
+            direction=direction,
+        )
+        s = 0.5 * real((flux_density * weights).sum())
 
     return s
 

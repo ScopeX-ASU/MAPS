@@ -6557,6 +6557,9 @@ class N_Ports(BaseDevice):
                         _mode_E = objects[name]._mode_E[0]
                         _mode_H = objects[name]._mode_H[0]
                     # print(_mode_E.shape, _mode_H.shape)
+                    from core.fdtd.fdtd import normalize_fields_phase
+
+                    _mode_E, _mode_H = normalize_fields_phase(_mode_E, _mode_H)
                     ht_m = _jax_to_torch(_mode_H).to(torch.complex64)[None, ...]
                     et_m = _jax_to_torch(_mode_E).to(torch.complex64)[None, ...]
 
@@ -7256,6 +7259,47 @@ class N_Ports(BaseDevice):
                 k: list(v) + [require_sim] for k, v in source_profiles.items()
             }
             self.port_sources_dict[input_slice_name] = source_profiles
+
+            if plot:
+                for key, (_, ht_m, et_m, *_) in source_profiles.items():
+                    if ht_m is None or et_m is None:
+                        break
+                    import matplotlib.pyplot as plt
+
+                    fig, axes = plt.subplots(3, 6, figsize=(12, 8))
+                    ## row 0: abs; row 1: real; row 2: imag
+                    ## col 0 Ex; col 1 Ey; col 2 Ez; col 3 Hx; col 4 Hy; col 5 Hz
+                    for i, component in enumerate(["Ex", "Ey", "Ez", "Hx", "Hy", "Hz"]):
+                        ax = axes[0, i]
+                        idx = i % 3
+                        mode = ht_m if component[0] == "H" else et_m
+
+                        data = mode[0, idx].data.cpu().squeeze().numpy().T
+
+                        im = ax.imshow(np.abs(data), cmap="viridis")
+                        ax.set_title(f"|{component}|")
+                        fig.colorbar(im, ax=ax)
+
+                        ax = axes[1, i]
+                        im = ax.imshow(np.real(data), cmap="RdBu")
+                        ax.set_title(f"Re({component})")
+                        fig.colorbar(im, ax=ax)
+
+                        ax = axes[2, i]
+                        im = ax.imshow(np.imag(data), cmap="RdBu")
+                        ax.set_title(f"Im({component})")
+                        fig.colorbar(im, ax=ax)
+                    filepath = os.path.join(
+                        self.sim_cfg["plot_root"],
+                        f"{self.config.device.type}_mode-{input_slice_name}.png",
+                    )
+                    dirname = os.path.dirname(filepath)
+                    if not os.path.exists(dirname):
+                        os.makedirs(dirname)
+                    plt.tight_layout()
+                    fig.savefig(filepath, dpi=150)
+                    plt.close()
+                    break
 
         else:
             direction = self.port_monitor_slices_info[input_slice_name]["direction"]

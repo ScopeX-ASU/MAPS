@@ -5,7 +5,6 @@ from typing import Callable, List, Tuple
 import matplotlib
 
 matplotlib.use("Agg")  # Set non-interactive backend
-matplotlib.rcParams["text.usetex"] = False
 import matplotlib.patches as patches
 import matplotlib.pylab as plt
 import numpy as np
@@ -3005,7 +3004,7 @@ def insert_mode(
         target[x, y] = mode_profile
 
     if single_direction:
-        neff = beta / (omega / constants.C_0)
+        neff = beta[m - 1] / (omega / constants.C_0)
         wl_cen = (
             (2 * np.pi * constants.C_0) / omega / neff
         )  # effective wavelength in waveguide in unit of meter

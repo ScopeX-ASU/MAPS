@@ -92,13 +92,28 @@ class SMatrixObjective(object):
             self.grid_step,
         )
         target_temps = set(target_temps)
+
+        wl = list(self.sims.keys())[0][0]
+        if isinstance(wl, tuple) and len(wl) == 3:
+            is_fdtdx3d = True
+            all_raw_keys = list(self.sims.keys())
+            all_keys = []
+            for (wl_cen, wl_width, n_wl), pol, temp in all_raw_keys:
+                wls = np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl)
+                for wl in wls:
+                    all_keys.append((wl, pol, temp))
+        else:
+            is_fdtdx3d = False
+            all_keys = list(self.sims.keys())
+
         assert len(out_slice_names) == len(
             directions
-        ), "out_slice_names and directions must have the same length"
+        ), f"out_slice_names and directions must have the same length, but got {len(out_slice_names)} and {len(directions)}"
         ## for each wavelength, we evaluate the objective
         for in_slice_name in in_slice_names:
             for out_slice_name, direction in zip(out_slice_names, directions):
-                for (wl, pol, temp), sim in self.sims.items():
+                ## for each wavelength, we evaluate the objective
+                for wl, pol, temp in all_keys:
                     ## we calculate the average eigen energy for all output modes
                     if not any(
                         math.isclose(wl, target_wl, rel_tol=0, abs_tol=1e-4)
@@ -118,49 +133,104 @@ class SMatrixObjective(object):
                             src, ht_m, et_m, norm_p, require_sim = self.port_profiles[
                                 out_slice_name
                             ][(wl, out_mode)]
-                            norm_power = self.port_profiles[in_slice_name][
-                                (wl, in_mode)
-                            ][3]
+                            if is_fdtdx3d:
+                                norm_power = 1
+                            else:
+                                norm_power = self.port_profiles[in_slice_name][
+                                    (wl, in_mode)
+                                ][3]
                             monitor_slice = self.port_slices[out_slice_name]
 
-                            field = fields[(in_slice_name, wl, in_mode, temp)]
-                            pol = in_mode[:2]
-                            if pol == "Ez":
-                                fx, fy, fz = (
-                                    field["Hx"],
-                                    field["Hy"],
-                                    field["Ez"],
-                                )  # fetch fields
-                            elif pol == "Hz":
-                                fx, fy, fz = (
-                                    field["Ex"],
-                                    field["Ey"],
-                                    field["Hz"],
+                            if (in_slice_name, wl, in_mode, temp) not in fields:
+                                print(
+                                    f"field for {(in_slice_name, wl, in_mode, temp)} not found in fields. keys are {list(fields.keys())}"
                                 )
-                            if isinstance(ht_m, Tensor) and ht_m.device != fz.device:
-                                ht_m = ht_m.to(fz.device)
-                                et_m = et_m.to(fz.device)
-                                self.port_profiles[out_slice_name][(wl, out_mode)] = [
-                                    src.to(fz.device),
+
+                            field = fields[(in_slice_name, wl, in_mode, temp)]
+                            if not is_fdtdx3d:
+                                pol = in_mode[:2]
+                                if pol == "Ez":
+                                    fx, fy, fz = (
+                                        field["Hx"],
+                                        field["Hy"],
+                                        field["Ez"],
+                                    )  # fetch fields
+                                elif pol == "Hz":
+                                    fx, fy, fz = (
+                                        field["Ex"],
+                                        field["Ey"],
+                                        field["Hz"],
+                                    )
+                                if (
+                                    isinstance(ht_m, Tensor)
+                                    and ht_m.device != fz.device
+                                ):
+                                    ht_m = ht_m.to(fz.device)
+                                    et_m = et_m.to(fz.device)
+                                    self.port_profiles[out_slice_name][
+                                        (wl, out_mode)
+                                    ] = [
+                                        src.to(fz.device),
+                                        ht_m,
+                                        et_m,
+                                        norm_p,
+                                        require_sim,
+                                    ]
+                                s_p, s_m = get_eigenmode_coefficients(
+                                    fx,
+                                    fy,
+                                    fz,
                                     ht_m,
                                     et_m,
-                                    norm_p,
-                                    require_sim,
-                                ]
-                            s_p, s_m = get_eigenmode_coefficients(
-                                fx,
-                                fy,
-                                fz,
-                                ht_m,
-                                et_m,
-                                monitor_slice,
-                                grid_step=grid_step,
-                                direction=direction[0],
-                                autograd=True,
-                                energy=self.energy,
-                                pol=pol,
-                                cell_weights=self.cell_weights,
-                            )
+                                    monitor_slice,
+                                    grid_step=grid_step,
+                                    direction=direction[0],
+                                    autograd=True,
+                                    energy=self.energy,
+                                    pol=pol,
+                                    cell_weights=self.cell_weights,
+                                )
+                            else:
+                                Ex, Ey, Ez, Hx, Hy, Hz = (
+                                    field["Ex"],
+                                    field["Ey"],
+                                    field["Ez"],
+                                    field["Hx"],
+                                    field["Hy"],
+                                    field["Hz"],
+                                )
+                                if (
+                                    isinstance(ht_m, Tensor)
+                                    and ht_m.device != Ez.device
+                                ):
+                                    ht_m = ht_m.to(Ez.device)
+                                    et_m = et_m.to(Ez.device)
+                                    self.port_profiles[out_slice_name][
+                                        (wl, out_mode)
+                                    ] = [
+                                        src.to(Ez.device),
+                                        ht_m,
+                                        et_m,
+                                        norm_p,
+                                        require_sim,
+                                    ]
+                                s_p, s_m = get_eigenmode_coefficients_3d(
+                                    Ex,
+                                    Ey,
+                                    Ez,
+                                    Hx,
+                                    Hy,
+                                    Hz,
+                                    ht_m,
+                                    et_m,
+                                    monitor=monitor_slice,
+                                    grid_step=grid_step,
+                                    energy=False,
+                                    direction=direction,
+                                    grid_metadata=self.grid_metadata,
+                                    cell_weights=self.cell_weights,
+                                )
+
                             if direction[1] == "+":
                                 s = s_p
                             elif direction[1] == "-":
@@ -390,9 +460,9 @@ class EigenmodeObjective(object):
                         raise ValueError("Invalid direction")
                     # print(s, norm_power)
                     if self.energy:
-                        s_list.append(s / norm_power)
+                        s_list.append(s / abs(norm_power))
                     else:
-                        s_list.append(s / norm_power**0.5)
+                        s_list.append(s / abs(norm_power**0.5))
                     if self.obj_type == "eigenmode":
                         # only record the s parameters for eigenmode
                         # we don't need to record the s parameters if we calculate the phase
@@ -1798,6 +1868,7 @@ class ObjectiveFunc(object):
                     target_wls=target_wls,
                     target_temps=target_temps,
                     grid_step=self.grid_step,
+                    energy=cfg.get("energy", True),
                     obj_type=obj_type,
                     grid_metadata=self.grid_metadata,
                     cell_weights=self.cell_weights,

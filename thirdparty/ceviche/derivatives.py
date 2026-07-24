@@ -47,7 +47,16 @@ def curl_H(axis, Hx, Hy, Hz, dL):
 """======================= STUFF THAT CONSTRUCTS THE DERIVATIVE MATRIX ==========================="""
 
 
-def compute_derivative_matrices(omega, shape, npml, dL, bloch_x=0.0, bloch_y=0.0):
+def compute_derivative_matrices(
+    omega,
+    shape,
+    npml,
+    dL=None,
+    bloch_x=0.0,
+    bloch_y=0.0,
+    dxs=None,
+    dys=None,
+):
     """Returns sparse derivative matrices.  Currently works for 2D and 1D
     omega: angular frequency (rad/sec)
     shape: shape of the FDFD grid
@@ -55,15 +64,39 @@ def compute_derivative_matrices(omega, shape, npml, dL, bloch_x=0.0, bloch_y=0.0
     dL: spatial grid size (m)
     block_x: bloch phase (phase across periodic boundary) in x
     block_y: bloch phase (phase across periodic boundary) in y
+    dxs: optional array of x grid spacings (m) for rectilinear nonuniform grid
+    dys: optional array of y grid spacings (m) for rectilinear nonuniform grid
     """
-    if isinstance(dL, float):
+    if dxs is not None or dys is not None:
+        if len(shape) != 2:
+            raise ValueError("Rectilinear dxs/dys are currently supported only in 2D")
+        if dxs is None or dys is None:
+            raise ValueError("dxs and dys must be provided together")
+        dxs = np.asarray(dxs, dtype=float)
+        dys = np.asarray(dys, dtype=float)
+        if dxs.shape != (shape[0],) or dys.shape != (shape[1],):
+            raise ValueError("dxs and dys must match the first two grid dimensions")
+        if (
+            np.any(~np.isfinite(dxs))
+            or np.any(dxs <= 0)
+            or np.any(~np.isfinite(dys))
+            or np.any(dys <= 0)
+        ):
+            raise ValueError("dxs and dys must contain finite positive values")
+        dL = [1.0, 1.0, 1.0]
+    elif isinstance(dL, float):
         dL = [dL] * 3
+
+    if dL is not None:
+        dL = [float(d) for d in dL]
     dx, dy, dz = dL
 
     if len(shape) == 2:
         shape = shape + (1,)
 
-    # Construct derivate matrices without PML
+    # Construct derivative matrices without PML.  The uniform-grid path is
+    # intentionally unchanged.  On a rectilinear grid, PML stretching is
+    # applied below by constructing separate primal and dual complex widths.
     Dxf = createDws_new("x", "f", shape, dx)
     Dxb = createDws_new("x", "b", shape, dx)
     Dyf = createDws_new("y", "f", shape, dy)
@@ -75,15 +108,25 @@ def compute_derivative_matrices(omega, shape, npml, dL, bloch_x=0.0, bloch_y=0.0
     else:
         Dzf = Dzb = None
 
-    # make the S-matrices for PML
-    (Sxf, Sxb, Syf, Syb, Szf, Szb) = create_S_matrices_new(omega, shape, npml, dL)
-    # (Sxf, Sxb, Syf, Syb) = create_S_matrices(omega, shape[:2], npml, dL[0])
-
-    # apply PML to derivative matrices
-    Dxf = Sxf.dot(Dxf)
-    Dxb = Sxb.dot(Dxb)
-    Dyf = Syf.dot(Dyf)
-    Dyb = Syb.dot(Dyb)
+    if dxs is None:
+        # make the S-matrices for the legacy uniform-grid PML
+        (Sxf, Sxb, Syf, Syb, Szf, Szb) = create_S_matrices_new(omega, shape, npml, dL)
+        Dxf = Sxf.dot(Dxf)
+        Dxb = Sxb.dot(Dxb)
+        Dyf = Syf.dot(Dyf)
+        Dyb = Syb.dot(Dyb)
+    else:
+        # Use the same primal/dual construction as a staggered-grid SCPML.
+        # Forward differences use cell-centered (primal) widths; backward
+        # differences use face-centered (dual) widths.
+        x_primal = _stretched_widths(dxs, npml[0], omega, dual=False)
+        x_dual = _stretched_widths(dxs, npml[0], omega, dual=True)
+        y_primal = _stretched_widths(dys, npml[1], omega, dual=False)
+        y_dual = _stretched_widths(dys, npml[1], omega, dual=True)
+        Dxf = sp.diags(np.repeat(1.0 / x_primal, shape[1])).dot(Dxf)
+        Dxb = sp.diags(np.repeat(1.0 / x_dual, shape[1])).dot(Dxb)
+        Dyf = sp.diags(np.tile(1.0 / y_primal, shape[0])).dot(Dyf)
+        Dyb = sp.diags(np.tile(1.0 / y_dual, shape[0])).dot(Dyb)
 
     Dzf = Szf = None
 
@@ -92,6 +135,65 @@ def compute_derivative_matrices(omega, shape, npml, dL, bloch_x=0.0, bloch_y=0.0
         Dzb = Szb.dot(Dzb)
 
     return Dxf, Dxb, Dyf, Dyb, Dzf, Dzb
+
+
+def _pml_spacing(widths, pml_cells):
+    """Return the representative cell width used by the PML profile."""
+    pml_cells = _normalize_pml_counts(pml_cells, len(widths))
+    left_cells, right_cells = pml_cells
+    if left_cells == 0 and right_cells == 0:
+        return float(np.mean(widths))
+    left_width = np.sum(widths[:left_cells]) if left_cells else 0.0
+    right_width = np.sum(widths[-right_cells:]) if right_cells else 0.0
+    return (
+        float(left_width / left_cells) if left_cells else float(np.mean(widths)),
+        float(right_width / right_cells) if right_cells else float(np.mean(widths)),
+    )
+
+
+def _stretched_widths(widths, pml_cells, omega, dual):
+    """Return primal or dual complex widths for a nonuniform SCPML."""
+    widths = np.asarray(widths, dtype=float)
+    left_cells, right_cells = _normalize_pml_counts(pml_cells, len(widths))
+    boundaries = np.concatenate(([0.0], np.cumsum(widths)))
+    total_width = boundaries[-1]
+    left_thickness = boundaries[left_cells]
+    right_thickness = total_width - boundaries[len(widths) - right_cells]
+
+    if dual:
+        effective_widths = np.roll((widths + np.roll(widths, -1)) / 2, 1)
+        positions = boundaries[:-1]
+    else:
+        effective_widths = widths
+        positions = boundaries[:-1] + widths / 2
+
+    stretch = np.ones(len(widths), dtype=np.complex128)
+    for index, position in enumerate(positions):
+        if index < left_cells and left_thickness > 0:
+            distance = left_thickness - position
+            stretch[index] = s_value(distance, left_thickness, omega)
+        elif right_cells and index >= len(widths) - right_cells:
+            distance = position - boundaries[len(widths) - right_cells]
+            stretch[index] = s_value(distance, right_thickness, omega)
+    return effective_widths * stretch
+
+
+def _normalize_pml_counts(pml_cells, axis_length):
+    """Normalize a scalar or ``(left, right)`` PML count specification."""
+    values = (pml_cells, pml_cells) if np.isscalar(pml_cells) else tuple(pml_cells)
+    if len(values) != 2:
+        raise ValueError("PML cell counts must be a scalar or (left, right) pair")
+    counts = []
+    for value in values:
+        if not np.isfinite(value) or int(value) != value:
+            raise ValueError("PML cell counts must be integer-valued")
+        count = int(value)
+        if count < 0:
+            raise ValueError("PML cell counts must be non-negative")
+        counts.append(count)
+    if sum(counts) > axis_length:
+        raise ValueError("PML cell counts exceed the number of grid cells")
+    return tuple(counts)
 
 
 """ Derivative Matrices (no PML) """
@@ -197,47 +299,87 @@ def create_S_matrices_new(omega, shape, npml, dL):
 def create_sfactor(dir, omega, dL, N, N_pml):
     """creates the S-factor cross section needed in the S-matrices"""
 
+    N_pml = _normalize_pml_counts(N_pml, N)
+
     #  for no PNL, this should just be zero
-    if N_pml == 0:
+    if N_pml == (0, 0):
         return np.ones(N, dtype=np.complex128)
 
     # otherwise, get different profiles for forward and reverse derivative matrices
-    dw = N_pml * dL
+    if np.isscalar(dL):
+        widths = np.full(N, float(dL))
+    else:
+        widths = np.asarray(dL, dtype=float)
+        if widths.shape != (N,):
+            raise ValueError(
+                "PML widths must be a scalar or an array matching the axis"
+            )
+    dw = (
+        float(np.sum(widths[: N_pml[0]])),
+        float(np.sum(widths[N - N_pml[1] :])) if N_pml[1] else 0.0,
+    )
     if dir == "f":
-        return create_sfactor_f(omega, dL, N, N_pml, dw)
+        return create_sfactor_f(omega, widths, N, N_pml, dw)
     elif dir == "b":
-        return create_sfactor_b(omega, dL, N, N_pml, dw)
+        # Dxb/Dyb are evaluated on the dual grid.  Use the same
+        # face-centered widths for their PML coordinates; using the
+        # primal-cell widths here creates a stretch discontinuity whenever
+        # adjacent nonuniform cells differ.
+        face_widths = np.roll((widths + np.roll(widths, -1)) / 2, 1)
+        return create_sfactor_b(omega, face_widths, N, N_pml, dw)
     else:
         raise ValueError("Dir value {} not recognized".format(dir))
 
 
 def create_sfactor_f(omega, dL, N, N_pml, dw):
     """S-factor profile for forward derivative matrix"""
+    widths = np.asarray(dL, dtype=float)
+    left_pml, right_pml = N_pml
+    left_dw, right_dw = dw
     sfactor_array = np.ones(N, dtype=np.complex128)
     for i in range(N):
         # if i <= N_pml: # 3.5, 2.5, 1.5, 0.5 000000
         #     sfactor_array[i] = s_value(dL * (N_pml - i + 0.5), dw, omega)
         # elif i > N - N_pml: # 00000 0.5, 1.5
         #     sfactor_array[i] = s_value(dL * (i - (N - N_pml) - 0.5), dw, omega)
-        if i < N_pml:  # left NPML 2.5 1.5 0.5 0000
-            sfactor_array[i] = s_value(dL * (N_pml - i - 0.5), dw, omega)
-        elif i >= N - N_pml:  # right NPML 00000 0.5 1.5 2.5
-            sfactor_array[i] = s_value(dL * (i - (N - N_pml) + 0.5), dw, omega)
+        if i < left_pml:  # left NPML 2.5 1.5 0.5 0000
+            sfactor_array[i] = s_value(
+                left_dw - (np.sum(widths[:i]) + widths[i] / 2),
+                left_dw,
+                omega,
+            )
+        elif right_pml and i >= N - right_pml:  # right NPML 00000 0.5 1.5 2.5
+            sfactor_array[i] = s_value(
+                np.sum(widths[N - right_pml : i]) + widths[i] / 2,
+                right_dw,
+                omega,
+            )
     return sfactor_array
 
 
 def create_sfactor_b(omega, dL, N, N_pml, dw):
     """S-factor profile for backward derivative matrix"""
+    widths = np.asarray(dL, dtype=float)
+    left_pml, right_pml = N_pml
+    left_dw, right_dw = dw
     sfactor_array = np.ones(N, dtype=np.complex128)
     for i in range(N):
         # if i <= N_pml: # 4 3 2 1 00000
         #     sfactor_array[i] = s_value(dL * (N_pml - i + 1), dw, omega)
         # elif i > N - N_pml: # 0000 0 1
         #     sfactor_array[i] = s_value(dL * (i - (N - N_pml) - 1), dw, omega)
-        if i < N_pml:  # left NPML 3 2 1 0000
-            sfactor_array[i] = s_value(dL * (N_pml - i), dw, omega)
-        elif i > N - N_pml:  # right NPML - 1  00000 1 2
-            sfactor_array[i] = s_value(dL * (i - (N - N_pml)), dw, omega)
+        if i < left_pml:  # left NPML 3 2 1 0000
+            sfactor_array[i] = s_value(
+                np.sum(widths[i:left_pml]),
+                left_dw,
+                omega,
+            )
+        elif right_pml and i >= N - right_pml:  # right NPML 00000 1 2
+            sfactor_array[i] = s_value(
+                np.sum(widths[N - right_pml : i + 1]),
+                right_dw,
+                omega,
+            )
     return sfactor_array
 
 

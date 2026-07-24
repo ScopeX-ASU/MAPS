@@ -2,7 +2,14 @@ import math
 
 import torch
 
-from .morph_op import dilation
+try:
+    from .morph_op import dilation
+
+    HAS_MORPH_OP = True
+except:
+    from kornia.morphology import dilation
+
+    HAS_MORPH_OP = False
 
 
 class _ScaleGradient(torch.autograd.Function):
@@ -101,13 +108,22 @@ def _build_integer_dilation_cache(field_4d, radius_px):
             device=field_4d.device,
             dtype=field_4d.dtype,
         )
-        cache[int(radius)] = dilation(
-            field_4d,
-            kernel=kernel,
-            structuring_element=None,
-            border_type="geodesic",
-            engine="triton",
-        )
+        if HAS_MORPH_OP:
+            cache[int(radius)] = dilation(
+                field_4d,
+                kernel=kernel,
+                structuring_element=None,
+                border_type="geodesic",
+                engine="triton",
+            )
+        else:
+            cache[int(radius)] = dilation(
+                field_4d,
+                kernel=kernel,
+                structuring_element=None,
+                border_type="geodesic",
+                engine="convolution",
+            )
     return cache
 
 

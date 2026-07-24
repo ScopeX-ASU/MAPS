@@ -419,6 +419,59 @@ def real_box_to_grid_slices(
     return tuple(grid_slices)
 
 
+def normalize_fields_phase(E: Tensor, H: Tensor) -> tuple[Tensor, Tensor]:
+    """
+    Normalize the global phase of source fields.
+
+    Args:
+        E: complex jax array of shape [..., 3, X, Y, Z]
+        H: complex jax array of shape [..., 3, X, Y, Z]
+
+    Returns:
+        E_norm, H_norm
+    """
+    assert (
+        len(E.shape) >= 3 and E.shape == H.shape
+    ), "E and H must have the same shape with at least 3 dimensions."
+
+    if isinstance(E, torch.Tensor):
+        E_s = E.squeeze()  # [3, H, W]
+        H_s = H.squeeze()  # [3, H, W]
+        # Total field magnitude
+        mag = torch.sqrt(torch.sum(torch.abs(E_s) ** 2 + torch.abs(H_s) ** 2, dim=-3))
+
+        # Location of maximum magnitude
+        idx = torch.argmax(mag)
+        h, w = mag.shape[-2:]
+        y = idx // w
+        x = idx % w
+
+        # Strongest vector component
+        field = torch.cat([E_s[..., y, x], H_s[..., y, x]])
+        phase = torch.angle(field[torch.argmax(torch.abs(field))])
+
+        phase_factor = torch.exp(-1j * phase)
+
+        return E * phase_factor, H * phase_factor
+    elif isinstance(E, jnp.ndarray):
+        # Total field magnitude
+        E_s = jnp.squeeze(E)  # [3, H, W]
+        H_s = jnp.squeeze(H)  # [3, H, W]
+        mag = jnp.sqrt(jnp.sum(jnp.abs(E_s) ** 2 + jnp.abs(H_s) ** 2, axis=-3))
+
+        # Location of maximum magnitude
+        idx = jnp.argmax(mag)
+        y, x = jnp.unravel_index(idx, mag.shape[-2:])
+
+        # Find the strongest vector component at that location
+        field = jnp.concatenate([E_s[..., y, x], H_s[..., y, x]])
+        phase = jnp.angle(field[jnp.argmax(jnp.abs(field))])
+
+        phase_factor = jnp.exp(-1j * phase)
+
+        return E * phase_factor, H * phase_factor
+
+
 class fdtd3d(nn.Module):
     """Base class for fdtdx-backed differentiable 3D FDTD simulations."""
 
@@ -681,6 +734,7 @@ class fdtd3d(nn.Module):
         monitor,
         extra_monitors=None,
         normalize_source_power=False,
+        normalize_source_phase=False,
         direction: str | None = None,
         symmetry: tuple[int, int, int] = (0, 0, 0),
     ):
@@ -989,6 +1043,19 @@ class fdtd3d(nn.Module):
 
             source = source.aset("_E", E_norm)
             source = source.aset("_H", H_norm)
+            objects = objects.replace_sources([source])
+        if normalize_source_phase:
+            source = objects[source.name]
+            # After apply_params, manually normalize by Poynting flux
+
+            # find phase in the max magnitude point
+            E_norm, H_norm = normalize_fields_phase(
+                source._E,
+                source._H,
+            )
+            source = source.aset("_E", E_norm)
+            source = source.aset("_H", H_norm)
+            objects = objects.replace_sources([source])
             # print(f"normalize_source_power takes {time.time() - start:.2f} seconds")
         # self.arrays = arrays
         # self.objects = objects
@@ -1167,6 +1234,7 @@ class fdtd3d(nn.Module):
                 monitor=monitor,
                 extra_monitors=extra_monitors,
                 normalize_source_power=False,
+                normalize_source_phase=True,
                 direction=direction,
                 symmetry=self.symmetry,
             )

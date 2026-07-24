@@ -14,7 +14,7 @@ from .utils import get_entries_indices
 class fdfd:
     """Base class for FDFD simulation"""
 
-    def __init__(self, omega, dL, eps_r, npml, bloch_phases=None):
+    def __init__(self, omega, dL, eps_r, npml, bloch_phases=None, dxs=None, dys=None):
         """initialize with a given structure and source
         omega: angular frequency (rad/s)
         dL: grid cell size (m)
@@ -27,6 +27,8 @@ class fdfd:
             omega  # * 1e6 # if convert to nm, numerical value in A is much smaller
         )
         self.dL = dL  # * 1e6
+        self.dxs = dxs
+        self.dys = dys
         self.npml = npml
 
         self._setup_bloch_phases(bloch_phases)
@@ -97,6 +99,8 @@ class fdfd:
             self.dL,
             bloch_x=self.bloch_x,
             bloch_y=self.bloch_y,
+            dxs=self.dxs,
+            dys=self.dys,
         )
 
         # stores the raw sparse matrices
@@ -228,8 +232,10 @@ class fdfd:
 class fdfd_ez(fdfd):
     """FDFD class for linear Ez polarization"""
 
-    def __init__(self, omega, dL, eps_r, npml, bloch_phases=None):
-        super().__init__(omega, dL, eps_r, npml, bloch_phases=bloch_phases)
+    def __init__(self, omega, dL, eps_r, npml, bloch_phases=None, dxs=None, dys=None):
+        super().__init__(
+            omega, dL, eps_r, npml, bloch_phases=bloch_phases, dxs=dxs, dys=dys
+        )
 
     def _make_A(self, eps_vec):
         C = -1 / MU_0 * self.Dxf.dot(self.Dxb) - 1 / MU_0 * self.Dyf.dot(self.Dyb)
@@ -254,13 +260,20 @@ class fdfd_ez(fdfd):
 class fdfd_hz(fdfd):
     """FDFD class for linear Ez polarization"""
 
-    def __init__(self, omega, dL, eps_r, npml, bloch_phases=None):
-        super().__init__(omega, dL, eps_r, npml, bloch_phases=bloch_phases)
+    def __init__(self, omega, dL, eps_r, npml, bloch_phases=None, dxs=None, dys=None):
+        super().__init__(
+            omega, dL, eps_r, npml, bloch_phases=bloch_phases, dxs=dxs, dys=dys
+        )
 
     def _grid_average_2d(self, eps_vec):
         eps_grid = self._vec_to_grid(eps_vec)
-        eps_grid_xx = 1 / 2 * (eps_grid + npa.roll(eps_grid, axis=1, shift=1))
-        eps_grid_yy = 1 / 2 * (eps_grid + npa.roll(eps_grid, axis=0, shift=1))
+        # eps_grid_xx = 1 / 2 * (eps_grid + npa.roll(eps_grid, axis=1, shift=1))
+        # eps_grid_yy = 1 / 2 * (eps_grid + npa.roll(eps_grid, axis=0, shift=1))
+
+        ## [Jul 10 fix] should be forward grid average.
+        eps_grid_xx = 1 / 2 * (eps_grid + npa.roll(eps_grid, axis=1, shift=-1))
+        eps_grid_yy = 1 / 2 * (eps_grid + npa.roll(eps_grid, axis=0, shift=-1))
+
         eps_vec_xx = self._grid_to_vec(eps_grid_xx)
         eps_vec_yy = self._grid_to_vec(eps_grid_yy)
         eps_vec_xx = eps_vec_xx
