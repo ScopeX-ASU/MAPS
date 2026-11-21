@@ -1,14 +1,24 @@
+"""
+this is a wrapper for the invdes module
+we call use InvDesign.optimize() to optimize the inventory design
+basically, this should be like the training logic like in train_NN.py
+"""
+
 import os
 import sys
+from pathlib import Path
 
-# Add the project root to sys.path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
+)
 import argparse
-import random
 
 import torch
 import torch.nn.functional as F
+from autograd.numpy import array as npa
+from pyutils.config import Config
 
+from core.invdes.invdesign import InvDesign
 from core.invdes.models import MMIOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import MMI
@@ -33,39 +43,30 @@ def compare_designs(design_regions_1, design_regions_2):
 def mmi_opt(
     device_id,
     operation_device,
+    dump_data_dir,
     each_step=False,
     include_perturb=False,
-    perturb_probs=[0.05, 0.1, 0.15],
-    mfs=0.05,
+    perturb_probs=[0.1, 0.3, 0.5],
 ):
     set_torch_deterministic(int(device_id))
-    device_name = "mmi"
-    dump_data_path = f"./data/fdfd/{device_name}/raw_opt_traj_ptb"
+    dump_data_path = Path(dump_data_dir)
+    dump_data_path.mkdir(parents=True, exist_ok=True)
     sim_cfg = DefaultSimulationConfig()
-    target_img_size = 512
-    resolution = 50
-    target_cell_size = target_img_size / resolution  # 10.24
-    port_len = round(random.uniform(2, 2.4) * resolution) / resolution
 
-    wdm_region_size = [
-        round((target_cell_size - 2 * port_len) * resolution) / resolution,
-        round((target_cell_size - 2 * port_len) * resolution) / resolution,
-    ]
-    assert (
-        round(wdm_region_size[0] + 2 * port_len, 2) == target_cell_size
-    ), f"right hand side: {wdm_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
+    mmi_region_size = (4, 4)
+    # mmi_region_size = (6, 6
+    port_len = 1.8
 
     input_port_width = 0.48
     output_port_width = 0.48
-    num_inports = 3
-    num_outports = 3
+    exp_name = "mmi_opt"
 
     sim_cfg.update(
         dict(
             solver="ceviche_torch",
-            border_width=[0, 0, port_len, port_len],
-            resolution=resolution,
-            plot_root=f"./data/fdfd/{device_name}/plot_opt_traj_ptb/{device_name}_{device_id}",
+            border_width=[0, 0, 1, 1],  # left, right, lower, upper, containing PML
+            resolution=100,
+            plot_root=f"./figs/{exp_name}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -75,19 +76,8 @@ def mmi_opt(
             n_wl=1,
         )
     )
-
-    device = MMI(
-        sim_cfg=sim_cfg,
-        box_size=wdm_region_size,
-        port_len=(port_len, port_len),
-        port_width=(input_port_width, output_port_width),
-        num_inports=num_inports,
-        num_outports=num_outports,
-        port_box_margin=1,
-        device=operation_device,
-    )
-    hr_device = device.copy(resolution=310)
-    print(device)
+    num_inports = 3
+    num_outports = 3
 
     target_unitary_smatrix = torch.randn(
         (num_inports, num_outports), dtype=torch.complex64, device=operation_device
@@ -112,31 +102,56 @@ def mmi_opt(
         for key, obj in breakdown.items():
             if key == "smatrix":
                 s_matrix = obj["value"]  # shape (num_outports, num_inports)
+                print(s_matrix)
                 fom = (
                     -torch.norm(s_matrix - target_unitary_smatrix.flatten())
                     / target_norm
                 )
+        # for key, obj in breakdown.items():
+        #     if "fwd_trans" in key:
+        #         fom = fom * obj["value"]
+        #     elif "phase" in key:
+        #         s_param_list.append(obj["value"])
+        # if len(s_param_list) == 0:
+        #     return fom
+        # if isinstance(s_param_list[0], torch.Tensor):
+        #     s_params = torch.tensor(s_param_list)
+        #     s_params_std = torch.std(s_params)
+        #     fom = fom - s_params_std
+        # else:
+        #     s_params = npa.array(s_param_list)
+        #     s_params_std = npa.std(s_params)
+        #     fom = fom - s_params_std
+        # maximize the forward transmission and minimize the standard deviation of the s-parameters
         return fom, {"smatrix_err": {"weight": -1, "value": fom}}
 
     obj_cfgs = dict(_fusion_func=fom_func)
 
+    device = MMI(
+        material_ports=("Si_eff", "Si_eff"),
+        material_cladding="SiO2",
+        region_material_r1_layers=("Si_eff",),
+        region_material_r2_layers=("SiO2",),
+        is_design_region=(True,),
+        sim_cfg=sim_cfg,
+        box_size=mmi_region_size,
+        port_len=(port_len, port_len),
+        port_width=(input_port_width, output_port_width),
+        num_inports=num_inports,
+        num_outports=num_outports,
+        device=operation_device,
+        port_box_margin=0.5,
+    )
+
+    hr_device = device.copy(resolution=1000)
+    print(device)
     opt = MMIOptimization(
         device=device,
         hr_device=hr_device,
         sim_cfg=sim_cfg,
-        obj_cfgs=obj_cfgs,
         operation_device=operation_device,
+        obj_cfgs=obj_cfgs,
     ).to(operation_device)
-    for region_name in device.design_region_cfgs:
-        opt.design_region_param_cfgs[region_name]["transform"] = [
-            dict(
-                type="fft",
-                mfs=mfs,
-                resolutions=[hr_device.resolution, hr_device.resolution],
-                dim="xy",
-            ),
-            dict(type="binarize"),
-        ]
 
     print(opt)
     n_epoch = 1
@@ -174,7 +189,7 @@ def mmi_opt(
 
                 print(f"Pert {step}:", end=" ")
                 for k, obj in results_perturbed["breakdown"].items():
-                    print(f"{k}: {obj['value']}", end=", ")
+                    print(f"{k}: {obj['value']:.3f}", end=", ")
                 print()
 
                 (-results_perturbed["obj"]).backward()
@@ -182,25 +197,26 @@ def mmi_opt(
                 # Dump data for the perturbed model
                 filename_h5 = (
                     dump_data_path
-                    + f"/{device_name}_id-{device_id}_opt_step_{step}_perturbed_{i}.h5"
+                    / f"mmi_id-{device_id}_opt_step_{step}_perturbed_{i}.h5"
                 )
-                filename_yml = (
-                    dump_data_path + f"/{device_name}_id-{device_id}_perturbed_{i}.yml"
-                )
+                filename_yml = dump_data_path / f"mmi_id-{device_id}_perturbed_{i}.yml"
                 opt.dump_data(
-                    filename_h5=filename_h5, filename_yml=filename_yml, step=step
+                    filename_h5=str(filename_h5),
+                    filename_yml=str(filename_yml),
+                    step=step,
                 )
 
-                for in_port_idx in range(1, num_inports + 1):
-                    opt.plot(
-                        eps_map=opt._eps_map,
-                        obj=results["breakdown"]["smatrix_err"]["value"],
-                        plot_filename=f"{device_name}_opt_step_{step}_s{in_port_idx}_perturbed_{i}.png",
-                        field_key=(f"in_slice_{in_port_idx}", 1.55, "Ez1", 300),
-                        field_component="Ez",
-                        in_slice_name=f"in_slice_{in_port_idx}",
-                        exclude_slice_names=[],
-                    )
+                opt.plot(
+                    eps_map=opt._eps_map,
+                    obj=results["breakdown"]["fwd_trans"]["value"],
+                    plot_filename=str(
+                        dump_data_path / f"mmi_opt_step_{step}_fwd_perturbed_{i}.png"
+                    ),
+                    field_key=("in_slice_1", 1.55, "Ez1", 300),
+                    field_component="Ez",
+                    in_slice_name="in_slice_1",
+                    exclude_slice_names=[],
+                )
 
             finally:
                 # Restore the original parameters and optimizer state
@@ -220,24 +236,18 @@ def mmi_opt(
         sharpness = sharp_scheduler.get_sharpness()
         results = opt.forward(sharpness=sharpness)
         # results = opt.forward(sharpness=256)
-        print(f"Step {step}:", end=" ")
-        for k, obj in results["breakdown"].items():
-            print(f"{k}: {obj['value']}", end=", ")
-        print()
+        # print(f"Step {step}:", end=" ")
+        # for k, obj in results["breakdown"].items():
+        #     print(f"{k}: {obj['value']:.3f}", end=", ")
+        # print()
 
         (-results["obj"]).backward()
         current_design_region_dict = opt.get_design_region_eps_dict()
-        filename_h5 = (
-            dump_data_path + f"/{device_name}_id-{device_id}_opt_step_{step}.h5"
-        )
-        filename_yml = dump_data_path + f"/{device_name}_id-{device_id}.yml"
+        filename_h5 = dump_data_path / f"mmi_id-{device_id}_opt_step_{step}.h5"
+        filename_yml = dump_data_path / f"mmi_id-{device_id}.yml"
 
         # Store the current breakdown for early stopping
-        current_breakdown = {
-            k: obj["value"]
-            for k, obj in results["breakdown"].items()
-            if not (isinstance(obj["value"], torch.Tensor) and obj["value"].numel() > 1)
-        }
+        current_breakdown = {k: obj["value"] for k, obj in results["breakdown"].items()}
         breakdown_history.append(current_breakdown)
 
         # Keep only the last `patience` results in the history
@@ -260,39 +270,48 @@ def mmi_opt(
                 break
 
         if last_design_region_dict is None:
-            opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
+            opt.dump_data(
+                filename_h5=str(filename_h5),
+                filename_yml=str(filename_yml),
+                step=step,
+            )
             last_design_region_dict = current_design_region_dict
             dumped_data = True
-            for in_port_idx in range(1, num_inports + 1):
-                opt.plot(
-                    eps_map=opt._eps_map,
-                    obj=results["breakdown"]["smatrix_err"]["value"],
-                    plot_filename=f"{device_name}_opt_step_{step}_s{in_port_idx}.png",
-                    field_key=(f"in_slice_{in_port_idx}", 1.55, "Ez1", 300),
-                    field_component="Ez",
-                    in_slice_name=f"in_slice_{in_port_idx}",
-                    exclude_slice_names=[],
-                )
+            # opt.plot(
+            #     eps_map=opt._eps_map,
+            #     obj=results["breakdown"]["fwd_trans"]["value"],
+            #     plot_filename="bending_opt_step_{}_fwd.png".format(step),
+            #     field_key=("in_slice_1", 1.55, "Ez1", 300),
+            #     field_component="Ez",
+            #     in_slice_name="in_slice_1",
+            #     exclude_slice_names=[],
+            # )
         else:
             cosine_similarity = compare_designs(
                 last_design_region_dict, current_design_region_dict
             )
-            if cosine_similarity < 0.996 or step == n_epoch - 1 or each_step:
+            if (
+                cosine_similarity < 0.9
+                or step == n_epoch - 1
+                or each_step
+                or step % 10 == 0
+            ):
                 opt.dump_data(
-                    filename_h5=filename_h5, filename_yml=filename_yml, step=step
+                    filename_h5=str(filename_h5),
+                    filename_yml=str(filename_yml),
+                    step=step,
                 )
                 last_design_region_dict = current_design_region_dict
                 dumped_data = True
-                for in_port_idx in range(1, num_inports + 1):
-                    opt.plot(
-                        eps_map=opt._eps_map,
-                        obj=results["breakdown"]["smatrix_err"]["value"],
-                        plot_filename=f"{device_name}_opt_step_{step}_s{in_port_idx}.png",
-                        field_key=(f"in_slice_{in_port_idx}", 1.55, "Ez1", 300),
-                        field_component="Ez",
-                        in_slice_name=f"in_slice_{in_port_idx}",
-                        exclude_slice_names=[],
-                    )
+                # opt.plot(
+                #     eps_map=opt._eps_map,
+                #     obj=results["breakdown"]["fwd_trans"]["value"],
+                #     plot_filename="bending_opt_step_{}_fwd.png".format(step),
+                #     field_key=("in_slice_1", 1.55, "Ez1", 300),
+                #     field_component="Ez",
+                #     in_slice_name="in_slice_1",
+                #     exclude_slice_names=[],
+                # )
         # for p in opt.parameters():
         #     print(p.grad)
         # print_stat(list(opt.parameters())[0], f"step {step}: grad: ")
@@ -312,18 +331,32 @@ def main():
     parser.add_argument("--gpu_id", type=int, default=0)
     parser.add_argument("--each_step", type=int, default=0)
     parser.add_argument("--include_perturb", type=int, default=0)
-    parser.add_argument("--mfs", type=float, default=0.05)
+    parser.add_argument("--num_patterns", type=int, default=1)
+    parser.add_argument(
+        "--dump_root", type=str, default="./data/fdfd/mmi_t/raw_opt_traj_ptb"
+    )
     args = parser.parse_args()
     random_seed = args.random_seed
     gpu_id = args.gpu_id
-    each_step = args.each_step
-    include_perturb = args.include_perturb
-    mfs = args.mfs
+    each_step = bool(args.each_step)
+    include_perturb = bool(args.include_perturb)
+    num_patterns = max(1, args.num_patterns)
+    dump_root = Path(args.dump_root)
+    dump_root.mkdir(parents=True, exist_ok=True)
     torch.cuda.set_device(gpu_id)
     device = torch.device("cuda:" + str(gpu_id))
     torch.backends.cudnn.benchmark = True
-    set_torch_deterministic(int(41 + random_seed))
-    mmi_opt(random_seed, device, each_step, include_perturb, mfs=mfs)
+    for pattern_idx in range(num_patterns):
+        pattern_seed = random_seed + pattern_idx
+        set_torch_deterministic(int(41 + pattern_seed))
+        pattern_dir = dump_root / f"pattern_{pattern_idx:03d}_seed_{pattern_seed}"
+        mmi_opt(
+            pattern_seed,
+            device,
+            dump_data_dir=str(pattern_dir),
+            each_step=each_step,
+            include_perturb=include_perturb,
+        )
 
 
 if __name__ == "__main__":

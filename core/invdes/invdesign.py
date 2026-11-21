@@ -6,11 +6,15 @@ basically, this should be like the training logic like in train_NN.py
 
 import gc
 import os
+import random
 import sys
+import tempfile
 import traceback
-from typing import Any, Dict
+from collections.abc import Mapping
+from copy import deepcopy
+from typing import Any, Dict, Optional
 
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../MAPS"))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
 sys.path.insert(0, project_root)
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -26,12 +30,27 @@ from core.invdes import builder
 from core.invdes.models import BendingOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import Bending
+from core.invdes.run_management import OptimizationRunManager
 from core.utils import set_torch_deterministic
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 
 def normalize_grad(g, mode="p95", eps=1e-12):
+    """
+    Normalize a gradient tensor according to a selectable scale statistic.
+
+    Args:
+        g: PyTorch gradient tensor; shape, dtype, and device are preserved.
+        mode: ``abs_mean``, ``rms``, or ``p95``. ``p95`` clips the result to ``[-1, 1]``.
+        eps: Positive lower bound for the normalization scale.
+
+    Returns:
+        Tensor with the same shape, dtype, and device as ``g``.
+
+    Example:
+        ``normalize_grad(torch.tensor([-2.0, 0.0, 4.0]), mode="rms")`` returns shape ``[3]``.
+    """
     if mode == "abs_mean":
         scale = g.abs().mean()
         return g / scale.clamp_min(eps)
@@ -48,15 +67,75 @@ def normalize_grad(g, mode="p95", eps=1e-12):
 
 
 def clamp_parameters(invdes, min_val=-0.5, max_val=0.5):
+    """
+    Clamp all learnable inverse-design parameters in-place.
+
+    Args:
+        invdes: ``InvDesign`` instance whose ``devOptimization`` owns the learnable parameters.
+        min_val: Inclusive lower bound.
+        max_val: Inclusive upper bound.
+
+    Returns:
+        None; parameters are modified in-place under ``torch.no_grad()``.
+    """
     with torch.no_grad():
         for param in invdes.devOptimization.parameters():
             param.data.clamp_(min_val, max_val)
 
 
+def clamp_material_parameters(invdes, min_val=0.0, max_val=1.0):
+    """Clamp normalized digital-material parameters after an optimizer step.
+
+    Args:
+        invdes: ``InvDesign`` instance whose device-optimization model owns the
+            material parameters. Modules exposing a ``material_rho`` tensor are
+            clamped; unrelated geometry and model parameters are unchanged.
+        min_val: Inclusive lower bound. Defaults to ``0.0``.
+        max_val: Inclusive upper bound. Defaults to ``1.0``.
+
+    Returns:
+        None; material parameters are modified in-place under ``torch.no_grad()``.
+
+    Raises:
+        ValueError: If ``min_val`` is greater than ``max_val``.
+    """
+    if min_val > max_val:
+        raise ValueError("min_val must not exceed max_val")
+
+    with torch.no_grad():
+        for module in invdes.devOptimization.modules():
+            material_rho = getattr(module, "material_rho", None)
+            if isinstance(material_rho, torch.Tensor):
+                material_rho.clamp_(min_val, max_val)
+
+    # for name, parameter in invdes.devOptimization.named_parameters():
+    #     if "material_rho" in name:
+    #         grad_max = (
+    #             parameter.grad.abs().max().item()
+    #             if parameter.grad is not None
+    #             else None
+    #         )
+    #         print(
+    #             name,
+    #             parameter.min().item(),
+    #             parameter.max().item(),
+    #             grad_max,
+    #         )
+
+
 class InvDesign:
     """
-    default_cfgs is to set the default configurations
-    including optimizer, lr_scheduler, sharp_scheduler etc.
+    Orchestrate iterative photonic inverse-design optimization.
+
+    Args:
+        *args: Reserved for compatibility.
+        **kwargs: Configuration overrides including ``devOptimization``, ``optimizer``, ``lr_scheduler``, ``sharp_scheduler``, ``run``, ``plot_cfgs``, ``debug_cfgs``, ``checkpoint_cfgs``, and lifecycle callbacks.
+
+    Optimization convention:
+        ``devOptimization.forward()`` returns a result dictionary containing scalar ``results["obj"]``. The optimizer minimizes ``-results["obj"]``.
+
+    Example:
+        ``InvDesign(devOptimization=model, run={"n_epochs": 10}).optimize()``.
     """
 
     default_cfgs = Config(
@@ -83,6 +162,7 @@ class InvDesign:
             start_epoch=0,
             n_epochs=100,
             norm_grad=None,
+            backward=True,
         ),
         plot_cfgs=Config(
             plot=False,
@@ -96,6 +176,7 @@ class InvDesign:
             field_component=None,
             eps_grad=False,
             param_grad=False,
+            monitor_plots=[],
         ),
         debug_cfgs=Config(
             log_cuda_memory=False,
@@ -107,25 +188,76 @@ class InvDesign:
             save_model=False,
             ckpt_name=None,
             interval=None,
+            save_latest=True,
+            latest_name=None,
+            save_on_interrupt=True,
             dump_gds=False,
             gds_name=None,
             dump_eps=False,
             eps_name=None,
             upsample_eps_to_1nm=False,
+            dump_tidy3d=False,
+            tidy3d_name=None,
             load_ckpt=None,
             resume=False,
         ),
+        run_management=Config(
+            enabled=False,
+            root="./runs",
+            experiment="optimization",
+            run_id=None,
+            tag=None,
+        ),
         after_step_callbacks=[clamp_parameters],
+        before_step_callbacks=[],
     )
 
     def __init__(
         self,
         *args,
+        run_manager: Optional[OptimizationRunManager] = None,
         **kwargs,
     ) -> None:
+        """Initialize an inverse-design run.
+
+        Args:
+            *args: Reserved positional arguments retained for constructor
+                compatibility.
+            run_manager: Optional run manager created before device/model
+                construction. Supplying it lets initialization-time plots and
+                logs use the same managed run directories as optimization.
+            **kwargs: Named configuration values forwarded to
+                :meth:`load_cfgs`.
+        """
         super().__init__()
         self.load_cfgs(**kwargs)
         assert self.devOptimization is not None, "devOptimization must be provided"
+        self.run_manager = run_manager
+        run_cfg = self._cfg.run_management
+        if self.run_manager is not None:
+            # Keep the resolved configuration truthful without requiring the
+            # caller to duplicate settings already owned by the early manager.
+            run_cfg.enabled = True
+            run_cfg.root = str(self.run_manager.root)
+            run_cfg.experiment = self.run_manager.experiment
+            run_cfg.run_id = self.run_manager.run_id
+            run_cfg.tag = self.run_manager.tag
+        if self.run_manager is None and getattr(run_cfg, "enabled", False):
+            resume_run = bool(getattr(self._cfg.checkpoint_cfgs, "resume", False))
+            self.run_manager = OptimizationRunManager(
+                root=run_cfg.root,
+                experiment=run_cfg.experiment,
+                run_id=getattr(run_cfg, "run_id", None),
+                tag=getattr(run_cfg, "tag", None),
+                resume=resume_run,
+                resume_from=(
+                    self._cfg.checkpoint_cfgs.load_ckpt if resume_run else None
+                ),
+            )
+        if self.run_manager is not None:
+            self.run_manager.attach_logger(logger)
+            logger.info(f"managed optimization run: {self.run_manager.run_dir}")
+            self.run_manager.bind_simulation_config(self.devOptimization.sim_cfg)
         # make optimizer and scheduler
         self.optimizer = builder.make_optimizer(
             params=self.devOptimization.parameters(),
@@ -150,6 +282,7 @@ class InvDesign:
             format="{:.4f}",
         )
         self.after_step_callbacks = self._cfg.after_step_callbacks
+        self.before_step_callbacks = self._cfg.before_step_callbacks
 
         ## closure is a function that will be called by the optimizer
         class Closure(object):
@@ -171,8 +304,9 @@ class InvDesign:
                 # forward pass
                 results = self.devOptimization.forward(sharpness=self.sharpness)
 
-                # need backward to compute grad
-                (-results["obj"]).backward()
+                ## Backward is optional for forward-only normalization runs.
+                if self._cfg["run"].get("backward", True):
+                    (-results["obj"]).backward()
 
                 if self._cfg["run"].norm_grad is not None:
                     for p in self.devOptimization.parameters():
@@ -194,13 +328,41 @@ class InvDesign:
         )
 
         self.global_step = self._cfg.run.start_epoch
+        self._resume_step = self._cfg.run.start_epoch
+        self._last_completed_step = self._cfg.run.start_epoch - 1
+        self._last_fom = None
         self._log = ""
+
+        if self.run_manager is not None:
+            resolved_config = {
+                "invdesign": {
+                    key: self._plain_config(value)
+                    for key, value in self._cfg.items()
+                    if key != "devOptimization"
+                },
+                "dev_optimization": {
+                    "class": (
+                        f"{self.devOptimization.__class__.__module__}."
+                        f"{self.devOptimization.__class__.__qualname__}"
+                    ),
+                    "config": self._plain_config(
+                        getattr(self.devOptimization, "_cfg", {})
+                    ),
+                },
+            }
+            self.run_manager.write_resolved_config(resolved_config)
 
         if (
             self._cfg.checkpoint_cfgs.resume
             and self._cfg.checkpoint_cfgs.load_ckpt is not None
         ):
             self.load_model(self._cfg.checkpoint_cfgs.load_ckpt)
+
+    def _artifact_path(self, category: str, filename: str) -> str:
+        """Resolve an artifact path through the run manager or legacy root."""
+        if self.run_manager is not None:
+            return self.run_manager.path(category, filename)
+        return os.path.join(self.devOptimization.sim_cfg.plot_root, filename)
 
     def _cuda_memory_stats(self) -> Dict[str, float]:
         if not torch.cuda.is_available():
@@ -230,12 +392,19 @@ class InvDesign:
 
     def load_cfgs(self, **cfgs):
         # Start with default configurations
-        self.__dict__.update(self.default_cfgs)
-        # Update with provided configurations
-        self.__dict__.update(cfgs)
-        # Save the updated configurations
-        self.default_cfgs.update(cfgs)
-        self._cfg = self.default_cfgs
+        """
+        Merge user configuration overrides into the active InvDesign configuration.
+
+        Args:
+            **cfgs: Top-level configuration overrides merged into ``default_cfgs``.
+
+        Raises:
+            AssertionError: If plotting/checkpoint configuration is enabled without required fields.
+        """
+        active_cfgs = deepcopy(self.default_cfgs)
+        active_cfgs.update(cfgs)
+        self.__dict__.update(active_cfgs)
+        self._cfg = active_cfgs
 
         ## check cfgs
         plot_cfgs = self._cfg.plot_cfgs
@@ -262,9 +431,17 @@ class InvDesign:
             ), "gds_name must be provided if dump gds"
 
     def _before_step_callbacks(self, feed_dict) -> Dict[str, Any]:
+        for callback in self.before_step_callbacks:
+            feed_dict = callback(self, feed_dict)
         return feed_dict
 
     def before_step(self) -> Dict[str, Any]:
+        """
+        Prepare per-step optimization controls and execute pre-step callbacks.
+
+        Returns:
+            Dictionary containing at least ``sharpness`` from the sharpness scheduler; callbacks may add or modify entries before ``run_step()``.
+        """
         self._log = ""  # reset log
         sharpness = self.sharp_scheduler.get_sharpness()
         feed_dict = dict(
@@ -274,8 +451,20 @@ class InvDesign:
         return feed_dict
 
     def run_step(self, feed_dict: Dict[str, Any] = {}):
+        """
+        Execute one optimizer step using the configured inverse-design closure.
+
+        Args:
+            feed_dict: Per-step control dictionary from ``before_step()``; the current implementation requires ``sharpness``.
+
+        Returns:
+            Result dictionary produced by ``devOptimization.forward()`` and stored as ``self.results``.
+        """
         sharpness = feed_dict["sharpness"]
         self.closure.sharpness = sharpness
+        variation = getattr(self.devOptimization, "variation", None)
+        if variation is not None and variation.sampler.enabled:
+            variation.step = self.global_step
 
         self._log_cuda_memory("before_step")
 
@@ -296,6 +485,15 @@ class InvDesign:
 
     def after_step(self, output_dict: Dict[str, Any] = {}) -> None:
         # update the learning rate
+        """
+        Advance schedulers, optionally plot fields/objectives, and release per-step state.
+
+        Args:
+            output_dict: Result dictionary from the completed step.
+
+        Side Effects:
+            Advances learning-rate and sharpness schedulers, may generate plots, clears cached result tensors and gradients, and may empty the CUDA cache.
+        """
         self.lr_scheduler.step()
         # update the sharpness
         self.sharp_scheduler.step()
@@ -344,6 +542,8 @@ class InvDesign:
                     show_delta_eps=plot_cfgs.get("show_delta_eps", None),
                     eps_grad=plot_cfgs.get("eps_grad", False),
                     param_grad=plot_cfgs.get("param_grad", False),
+                    objective_name=plot_cfgs.objs[j],
+                    monitor_plots=plot_cfgs.get("monitor_plots", []),
                 )
                 if not hasattr(self, "plot_thread") or self.plot_thread is None:
                     self.devOptimization.plot(
@@ -366,19 +566,51 @@ class InvDesign:
                 torch.cuda.empty_cache()
         self._log_cuda_memory("after_clear")
 
-    def after_epoch(self, output_dict: Dict[str, Any] = {}) -> None:
+    def after_epoch(self, output_dict: Optional[Dict[str, Any]] = None) -> None:
+        """Write final optimization artifacts.
+
+        Args:
+            output_dict: Final step output. When omitted, state-derived
+                artifacts are still regenerated, but the objective-ranked
+                model checkpoint is skipped. This supports repairing missing
+                artifacts from an already-completed resumable checkpoint
+                without rerunning an optimization step.
+        """
+        output_dict = output_dict or {}
         ## save model
         i = self.global_step
+        if not output_dict:
+            # A full checkpoint stores parameters, not derived material maps.
+            # Rebuild them once so completed-run recovery can also regenerate
+            # GDS and epsilon artifacts without a forward/FDTD solve.
+            build_device = getattr(self.devOptimization, "build_device", None)
+            if callable(build_device) and any(
+                (
+                    getattr(self._cfg.checkpoint_cfgs, "dump_eps", True),
+                    getattr(self._cfg.checkpoint_cfgs, "dump_gds", False),
+                    getattr(self._cfg.checkpoint_cfgs, "dump_tidy3d", False),
+                )
+            ):
+                rebuilt = build_device(sharpness=float(self.closure.sharpness))
+                if len(rebuilt) < 3:
+                    raise ValueError(
+                        "build_device() must return a high-resolution map at index 2"
+                    )
+                self.devOptimization._hr_eps_map = rebuilt[2]
         try:
-            if self._cfg.checkpoint_cfgs.save_model:
+            if self._cfg.checkpoint_cfgs.save_model and "obj" in output_dict:
                 ckpt_name = self._cfg.checkpoint_cfgs.ckpt_name
                 if not ckpt_name.endswith(".pt"):
                     ckpt_name += f"_epoch-{i}.pt"
                 else:
                     ckpt_name = ckpt_name[:-3] + f"_epoch-{i}.pt"
-                path = os.path.join(self.devOptimization.sim_cfg.plot_root, ckpt_name)
-                self.save_model(output_dict["obj"].item(), path)
-                logger.info(f"save model to {path}")
+                path = self._artifact_path("checkpoints", ckpt_name)
+                saved_path = self.save_model(output_dict["obj"].item(), path)
+                if self.run_manager is not None and saved_path is not None:
+                    self.run_manager.register_artifact(
+                        "best_checkpoint", saved_path, checksum=True
+                    )
+                logger.info(f"save model to {saved_path or path}")
         except Exception as e:
             logger.error("save model failed")
             traceback.print_exc()
@@ -394,11 +626,25 @@ class InvDesign:
         ## dump gds
         try:
             if self._cfg.checkpoint_cfgs.dump_gds:
-                self.devOptimization.dump_gds_files(
-                    self._cfg.checkpoint_cfgs.gds_name + ".gds"
+                gds_path = self._artifact_path(
+                    "layout", self._cfg.checkpoint_cfgs.gds_name + ".gds"
                 )
+                self.devOptimization.dump_gds_files(gds_path)
+                if self.run_manager is not None:
+                    self.run_manager.register_artifact(
+                        "final_gds", gds_path, checksum=True
+                    )
         except Exception as e:
             logger.error("dump gds failed")
+            traceback.print_exc()
+
+        ## dump a self-contained Tidy3D geometry artifact
+        try:
+            if getattr(self._cfg.checkpoint_cfgs, "dump_tidy3d", False):
+                path = self._dump_tidy3d_geometry(self._cfg.checkpoint_cfgs)
+                logger.info(f"save Tidy3D geometry to {path}")
+        except Exception:
+            logger.error("dump Tidy3D geometry failed")
             traceback.print_exc()
 
     def dump_intermediate_artifacts(self) -> None:
@@ -416,8 +662,6 @@ class InvDesign:
         ):
             return
 
-        plot_root = self.devOptimization.sim_cfg.plot_root
-
         try:
             if getattr(ckpt_cfgs, "dump_eps", True):
                 self._dump_eps_image(ckpt_cfgs, i)
@@ -428,70 +672,442 @@ class InvDesign:
         try:
             if ckpt_cfgs.dump_gds:
                 self.devOptimization.dump_gds_files(
-                    f"{ckpt_cfgs.gds_name}_epoch-{i}.gds"
+                    self._artifact_path("layout", f"{ckpt_cfgs.gds_name}_epoch-{i}.gds")
                 )
         except Exception:
             logger.error("dump intermediate gds failed")
             traceback.print_exc()
+
+    def _checkpoint_base_name(self) -> str:
+        """Return the configured checkpoint stem without a ``.pt`` suffix."""
+        ckpt_cfgs = self._cfg.checkpoint_cfgs
+        latest_name = getattr(ckpt_cfgs, "latest_name", None)
+        name = latest_name or ckpt_cfgs.ckpt_name
+        if name.endswith(".pt"):
+            name = name[:-3]
+        return name
+
+    def _dump_tidy3d_geometry(self, ckpt_cfgs) -> str:
+        """Materialize final parameters and save a Tidy3D geometry artifact.
+
+        Args:
+            ckpt_cfgs: Checkpoint configuration containing optional
+                ``tidy3d_name`` and the other artifact-name fallbacks.
+
+        Returns:
+            Absolute path returned by
+            ``devOptimization.save_tidy3d_geometry``.
+
+        Notes:
+            The map is rebuilt because the most recently cached forward map
+            predates the optimizer update. The last sharpness supplied to the
+            closure is used rather than the already-advanced scheduler value.
+        """
+        build_device = getattr(self.devOptimization, "build_device", None)
+        save_geometry = getattr(self.devOptimization, "save_tidy3d_geometry", None)
+        if not callable(build_device) or not callable(save_geometry):
+            raise TypeError(
+                "dump_tidy3d requires devOptimization.build_device() and "
+                "devOptimization.save_tidy3d_geometry()"
+            )
+
+        sharpness = float(self.closure.sharpness)
+        final_hr_eps_map = build_device(sharpness=sharpness)[2]
+        artifact_stem = getattr(ckpt_cfgs, "tidy3d_name", None)
+        if artifact_stem is None:
+            base_name = (
+                getattr(ckpt_cfgs, "ckpt_name", None)
+                or getattr(ckpt_cfgs, "gds_name", None)
+                or "final"
+            )
+            artifact_stem = f"{os.path.splitext(base_name)[0]}_tidy3d_geometry"
+        for suffix in (".hdf5", ".h5"):
+            if artifact_stem.lower().endswith(suffix):
+                artifact_stem = artifact_stem[: -len(suffix)]
+                break
+        name = f"{artifact_stem}.h5"
+        path = self._artifact_path("geometry", name)
+        saved_path = save_geometry(
+            path,
+            eps_map=final_hr_eps_map,
+            pixel_exact=False,
+        )
+        if self.run_manager is not None:
+            self.run_manager.register_artifact(
+                "final_tidy3d_geometry", saved_path, checksum=True
+            )
+        return saved_path
+
+    def _save_latest_checkpoint_if_due(self) -> None:
+        """Atomically update the resumable latest checkpoint when due."""
+        ckpt_cfgs = self._cfg.checkpoint_cfgs
+        interval = getattr(ckpt_cfgs, "interval", None)
+        if (
+            not ckpt_cfgs.save_model
+            or not getattr(ckpt_cfgs, "save_latest", True)
+            or not interval
+            or interval <= 0
+        ):
+            return
+
+        final_step = self._cfg.run.start_epoch + self._cfg.run.n_epochs - 1
+        if self.global_step % interval != 0 and self.global_step != final_step:
+            return
+
+        path = self._artifact_path(
+            "checkpoints", f"{self._checkpoint_base_name()}_latest.pt"
+        )
+        self.save_checkpoint(path, fom=self._last_fom)
+        if self.run_manager is not None:
+            self.run_manager.register_artifact("latest_checkpoint", path)
+        logger.info(f"save latest checkpoint to {path}")
 
     def optimize(
         self,
         verbose: bool = True,
         dump_intermediate_result: bool = False,
     ):
-        for i in range(
-            self._cfg.run.start_epoch,
-            self._cfg.run.start_epoch + self._cfg.run.n_epochs,
-        ):
-            self.global_step = i
-            feed_dict = self.before_step()
-            results = self.run_step(feed_dict)
-            self.after_step(results)
-            if dump_intermediate_result:
-                self.dump_intermediate_artifacts()
+        """
+        Run the configured inverse-design optimization loop.
 
-            log = f"Step {i:3d} (sharp: {feed_dict['sharpness']:.1f}) "
-            log += ", ".join(
-                [
-                    (
+        Args:
+            verbose: Whether to log objective breakdowns and gradient norm information.
+            dump_intermediate_result: Whether to export configured intermediate artifacts.
+
+        Lifecycle:
+            Each iteration executes ``before_step() -> run_step() -> after_step()``; ``after_epoch()`` runs after the requested number of iterations.
+
+        Returns:
+            None. Final state remains in ``self`` and ``devOptimization``.
+        """
+        loop_start = max(int(self._cfg.run.start_epoch), int(self._resume_step))
+        loop_end = int(self._cfg.run.start_epoch) + int(self._cfg.run.n_epochs)
+        results = None
+        step_in_progress = False
+        try:
+            for i in range(loop_start, loop_end):
+                self.global_step = i
+                step_in_progress = True
+                feed_dict = self.before_step()
+                results = self.run_step(feed_dict)
+                self.after_step(results)
+                self._last_completed_step = i
+                self._last_fom = float(results["obj"].detach().cpu().item())
+                self._resume_step = i + 1
+                step_in_progress = False
+                self._save_latest_checkpoint_if_due()
+                if dump_intermediate_result:
+                    self.dump_intermediate_artifacts()
+
+                log = f"Step {i:3d} (sharp: {feed_dict['sharpness']:.1f}) "
+                log += ", ".join(
+                    [
                         (
-                            f"{k}: {obj['value'].data}"
-                            if obj["value"].numel() > 1
-                            else f"{k}: {obj['value'].item():.3e}"
+                            (
+                                f"{k}: {obj['value'].data}"
+                                if obj["value"].numel() > 1
+                                else f"{k}: {obj['value'].item():.3e}"
+                            )
+                            if isinstance(obj["value"], torch.Tensor)
+                            and obj["value"].numel() >= 1
+                            else f"{k}: {obj['value']:.3e}"
                         )
-                        if isinstance(obj["value"], torch.Tensor)
-                        and obj["value"].numel() >= 1
-                        else f"{k}: {obj['value']:.3e}"
-                    )
-                    for k, obj in results["breakdown"].items()
-                ]
-            )
-            total_grads = torch.concat(
-                [
+                        for k, obj in results["breakdown"].items()
+                    ]
+                )
+                gradients = [
                     param.grad.view(-1)
                     for param in self.devOptimization.parameters()
                     if param.requires_grad and param.grad is not None
-                ],
-                dim=0,
-            )
-            grad_norm = torch.norm(total_grads).item()
-            log += f", grad_norm: {grad_norm:.3e}"
-            log += self._log
-            if verbose:
-                logger.info(log)
-        self.after_epoch(results)
+                ]
+                grad_norm = (
+                    torch.norm(torch.cat(gradients)).item() if gradients else 0.0
+                )
+                log += f", grad_norm: {grad_norm:.3e}"
+                log += self._log
+                if self.run_manager is not None:
+                    self.run_manager.append_metrics(
+                        {
+                            "step": i,
+                            "fom": self._last_fom,
+                            "sharpness": float(feed_dict["sharpness"]),
+                            "learning_rates": [
+                                float(group["lr"])
+                                for group in self.optimizer.param_groups
+                            ],
+                            "grad_norm": grad_norm,
+                            "breakdown": {
+                                key: self._plain_config(item.get("value"))
+                                for key, item in results["breakdown"].items()
+                            },
+                        }
+                    )
+                    if not verbose:
+                        self.run_manager.log(log)
+                if verbose:
+                    logger.info(log)
+        except (Exception, KeyboardInterrupt) as error:
+            if (
+                self._cfg.checkpoint_cfgs.save_model
+                and getattr(self._cfg.checkpoint_cfgs, "save_on_interrupt", True)
+                and not step_in_progress
+                and self._last_completed_step >= self._cfg.run.start_epoch
+            ):
+                path = self._artifact_path(
+                    "checkpoints",
+                    f"{self._checkpoint_base_name()}_interrupted.pt",
+                )
+                try:
+                    self.save_checkpoint(path, fom=self._last_fom)
+                    if self.run_manager is not None:
+                        self.run_manager.register_artifact(
+                            "interrupted_checkpoint", path, checksum=True
+                        )
+                    logger.info(f"save interrupted checkpoint to {path}")
+                except Exception:
+                    logger.error("save interrupted checkpoint failed")
+                    traceback.print_exc()
+            if self.run_manager is not None:
+                status = (
+                    "interrupted" if isinstance(error, KeyboardInterrupt) else "failed"
+                )
+                self.run_manager.finish(
+                    status,
+                    last_completed_step=self._last_completed_step,
+                    fom=self._last_fom,
+                    error=repr(error),
+                )
+            raise
 
-    def load_model(self, path=None):
-        state_dict = torch.load(path)
-        self.devOptimization.load_state_dict(state_dict["state_dict"])
-        logger.info(f"load checkpoint from {path}")
+        # A completed checkpoint has no remaining loop iterations. Rebuild its
+        # final state-derived artifacts anyway so a failed or deleted export
+        # can be repaired without another electromagnetic solve.
+        self.after_epoch(results)
+        if self.run_manager is not None:
+            self.run_manager.finish(
+                "completed",
+                last_completed_step=self._last_completed_step,
+                fom=self._last_fom,
+            )
+
+    @staticmethod
+    def _component_state(component):
+        """Return checkpoint state for a component when it exposes any."""
+        component_class = (
+            f"{component.__class__.__module__}.{component.__class__.__qualname__}"
+        )
+        state_dict = getattr(component, "state_dict", None)
+        if callable(state_dict):
+            return {
+                "class": component_class,
+                "kind": "state_dict",
+                "state": state_dict(),
+            }
+        if hasattr(component, "__dict__"):
+            state = {
+                key: value
+                for key, value in vars(component).items()
+                if isinstance(value, (bool, int, float, str, type(None)))
+            }
+            if state:
+                return {
+                    "class": component_class,
+                    "kind": "attributes",
+                    "state": state,
+                }
+        return None
+
+    @staticmethod
+    def _restore_component_state(component, saved_state) -> None:
+        """Restore state produced by :meth:`_component_state`."""
+        if saved_state is None:
+            return
+        component_class = (
+            f"{component.__class__.__module__}.{component.__class__.__qualname__}"
+        )
+        saved_class = saved_state.get("class")
+        if saved_class is not None and saved_class != component_class:
+            raise ValueError(
+                f"Checkpoint component type mismatch: saved {saved_class}, "
+                f"constructed {component_class}"
+            )
+        if saved_state["kind"] == "state_dict":
+            component.load_state_dict(saved_state["state"])
+        elif saved_state["kind"] == "attributes":
+            for key, value in saved_state["state"].items():
+                setattr(component, key, value)
+        else:
+            raise ValueError(f"Unknown component state kind: {saved_state['kind']}")
+
+    @staticmethod
+    def _plain_config(value):
+        """Convert configuration values to portable checkpoint metadata."""
+        if isinstance(value, Mapping):
+            return {
+                str(key): InvDesign._plain_config(item) for key, item in value.items()
+            }
+        if isinstance(value, (list, tuple)):
+            return [InvDesign._plain_config(item) for item in value]
+        if isinstance(value, (bool, int, float, str, type(None))):
+            return value
+        if isinstance(value, np.generic):
+            return value.item()
+        if callable(value):
+            module = getattr(value, "__module__", "")
+            name = getattr(value, "__qualname__", repr(value))
+            return f"{module}.{name}".lstrip(".")
+        return repr(value)
+
+    @staticmethod
+    def _rng_state() -> Dict[str, Any]:
+        """Capture Python, NumPy, CPU, and available CUDA random states."""
+        state = {
+            "python": random.getstate(),
+            "numpy": np.random.get_state(),
+            "torch": torch.get_rng_state(),
+        }
+        if torch.cuda.is_available():
+            state["cuda"] = torch.cuda.get_rng_state_all()
+        return state
+
+    @staticmethod
+    def _restore_rng_state(state: Dict[str, Any]) -> None:
+        """Restore random states captured by :meth:`_rng_state`."""
+        random.setstate(state["python"])
+        np.random.set_state(state["numpy"])
+        torch.set_rng_state(state["torch"])
+        if "cuda" in state and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(state["cuda"])
+
+    def checkpoint_state_dict(self, fom=None) -> Dict[str, Any]:
+        """Build the complete state required to continue an optimization.
+
+        Args:
+            fom: Optional latest scalar figure of merit.
+
+        Returns:
+            Versioned checkpoint mapping containing model, optimizer,
+            schedulers, progress, random generators, configuration metadata,
+            and variation state when the model exposes it.
+        """
+        variation = getattr(self.devOptimization, "variation", None)
+        config_sections = {
+            name: self._plain_config(getattr(self._cfg, name))
+            for name in (
+                "optimizer",
+                "lr_scheduler",
+                "sharp_scheduler",
+                "run",
+                "checkpoint_cfgs",
+                "before_step_callbacks",
+                "after_step_callbacks",
+            )
+            if hasattr(self._cfg, name)
+        }
+        return {
+            "checkpoint_schema": "maps.invdesign.checkpoint/v1",
+            "state_dict": self.devOptimization.state_dict(),
+            "optimizer": self._component_state(self.optimizer),
+            "lr_scheduler": self._component_state(self.lr_scheduler),
+            "sharp_scheduler": self._component_state(self.sharp_scheduler),
+            "variation": (
+                self._component_state(variation) if variation is not None else None
+            ),
+            "progress": {
+                "global_step": int(self.global_step),
+                "last_completed_step": int(self._last_completed_step),
+                "next_step": int(self._resume_step),
+                "fom": None if fom is None else float(fom),
+            },
+            "rng_state": self._rng_state(),
+            "config": config_sections,
+        }
+
+    def save_checkpoint(self, path, fom=None) -> str:
+        """Atomically save a full resumable optimization checkpoint.
+
+        Args:
+            path: Destination ``.pt`` file.
+            fom: Optional latest scalar figure of merit.
+
+        Returns:
+            The destination path.
+        """
+        directory = os.path.dirname(os.path.abspath(path))
+        os.makedirs(directory, exist_ok=True)
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                prefix=f".{os.path.basename(path)}.",
+                suffix=".tmp",
+                dir=directory,
+                delete=False,
+            ) as temporary_file:
+                temporary_path = temporary_file.name
+            torch.save(self.checkpoint_state_dict(fom=fom), temporary_path)
+            os.replace(temporary_path, path)
+        finally:
+            if temporary_path is not None and os.path.exists(temporary_path):
+                os.unlink(temporary_path)
+        return path
+
+    def load_model(self, path=None, restore_rng: bool = True):
+        """
+        Load a previously saved inverse-design checkpoint.
+
+        Args:
+            path: Full or legacy model-only checkpoint path.
+            restore_rng: Whether to restore Python, NumPy, PyTorch CPU, and
+                available CUDA random-generator states from a full checkpoint.
+
+        Returns:
+            None; ``devOptimization`` is restored in-place.
+        """
+        checkpoint = torch.load(path, weights_only=False)
+        self.devOptimization.load_state_dict(checkpoint["state_dict"])
+        if checkpoint.get("checkpoint_schema") == "maps.invdesign.checkpoint/v1":
+            self._restore_component_state(self.optimizer, checkpoint.get("optimizer"))
+            self._restore_component_state(
+                self.lr_scheduler, checkpoint.get("lr_scheduler")
+            )
+            self._restore_component_state(
+                self.sharp_scheduler, checkpoint.get("sharp_scheduler")
+            )
+            variation = getattr(self.devOptimization, "variation", None)
+            if variation is not None:
+                self._restore_component_state(variation, checkpoint.get("variation"))
+
+            progress = checkpoint["progress"]
+            self.global_step = int(progress["global_step"])
+            self._last_completed_step = int(progress["last_completed_step"])
+            self._resume_step = int(progress["next_step"])
+            self._last_fom = progress.get("fom")
+            if restore_rng and "rng_state" in checkpoint:
+                self._restore_rng_state(checkpoint["rng_state"])
+            logger.info(
+                f"resume full checkpoint from {path} at step {self._resume_step}"
+            )
+        else:
+            logger.info(f"load legacy model-only checkpoint from {path}")
 
     def save_model(self, fom, path):
-        self.saver.save_model(
+        """
+        Save the current inverse-design model with ``BestKModelSaver``.
+
+        Args:
+            fom: Scalar figure-of-merit used for checkpoint ranking.
+            path: Destination checkpoint path.
+
+        Returns:
+            Actual checkpoint path returned by ``BestKModelSaver``, or
+            ``None`` when the current FoM is not retained.
+        """
+        return self.saver.save_model(
             self.devOptimization,
             fom,
             epoch=self._cfg.run.start_epoch + self._cfg.run.n_epochs - 1,
             path=path,
+            other_params=self.checkpoint_state_dict(fom=fom),
             save_model=False,
             print_msg=True,
         )
@@ -560,8 +1176,7 @@ class InvDesign:
         name = (
             ckpt_cfgs.eps_name or ckpt_cfgs.gds_name or ckpt_cfgs.ckpt_name or "eps_map"
         )
-        plot_root = self.devOptimization.sim_cfg.plot_root
-        filename = os.path.join(plot_root, f"{name}_hr_eps_epoch-{epoch}.png")
+        filename = self._artifact_path("design", f"{name}_hr_eps_epoch-{epoch}.png")
         eps, design_region_masks = self._get_eps_dump_map(ckpt_cfgs)
         design_region_eps = eps[next(iter(design_region_masks.values()))]
         eps_min = float(np.nanmin(design_region_eps))
@@ -574,6 +1189,9 @@ class InvDesign:
             threshold = 0.5 * (eps_min + eps_max)
             bw = (eps >= threshold).astype(np.uint8) * 255
         Image.fromarray(bw, mode="L").save(filename)
+        if self.run_manager is not None:
+            self.run_manager.register_artifact("final_eps_image", filename)
+        return filename
 
 
 if __name__ == "__main__":

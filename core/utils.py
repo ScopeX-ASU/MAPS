@@ -313,6 +313,7 @@ def _torch_axis_interp(
     dst_coords: Tensor,
     axis: int,
     mode: InterpMode = "polar",
+    interpolation: str = "linear",
 ) -> Tensor:
     axis = axis if axis >= 0 else values.ndim + axis
 
@@ -328,6 +329,8 @@ def _torch_axis_interp(
 
     if mode not in ("cartesian", "polar"):
         raise ValueError(f"Unsupported mode: {mode}")
+    if interpolation not in ("linear", "nearest"):
+        raise ValueError(f"Unsupported interpolation: {interpolation}")
 
     moved = values.movedim(axis, -1)
     flat = moved.reshape(-1, moved.shape[-1])
@@ -341,6 +344,12 @@ def _torch_axis_interp(
 
     x0 = src.index_select(0, lower)
     x1 = src.index_select(0, upper)
+    if interpolation == "nearest":
+        nearest = torch.where((dst - x0).abs() <= (x1 - dst).abs(), lower, upper)
+        interp = flat.index_select(1, nearest)
+        new_shape = moved.shape[:-1] + (dst.numel(),)
+        return interp.reshape(new_shape).movedim(-1, axis)
+
     denom = torch.where((x1 - x0).abs() < 1e-15, torch.ones_like(x1), x1 - x0)
     t = ((dst - x0) / denom).to(values.real.dtype)
 
@@ -366,7 +375,27 @@ def resample_rectilinear_tensor(
     *,
     axes: Sequence[int] | None = None,
     mode: InterpMode = "polar",
+    interpolation: str = "linear",
 ) -> Tensor:
+    """Resample a tensor between rectilinear cell-center coordinate grids.
+
+    Args:
+        values: Tensor or NumPy array whose selected axes are spatial.
+        src_coords: One-dimensional source cell-center coordinates.
+        dst_coords: One-dimensional destination cell-center coordinates.
+        axes: Tensor axes corresponding to the coordinate sequences. Defaults
+            to the trailing spatial axes.
+        mode: Cartesian or polar interpolation for complex values.
+        interpolation: ``"linear"`` or ``"nearest"``. Nearest interpolation
+            is useful for visualizing discontinuous material labels without
+            inventing mixed cells.
+
+    Returns:
+        Resampled PyTorch tensor.
+
+    Raises:
+        ValueError: If coordinate counts or interpolation options are invalid.
+    """
     tensor = (
         values
         if isinstance(values, torch.Tensor)
@@ -401,15 +430,160 @@ def resample_rectilinear_tensor(
             src_axis.to(dtype=torch.float64), dst_axis.to(dtype=torch.float64)
         ):
             continue
-        out = _torch_axis_interp(out, src_axis, dst_axis, axis, mode=mode)
+        out = _torch_axis_interp(
+            out,
+            src_axis,
+            dst_axis,
+            axis,
+            mode=mode,
+            interpolation=interpolation,
+        )
 
     return out
+
+
+def resample_rectilinear_plane(
+    values: Tensor | np.ndarray,
+    src_coords: Sequence[np.ndarray | Tensor],
+    dst_coords: Sequence[np.ndarray | Tensor],
+    *,
+    fixed_axis: int,
+    dst_index: int,
+    axes: Sequence[int] | None = None,
+    mode: InterpMode = "polar",
+    interpolation: str = "linear",
+) -> Tensor:
+    """Resample one plane without constructing a full destination volume.
+
+    The result is numerically equivalent to selecting ``dst_index`` along
+    ``fixed_axis`` after :func:`resample_rectilinear_tensor`, but the input is
+    first restricted to the one or two native samples needed along the plane
+    normal. This keeps intermediate tensors proportional to a thin slab.
+
+    Args:
+        values: Tensor containing the source-grid values.
+        src_coords: Source cell-center coordinates for each spatial axis.
+        dst_coords: Destination cell-center coordinates for each spatial axis.
+        fixed_axis: Spatial axis normal to the requested plane.
+        dst_index: Index of the requested plane on the destination grid.
+        axes: Tensor axes corresponding to ``src_coords`` and ``dst_coords``.
+            By default, the trailing spatial axes are used.
+        mode: Complex interpolation mode forwarded to
+            :func:`resample_rectilinear_tensor`.
+        interpolation: ``"linear"`` or ``"nearest"`` interpolation.
+
+    Returns:
+        The resampled tensor with the fixed spatial axis removed.
+
+    Raises:
+        ValueError: If coordinate metadata, axes, or the destination index are
+            invalid.
+
+    Notes:
+        Rectilinear interpolation is separable. Retaining the two source
+        samples bracketing the destination coordinate therefore preserves the
+        full-volume interpolation result, including the existing boundary
+        extrapolation rule.
+    """
+    tensor = (
+        values
+        if isinstance(values, torch.Tensor)
+        else torch.as_tensor(np.array(values, copy=True))
+    )
+    if len(src_coords) != len(dst_coords):
+        raise ValueError("src_coords and dst_coords must have the same length.")
+    n_spatial = len(src_coords)
+    if n_spatial == 0:
+        raise ValueError("At least one spatial coordinate axis is required.")
+    fixed_axis = int(fixed_axis)
+    if fixed_axis < 0:
+        fixed_axis += n_spatial
+    if fixed_axis < 0 or fixed_axis >= n_spatial:
+        raise ValueError(
+            f"fixed_axis must index {n_spatial} spatial axes, got {fixed_axis}."
+        )
+    if axes is None:
+        axes = tuple(range(tensor.ndim - n_spatial, tensor.ndim))
+    if len(axes) != n_spatial:
+        raise ValueError("axes must have one entry per spatial coordinate axis.")
+    normalized_axes = tuple(axis if axis >= 0 else tensor.ndim + axis for axis in axes)
+    tensor_axis = normalized_axes[fixed_axis]
+    if tensor_axis < 0 or tensor_axis >= tensor.ndim:
+        raise ValueError(
+            f"Invalid tensor axis {axes[fixed_axis]} for rank {tensor.ndim}."
+        )
+
+    def _coordinate_tensor(coordinates) -> Tensor:
+        if isinstance(coordinates, torch.Tensor):
+            return coordinates.to(device=tensor.device, dtype=torch.float64)
+        return torch.as_tensor(
+            np.array(coordinates, copy=True), dtype=torch.float64, device=tensor.device
+        )
+
+    source_axis = _coordinate_tensor(src_coords[fixed_axis])
+    destination_axis = _coordinate_tensor(dst_coords[fixed_axis])
+    if source_axis.ndim != 1 or source_axis.numel() == 0:
+        raise ValueError("Source coordinates must be a nonempty one-dimensional array.")
+    if source_axis.numel() != tensor.shape[tensor_axis]:
+        raise ValueError(
+            "Source-coordinate length does not match the tensor axis: "
+            f"{source_axis.numel()} != {tensor.shape[tensor_axis]}."
+        )
+    if destination_axis.ndim != 1 or destination_axis.numel() == 0:
+        raise ValueError(
+            "Destination coordinates must be a nonempty one-dimensional array."
+        )
+    dst_index = int(dst_index)
+    if dst_index < 0:
+        dst_index += int(destination_axis.numel())
+    if dst_index < 0 or dst_index >= int(destination_axis.numel()):
+        raise ValueError(
+            f"dst_index {dst_index} is outside destination axis length "
+            f"{destination_axis.numel()}."
+        )
+
+    target = destination_axis[dst_index : dst_index + 1]
+    if source_axis.numel() == 1:
+        source_indices = torch.zeros(1, dtype=torch.long, device=tensor.device)
+        local_destination_axis = source_axis.clone()
+    else:
+        upper = torch.searchsorted(source_axis, target, right=False).clamp(
+            1, source_axis.numel() - 1
+        )
+        lower = upper - 1
+        source_indices = torch.cat((lower, upper)).to(dtype=torch.long)
+        local_destination_axis = target
+
+    slab = tensor.index_select(tensor_axis, source_indices)
+    local_src_coords = list(src_coords)
+    local_dst_coords = list(dst_coords)
+    local_src_coords[fixed_axis] = source_axis.index_select(0, source_indices)
+    local_dst_coords[fixed_axis] = local_destination_axis
+    plane_with_axis = resample_rectilinear_tensor(
+        slab,
+        src_coords=local_src_coords,
+        dst_coords=local_dst_coords,
+        axes=normalized_axes,
+        mode=mode,
+        interpolation=interpolation,
+    )
+    return plane_with_axis.select(tensor_axis, 0)
 
 
 def grid_plane_weights(
     grid_metadata: RectilinearGridMetadata | dict[str, Any] | None,
     axis: int,
 ) -> Tensor | None:
+    """Return physical cell areas for a plane normal to ``axis``.
+
+    Args:
+        grid_metadata: Rectilinear grid coordinates and boundaries in micrometers.
+        axis: Plane-normal axis, where ``0``, ``1``, and ``2`` denote x, y, and z.
+
+    Returns:
+        A tensor of transverse cell areas in square meters, or ``None`` when no
+        grid metadata is available.
+    """
     if grid_metadata is None:
         return None
     metadata = (
@@ -426,6 +600,29 @@ def grid_plane_weights(
             (1,) * weight.ndim + axis_width.shape
         )
     return torch.as_tensor(weight, dtype=torch.float32)
+
+
+def _surface_quadrature_weights(
+    cell_areas: Tensor | np.ndarray,
+    *,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> Tensor:
+    """Move physical cell-area weights onto the field tensor device.
+
+    Every monitor orientation uses the actual area in square meters. Symmetry
+    multiplicity is intentionally not included here: fields and modes are
+    unfolded before this quadrature is applied.
+
+    Args:
+        cell_areas: Per-cell physical areas in square meters.
+        dtype: Real dtype used by the field tensors.
+        device: Device used by the field tensors.
+
+    Returns:
+        Quadrature weights in square meters.
+    """
+    return torch.as_tensor(cell_areas, dtype=dtype, device=device)
 
 
 @torch.compile
@@ -1128,8 +1325,38 @@ def get_eigenmode_coefficients_3d(
     grid_metadata: RectilinearGridMetadata | dict[str, Any] | None = None,
     cell_weights: Tuple[Tensor | np.ndarray] | None = None,
 ):
-    ## dimensionless calculation, grid_step is forced to 1, same to fdtdx convention.
-    ## input E/H fields must be co-located already.
+    """Project co-located 3D fields onto a waveguide eigenmode.
+
+    Args:
+        Ex: Simulated x-directed electric-field phasor.
+        Ey: Simulated y-directed electric-field phasor.
+        Ez: Simulated z-directed electric-field phasor.
+        Hx: Simulated x-directed magnetic-field phasor.
+        Hy: Simulated y-directed magnetic-field phasor.
+        Hz: Simulated z-directed magnetic-field phasor.
+        ht_m: Three-component magnetic eigenmode profile.
+        et_m: Three-component electric eigenmode profile.
+        monitor: Spatial slice selecting the overlap plane.
+        grid_step: Uniform-grid fallback spacing in micrometers, converted to
+            ``(grid_step * 1e-6) ** 2`` square meters when neither
+            ``grid_metadata`` nor ``cell_weights`` is provided.
+        energy: Return modal powers when true, otherwise modal amplitudes.
+        direction: Plane-normal axis followed by the forward sign, for example
+            ``"x+"``.
+        grid_metadata: Rectilinear grid metadata used to derive physical areas.
+        cell_weights: Optional precomputed plane-area tensors indexed by axis.
+
+    Returns:
+        Forward and backward modal powers or amplitudes. Modal profiles need
+        not already carry unit power; their power is evaluated with the same
+        surface quadrature as the simulated fields.
+
+    Notes:
+        With rectilinear metadata, all areas are measured in square meters.
+        Fields and modes must already be unfolded to the full domain before
+        calling this function.
+    """
+    # Input E/H fields must be co-located already.
     assert (
         isinstance(direction, str) and len(direction) == 2
     ), f"direction must be a string, got {type(direction)}"
@@ -1138,7 +1365,6 @@ def get_eigenmode_coefficients_3d(
         ht_m = torch.from_numpy(ht_m).to(device=Ex.device, dtype=Ex.dtype)
         et_m = torch.from_numpy(et_m).to(device=Ex.device, dtype=Ex.dtype)
 
-    # monitor_slice = tuple(index_to_slice(i) for i in monitor)
     monitor_slice = monitor
 
     Ex, Ey, Ez, Hx, Hy, Hz = (
@@ -1156,6 +1382,14 @@ def get_eigenmode_coefficients_3d(
     E_m = et_m.squeeze().to(device=E_sim.device, dtype=E_sim.dtype)
     H_m = ht_m.squeeze().to(device=H_sim.device, dtype=H_sim.dtype)
 
+    if E_m.shape != H_m.shape or E_m.shape != E_sim.shape or H_m.shape != H_sim.shape:
+        raise ValueError(
+            "Mode and simulation fields are on different monitor grids: "
+            f"E_sim={tuple(E_sim.shape)}, H_sim={tuple(H_sim.shape)}, "
+            f"mode_E={tuple(E_m.shape)}, mode_H={tuple(H_m.shape)}, "
+            f"monitor={monitor}."
+        )
+
     axis = {"x": 0, "y": 1, "z": 2}[direction[0]]
 
     # Use the SAME area element as get_flux_3d.
@@ -1166,27 +1400,37 @@ def get_eigenmode_coefficients_3d(
         cell_weights = grid_plane_weights(grid_metadata, axis)
     else:
         cell_weights = cell_weights[axis]
-        # print(cell_weights.shape, monitor_slice, axis)
 
-    ## we only need the area weights for transverse axis
-    ## axis here is the normal axis
-    plane_slice = monitor_slice[:axis] + monitor_slice[axis + 1 :]
-    cell_weights = cell_weights[plane_slice]
     if cell_weights is None:
-        dA = 1
+        dA = (grid_step * MICRON_UNIT) ** 2
     else:
-        dA = torch.as_tensor(cell_weights, dtype=E_sim.real.dtype, device=E_sim.device)
-        dA /= torch.mean(dA)
+        ## we only need the area weights for transverse axis
+        ## axis here is the normal axis
+        plane_slice = monitor_slice[:axis] + monitor_slice[axis + 1 :]
+        dA = _surface_quadrature_weights(
+            cell_weights[plane_slice],
+            dtype=E_sim.real.dtype,
+            device=E_sim.device,
+        )
 
-    # Mode power, using the same convention as get_flux_3d:
-    # Pm = (0.5 * torch.sum(torch.cross(E_m, H_m.conj(), dim=0)[axis]) * dA).real.abs()
-    ## mode is normalized to have unit poynting flux, so Pm should be 1.
-    # print(Pm)
+    # Evaluate mode power with the same global area convention as the overlap.
+    # This supports both legacy FDTD-X modes normalized with relative areas and
+    # modes normalized directly with physical areas.
+    mode_flux_density = torch.cross(E_m, H_m.conj(), dim=0)[axis]
+    if isinstance(dA, torch.Tensor):
+        mode_power = (0.5 * torch.sum(mode_flux_density * dA)).real.abs()
+    else:
+        mode_power = (0.5 * torch.sum(mode_flux_density) * dA).real.abs()
+    if bool(mode_power <= torch.finfo(mode_power.dtype).tiny):
+        raise ValueError("Eigenmode has zero power under the monitor quadrature.")
 
     # Lorentz overlap numerator:
     # ∫ (E_m* × H_sim + E_sim × H_m*) · n dA
     overlap_a = torch.cross(E_m, H_sim.conj(), dim=0)[axis]
     overlap_b = torch.cross(E_sim.conj(), H_m, dim=0)[axis]
+    # normalization = torch.cross(E_m.conj(), H_m, dim=0)[axis]
+    # normalization = torch.sum(normalization * dA)
+    # normalization = ((normalization) ** 0.5).abs()
 
     # import matplotlib.pyplot as plt
     # fig, axs = plt.subplots(5, 4, figsize=(15, 15))
@@ -1229,12 +1473,16 @@ def get_eigenmode_coefficients_3d(
         a_p = torch.sum((overlap_a + overlap_b) * dA) / 4
         a_m = torch.sum((overlap_a - overlap_b) * dA) / 4
     else:
-        a_p = (torch.sum(overlap_a + overlap_b) * dA) / 4
-        a_m = (torch.sum(overlap_a - overlap_b) * dA) / 4
+        a_p = torch.sum(overlap_a + overlap_b) * dA / 4
+        a_m = torch.sum(overlap_a - overlap_b) * dA / 4
+
+    # a_p = a_p / normalization * 1.199
+    # a_m = a_m / normalization * 1.199
+    # print(a_p, normalization)
 
     if energy:
-        power_p = torch.abs(a_p) ** 2
-        power_m = torch.abs(a_m) ** 2
+        power_p = torch.abs(a_p) ** 2 / mode_power
+        power_m = torch.abs(a_m) ** 2 / mode_power
         return power_p, power_m
         # if direction[1] == "+":
         #     return power_p, 0
@@ -1244,9 +1492,9 @@ def get_eigenmode_coefficients_3d(
         #     raise ValueError("Invalid direction")
 
     if direction[1] == "+":
-        return a_p, 0
+        return a_p / torch.sqrt(mode_power), 0
     elif direction[1] == "-":
-        return 0, a_m
+        return 0, a_m / torch.sqrt(mode_power)
     else:
         raise ValueError("Invalid direction")
 
@@ -3242,6 +3490,31 @@ def get_flux_3d(
     grid_metadata: RectilinearGridMetadata | dict[str, Any] | None = None,
     cell_weights: Tensor | np.ndarray | None = None,
 ):
+    """Integrate time-averaged 3D Poynting flux through a monitor plane.
+
+    Args:
+        Ex: Simulated x-directed electric-field phasor.
+        Ey: Simulated y-directed electric-field phasor.
+        Ez: Simulated z-directed electric-field phasor.
+        Hx: Simulated x-directed magnetic-field phasor.
+        Hy: Simulated y-directed magnetic-field phasor.
+        Hz: Simulated z-directed magnetic-field phasor.
+        grid_step: Uniform-grid fallback spacing in micrometers, converted to
+            ``(grid_step * 1e-6) ** 2`` square meters when neither
+            ``grid_metadata`` nor ``cell_weights`` is provided.
+        monitor: Spatial slice selecting the integration plane.
+        direction: Axis normal to the monitor plane.
+        grid_metadata: Rectilinear grid metadata used to derive physical areas.
+        cell_weights: Optional precomputed plane-area tensor indexed by axis.
+
+    Returns:
+        Signed real power integrated with physical cell areas in square meters.
+
+    Notes:
+        A single global area reference is essential when source and output
+        monitors have different orientations. Normalizing by each plane's mean
+        cell area changes transmission when the mesh or orientation changes.
+    """
 
     # monitor_slice = tuple(index_to_slice(i) for i in monitor)
     monitor_slice = monitor
@@ -3261,20 +3534,17 @@ def get_flux_3d(
     else:
         cell_weights = cell_weights[axis]
 
-    ## we only need the area weights for transverse axis
-    ## axis here is the normal axis
-    plane_slice = monitor_slice[:axis] + monitor_slice[axis + 1 :]
-    cell_weights = cell_weights[plane_slice]
-
     if cell_weights is None:
-        dA = 1
+        dA = (grid_step * MICRON_UNIT) ** 2
     else:
-        dA = torch.as_tensor(
-            cell_weights,
+        ## we only need the area weights for transverse axis
+        ## axis here is the normal axis
+        plane_slice = monitor_slice[:axis] + monitor_slice[axis + 1 :]
+        dA = _surface_quadrature_weights(
+            cell_weights[plane_slice],
             dtype=phasors_E.real.dtype,
             device=phasors_E.device,
         )
-        dA /= torch.mean(dA)
     # flux = (
     #     0.5
     #     * torch.cross(
@@ -3802,6 +4072,101 @@ def get_material_heat_optic_spec(
     )
 
 
+def _origin_grid_cell_bounds(
+    coords: Sequence[Sequence[float]],
+) -> tuple[tuple[int, int], tuple[int, int], tuple[int, int]]:
+    """Return one-cell bounds at the native cells nearest the origin.
+
+    Args:
+        coords: Three one-dimensional arrays of native cell-center coordinates.
+
+    Returns:
+        Three half-open bounds, one per spatial axis, containing the cells whose
+        centers are closest to physical coordinate zero.
+
+    Raises:
+        ValueError: If ``coords`` is not a finite, nonempty 3-D rectilinear grid.
+    """
+    if len(coords) != 3:
+        raise ValueError("Origin visualization bounds require three spatial axes.")
+
+    bounds = []
+    for axis, axis_coords in enumerate(coords):
+        values = np.asarray(axis_coords, dtype=np.float64)
+        if values.ndim != 1 or values.size == 0 or not np.all(np.isfinite(values)):
+            raise ValueError(
+                "Origin visualization coordinates must be finite, nonempty "
+                f"1-D arrays; axis {axis} has shape {values.shape}."
+            )
+        index = int(np.argmin(np.abs(values)))
+        bounds.append((index, index + 1))
+    return tuple(bounds)
+
+
+def _design_region_visualization_bounds(
+    region_bounds: Sequence[tuple[int, int]],
+    full_shape: Sequence[int],
+    symmetry: Sequence[int],
+    *,
+    slab_cells: int = 3,
+) -> dict[str, tuple[tuple[int, int], tuple[int, int], tuple[int, int]]]:
+    """Return full cross-section slabs centered on native reference bounds.
+
+    Args:
+        region_bounds: Three half-open native-grid bounds for a design region or
+            for the one-cell physical-origin fallback.
+        full_shape: Full native simulation shape ``[Nx, Ny, Nz]``.
+        symmetry: FDTD-X PEC/PMC symmetry tuple. On a symmetric normal axis,
+            the slab is placed on the retained upper half and later unfolded.
+        slab_cells: Maximum retained-domain thickness along the plane normal.
+
+    Returns:
+        Mapping for ``"xy"``, ``"xz"``, and ``"yz"`` planes. Each value is
+        a three-axis half-open bounds tuple spanning the full two in-plane axes.
+
+    Raises:
+        ValueError: If shapes are not three-dimensional, bounds are invalid, or
+            ``slab_cells`` is not positive.
+
+    Notes:
+        A thin slab rather than a single cell supplies neighboring native-grid
+        samples for subsequent rectilinear interpolation onto the export grid.
+    """
+    if len(region_bounds) != 3 or len(full_shape) != 3 or len(symmetry) != 3:
+        raise ValueError("Visualization bounds require three spatial axes.")
+    if slab_cells <= 0:
+        raise ValueError(f"slab_cells must be positive, got {slab_cells}.")
+
+    normalized_bounds = tuple((int(start), int(stop)) for start, stop in region_bounds)
+    normalized_shape = tuple(int(size) for size in full_shape)
+    centers = []
+    for axis, ((start, stop), size) in enumerate(
+        zip(normalized_bounds, normalized_shape)
+    ):
+        if start < 0 or stop > size or stop <= start:
+            raise ValueError(
+                f"Invalid design-region bounds on axis {axis}: {(start, stop)}, "
+                f"full_shape={normalized_shape}."
+            )
+        centers.append((start + stop) // 2)
+
+    result = {}
+    for plane_name, normal_axis in (("xy", 2), ("xz", 1), ("yz", 0)):
+        size = normalized_shape[normal_axis]
+        minimum = size // 2 if int(symmetry[normal_axis]) != 0 else 0
+        center = centers[normal_axis]
+        if minimum and center < minimum:
+            center = size - 1 - center
+        width = min(int(slab_cells), size - minimum)
+        start = max(minimum, center - width // 2)
+        stop = min(size, start + width)
+        start = max(minimum, stop - width)
+        plane_bounds = [(0, axis_size) for axis_size in normalized_shape]
+        plane_bounds[normal_axis] = (start, stop)
+        result[plane_name] = tuple(plane_bounds)
+    return result
+
+
 def convert_to_fdtdx_grid_shape_loc_slice(slice: Slice, direction: str = "x+"):
     def _bounds(indexer):
         if isinstance(indexer, builtins.slice):
@@ -3929,14 +4294,66 @@ def interface_field_penalty(
         raise ValueError(reduction)
 
 
+def _infer_material_fraction(
+    epsilon_map: torch.Tensor,
+    eps_core: complex | float,
+    eps_clad: complex | float,
+    eps: float,
+) -> torch.Tensor:
+    """Infer a real material fraction from a two-endpoint complex mix.
+
+    The fraction is the orthogonal projection of each permittivity onto the
+    line segment joining ``eps_clad`` and ``eps_core`` in the complex plane.
+    This supports a real density that controls both the real and imaginary
+    parts of a nondispersive material through one affine interpolation.
+    """
+    endpoints_are_complex = any(
+        (
+            torch.is_complex(value)
+            if isinstance(value, torch.Tensor)
+            else np.iscomplexobj(value)
+        )
+        for value in (eps_core, eps_clad)
+    )
+    if not torch.is_complex(epsilon_map) and not endpoints_are_complex:
+        eps_core_tensor = torch.as_tensor(
+            eps_core, dtype=epsilon_map.dtype, device=epsilon_map.device
+        )
+        eps_clad_tensor = torch.as_tensor(
+            eps_clad, dtype=epsilon_map.dtype, device=epsilon_map.device
+        )
+        denominator = eps_core_tensor - eps_clad_tensor
+        if bool((denominator.abs() < eps).detach().cpu()):
+            raise ValueError("eps_core and eps_clad must be distinct.")
+        return (epsilon_map - eps_clad_tensor) / denominator
+
+    complex_dtype = (
+        torch.complex128
+        if epsilon_map.dtype in (torch.float64, torch.complex128)
+        else torch.complex64
+    )
+    epsilon_complex = epsilon_map.to(dtype=complex_dtype)
+    eps_core_tensor = torch.as_tensor(
+        eps_core, dtype=complex_dtype, device=epsilon_map.device
+    )
+    eps_clad_tensor = torch.as_tensor(
+        eps_clad, dtype=complex_dtype, device=epsilon_map.device
+    )
+    delta = eps_core_tensor - eps_clad_tensor
+    denominator = delta.abs().square()
+    if bool((denominator < eps).detach().cpu()):
+        raise ValueError("eps_core and eps_clad must be distinct.")
+    return ((epsilon_complex - eps_clad_tensor) * delta.conj()).real / denominator
+
+
 def energy_constraint_penalty(
     fz: torch.Tensor,
     epsilon_map: torch.Tensor,
     rho: Optional[torch.Tensor] = None,
     design_region_mask: Optional[torch.Tensor] = None,
     *,
-    eps_core: Optional[float] = None,
-    eps_clad: Optional[float] = None,
+    eps_core: Optional[complex | float] = None,
+    eps_clad: Optional[complex | float] = None,
     reduction: str = "mean",
     eps: float = 1e-12,
     is_3d: bool = False,
@@ -3967,6 +4384,14 @@ def energy_constraint_penalty(
 
     Returns:
         Penalty scalar or per-sample tensor.
+
+    Notes:
+        For complex nondispersive media, the energy weighting uses
+        ``Re(epsilon)`` as the reactive stored-energy coefficient.  When
+        ``rho`` is omitted, the material fraction is inferred by projecting
+        the complex permittivity onto the line between ``eps_clad`` and
+        ``eps_core``; this preserves both real and imaginary material
+        channels without treating a complex value as a Python float.
     """
     if is_3d:
         if fz.shape[-3:] != epsilon_map.shape[-3:]:
@@ -4010,10 +4435,9 @@ def energy_constraint_penalty(
     # Infer rho if not explicitly provided
     if rho is None:
         if eps_core is not None and eps_clad is not None:
-            denom = float(eps_core - eps_clad)
-            if abs(denom) < eps:
-                raise ValueError("eps_core and eps_clad must be distinct.")
-            rho = (eps_w - float(eps_clad)) / denom
+            rho = _infer_material_fraction(
+                epsilon_map, eps_core=eps_core, eps_clad=eps_clad, eps=eps
+            ).to(dtype=fz.real.dtype, device=fz.device)
         else:
             emin = eps_w.amin(keepdim=True)
             emax = eps_w.amax(keepdim=True)
@@ -4044,8 +4468,8 @@ def structure_simplify_penalty(
     rho: Optional[torch.Tensor] = None,
     design_region_mask: Optional[torch.Tensor] = None,
     *,
-    eps_core: Optional[float] = None,
-    eps_clad: Optional[float] = None,
+    eps_core: Optional[complex | float] = None,
+    eps_clad: Optional[complex | float] = None,
     energy_threshold: float = 0.01,
     reduction: str = "mean",
     eps: float = 1e-12,
@@ -4092,6 +4516,10 @@ def structure_simplify_penalty(
 
     Returns:
         Scalar penalty or per-sample tensor.
+
+    Notes:
+        For complex nondispersive media, ``rho`` inference uses both
+        endpoint components through a projection in the complex plane.
     """
     if is_3d:
         if fz.shape[-3:] != epsilon_map.shape[-3:]:
@@ -4128,10 +4556,9 @@ def structure_simplify_penalty(
     # Infer rho if needed
     if rho is None:
         if eps_core is not None and eps_clad is not None:
-            denom = float(eps_core - eps_clad)
-            if abs(denom) < eps:
-                raise ValueError("eps_core and eps_clad must be distinct.")
-            rho = (eps_w - float(eps_clad)) / denom
+            rho = _infer_material_fraction(
+                epsilon_map, eps_core=eps_core, eps_clad=eps_clad, eps=eps
+            ).to(dtype=fz.real.dtype, device=fz.device)
         else:
             emin = eps_w.amin(dim=(-2, -1), keepdim=True)
             emax = eps_w.amax(dim=(-2, -1), keepdim=True)
@@ -4176,3 +4603,1100 @@ def structure_simplify_penalty(
     if reduction == "sum":
         return penalty.sum()
     return penalty
+
+
+# -----------------------------------------------------------------------------
+# Erosion-Dilation Manufacturing Penalty and Helpers
+# -----------------------------------------------------------------------------
+
+_ED_CONIC_KERNEL_CACHE: dict[tuple[int, int, str, str], Tensor] = {}
+
+
+def get_ed_kernel_radius_px(
+    length_scale: float,
+    pixel_size: float | Sequence[float],
+) -> tuple[int, int]:
+    """Calculate the 2D erosion/dilation kernel radius in pixels along each axis.
+
+    Args:
+        length_scale (float): Physical length scale of erosion/dilation in microns.
+            Must be positive.
+        pixel_size (float | Sequence[float]): Physical pixel size (dl_x, dl_y) or
+            scalar dl in microns. Must be positive.
+
+    Returns:
+        tuple[int, int]: Kernel radius in pixels (rx, ry) along x and y.
+
+    Raises:
+        ValueError: If length_scale or pixel_size is non-positive or invalid.
+    """
+    if length_scale <= 0:
+        raise ValueError(f"length_scale must be positive, got {length_scale}")
+
+    if isinstance(pixel_size, (int, float)):
+        dl_x = float(pixel_size)
+        dl_y = float(pixel_size)
+    elif isinstance(pixel_size, (tuple, list)):
+        if len(pixel_size) == 1:
+            dl_x = float(pixel_size[0])
+            dl_y = float(pixel_size[0])
+        elif len(pixel_size) >= 2:
+            dl_x = float(pixel_size[0])
+            dl_y = float(pixel_size[1])
+        else:
+            raise ValueError(f"pixel_size sequence cannot be empty, got {pixel_size}")
+    else:
+        raise ValueError(f"Unsupported pixel_size type: {type(pixel_size)}")
+
+    if dl_x <= 0 or dl_y <= 0:
+        raise ValueError(f"pixel_size must be positive, got ({dl_x}, {dl_y})")
+
+    rx = int(math.ceil(float(length_scale) / dl_x))
+    ry = int(math.ceil(float(length_scale) / dl_y))
+    return rx, ry
+
+
+def _get_conic_kernel_2d(
+    rx: int,
+    ry: int,
+    device: torch.device | str,
+    dtype: torch.dtype,
+) -> Tensor:
+    """Build or retrieve a cached 2D conic kernel matching Tidy3D's ConicFilter.
+
+    Args:
+        rx (int): Kernel radius along axis 0 (x) in pixels.
+        ry (int): Kernel radius along axis 1 (y) in pixels.
+        device (torch.device | str): Target torch device.
+        dtype (torch.dtype): Target torch floating dtype.
+
+    Returns:
+        Tensor: Normalized 2D conic kernel with shape (1, 1, 2*rx+1, 2*ry+1).
+    """
+    device_obj = torch.device(device) if isinstance(device, str) else device
+    key = (int(rx), int(ry), str(device_obj), str(dtype))
+    if key in _ED_CONIC_KERNEL_CACHE:
+        return _ED_CONIC_KERNEL_CACHE[key]
+
+    sx = 2 * int(rx) + 1
+    sy = 2 * int(ry) + 1
+
+    if sx > 1:
+        gx = torch.linspace(-1.0, 1.0, sx, device=device_obj, dtype=torch.float64)
+    else:
+        gx = torch.zeros(1, device=device_obj, dtype=torch.float64)
+
+    if sy > 1:
+        gy = torch.linspace(-1.0, 1.0, sy, device=device_obj, dtype=torch.float64)
+    else:
+        gy = torch.zeros(1, device=device_obj, dtype=torch.float64)
+
+    dists = torch.sqrt(gx[:, None] ** 2 + gy[None, :] ** 2)
+    raw = torch.clamp(1.0 - dists, min=0.0)
+    if raw.sum() <= 0:
+        raw[int(rx), int(ry)] = 1.0
+    kernel = (raw / raw.sum()).to(dtype=dtype)
+    kernel_4d = kernel.unsqueeze(0).unsqueeze(0)
+    _ED_CONIC_KERNEL_CACHE[key] = kernel_4d
+    return kernel_4d
+
+
+def _build_reflect_axis_indices(
+    domain_size: int,
+    start_idx: int,
+    stop_idx: int,
+    device: torch.device | str,
+) -> tuple[int, int, Tensor]:
+    """Compute simulation-domain crop bounds and local reflection index tensor.
+
+    Args:
+        domain_size (int): Size of the 1D domain along this axis. Must be positive.
+        start_idx (int): Global start index of requested interval (may be negative).
+        stop_idx (int): Global stop index of requested interval (may exceed domain_size).
+        device (torch.device | str): Target torch device for the returned index tensor.
+
+    Returns:
+        tuple[int, int, Tensor]: (crop_start, crop_stop, local_idx) where
+        [crop_start, crop_stop) is the sub-interval of [0, domain_size) to slice,
+        and local_idx is 1D torch.long containing indices into that cropped slice.
+
+    Raises:
+        ValueError: If domain_size <= 0 or stop_idx <= start_idx.
+    """
+    domain_size = int(domain_size)
+    start_idx = int(start_idx)
+    stop_idx = int(stop_idx)
+    if domain_size <= 0:
+        raise ValueError(f"domain_size must be positive, got {domain_size}")
+    if stop_idx <= start_idx:
+        raise ValueError(
+            f"stop_idx must be greater than start_idx, got start={start_idx}, stop={stop_idx}"
+        )
+
+    pad_left = max(0, -start_idx)
+    pad_right = max(0, stop_idx - domain_size)
+
+    if pad_left == 0 and pad_right == 0:
+        crop_start = start_idx
+        crop_stop = stop_idx
+        local_idx = torch.arange(
+            crop_stop - crop_start, device=device, dtype=torch.long
+        )
+        return crop_start, crop_stop, local_idx
+
+    if domain_size == 1:
+        crop_start = 0
+        crop_stop = 1
+        local_idx = torch.zeros(stop_idx - start_idx, device=device, dtype=torch.long)
+        return crop_start, crop_stop, local_idx
+
+    base_idx = np.arange(domain_size, dtype=np.int64)
+    padded_idx = np.pad(base_idx, (pad_left, pad_right), mode="reflect")
+    global_indices = padded_idx[start_idx + pad_left : stop_idx + pad_left]
+    crop_start = int(global_indices.min())
+    crop_stop = int(global_indices.max()) + 1
+    local_idx = torch.as_tensor(
+        global_indices - crop_start, device=device, dtype=torch.long
+    )
+    return crop_start, crop_stop, local_idx
+
+
+def _eval_ed_2d_from_halo(
+    padded_2d: Tensor,
+    rx: int,
+    ry: int,
+    eval_shape: tuple[int, int],
+    beta: float = 100.0,
+    eta: float = 0.5,
+    delta_eta: float = 0.01,
+    operator_mode: str = "tidy3d",
+    axis_weights: Sequence[np.ndarray | Tensor] | None = None,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Evaluate 2D erosion/dilation operator on a halo-padded occupancy tensor.
+
+    Args:
+        padded_2d (Tensor): Halo-padded 2D occupancy tensor [H_pad, W_pad] or [B, 1, H_pad, W_pad].
+            H_pad must be at least eval_shape[0] + 4 * rx, and W_pad >= eval_shape[1] + 4 * ry.
+        rx (int): Kernel radius along axis 0 (x).
+        ry (int): Kernel radius along axis 1 (y).
+        eval_shape (tuple[int, int]): Target evaluation shape (H_eval, W_eval).
+        beta (float): Tanh projection sharpness parameter. Defaults to 100.0.
+        eta (float): Projection midpoint. Defaults to 0.5.
+        delta_eta (float): Binarization threshold offset. Defaults to 0.01.
+        operator_mode (str): Operator mode ('tidy3d' or 'morph_op'). Defaults to 'tidy3d'.
+        axis_weights (Sequence[np.ndarray | Tensor] | None): Optional per-axis grid weights.
+
+    Returns:
+        tuple[Tensor, Tensor, Tensor]:
+            - penalty: RMS norm of (closed - opened) over eval_shape (scalar tensor for 2D input).
+            - opened: Opened field on eval_shape.
+            - closed: Closed field on eval_shape.
+    """
+    is_2d = padded_2d.ndim == 2
+    if is_2d:
+        x4d = padded_2d.unsqueeze(0).unsqueeze(0)
+    elif padded_2d.ndim == 4:
+        x4d = padded_2d
+    else:
+        raise ValueError(
+            f"padded_2d must be 2D [H, W] or 4D [B, 1, H, W], got ndim={padded_2d.ndim}"
+        )
+
+    eval_h, eval_w = int(eval_shape[0]), int(eval_shape[1])
+    eta_dilate = float(delta_eta)
+    eta_erode = 1.0 - float(delta_eta)
+
+    if operator_mode == "tidy3d":
+        from core.invdes.models.layers.parametrization.utils import tanh_projection
+
+        kernel = _get_conic_kernel_2d(rx, ry, x4d.device, x4d.dtype)
+        conv1 = F.conv2d(x4d, kernel, padding=0)
+        eroded = tanh_projection(conv1, beta=beta, eta=eta_erode, clip=True)
+        dilated = tanh_projection(conv1, beta=beta, eta=eta_dilate, clip=True)
+
+        both = torch.cat([eroded, dilated], dim=0)
+        conv2 = F.conv2d(both, kernel, padding=0)
+        conv2_open, conv2_close = torch.chunk(conv2, 2, dim=0)
+        opened = tanh_projection(conv2_open, beta=beta, eta=eta_dilate, clip=True)
+        closed = tanh_projection(conv2_close, beta=beta, eta=eta_erode, clip=True)
+
+    elif operator_mode == "morph_op":
+        r_morph = max(int(rx), int(ry))
+        from core.invdes.models.layers.parametrization.extrude import _make_disk_kernel
+        from core.invdes.models.layers.parametrization.morph_op import dilation, erosion
+
+        k_morph = _make_disk_kernel(r_morph, device=x4d.device, dtype=x4d.dtype)
+        if x4d.is_cuda:
+            er = erosion(x4d, kernel=k_morph, border_type="geodesic", engine="triton")
+            opened_full = dilation(
+                er, kernel=k_morph, border_type="geodesic", engine="triton"
+            )
+            di = dilation(x4d, kernel=k_morph, border_type="geodesic", engine="triton")
+            closed_full = erosion(
+                di, kernel=k_morph, border_type="geodesic", engine="triton"
+            )
+        else:
+
+            def _apply_op_cpu(inp, op):
+                k_h, k_w = k_morph.shape
+                pad = r_morph
+                inp_pad = F.pad(inp, (pad, pad, pad, pad), mode="replicate")
+                patches = F.unfold(inp_pad, kernel_size=(k_h, k_w))
+                mask_flat = (k_morph > 0.5).flatten()
+                active = patches[:, mask_flat, :]
+                B, _, H, W = inp.shape
+                if op == "erosion":
+                    val = active.min(dim=1).values
+                else:
+                    val = active.max(dim=1).values
+                return val.view(B, 1, H, W)
+
+            er = _apply_op_cpu(x4d, "erosion")
+            opened_full = _apply_op_cpu(er, "dilation")
+            di = _apply_op_cpu(x4d, "dilation")
+            closed_full = _apply_op_cpu(di, "erosion")
+
+        crop_h = 2 * rx
+        crop_w = 2 * ry
+        opened = opened_full[
+            ...,
+            crop_h : opened_full.shape[-2] - crop_h,
+            crop_w : opened_full.shape[-1] - crop_w,
+        ]
+        closed = closed_full[
+            ...,
+            crop_h : closed_full.shape[-2] - crop_h,
+            crop_w : closed_full.shape[-1] - crop_w,
+        ]
+
+    else:
+        raise ValueError(f"Unknown operator_mode: {operator_mode}")
+
+    if opened.shape[-2] > eval_h or opened.shape[-1] > eval_w:
+        ex_x = (opened.shape[-2] - eval_h) // 2
+        ex_y = (opened.shape[-1] - eval_w) // 2
+        opened = opened[..., ex_x : ex_x + eval_h, ex_y : ex_y + eval_w]
+        closed = closed[..., ex_x : ex_x + eval_h, ex_y : ex_y + eval_w]
+
+    diff = closed - opened
+    n_eval = float(max(eval_h * eval_w, 1))
+    sq_sum = diff.flatten(start_dim=-2).square().sum(dim=-1)
+
+    penalty = torch.where(
+        sq_sum > 0,
+        torch.sqrt(sq_sum.clamp_min(1e-30) / n_eval),
+        torch.zeros_like(sq_sum),
+    )
+
+    if is_2d:
+        return (
+            penalty.squeeze(),
+            opened.squeeze(0).squeeze(0),
+            closed.squeeze(0).squeeze(0),
+        )
+    return penalty, opened, closed
+
+
+def _normalize_slice_to_occupancy(
+    tensor_slice: Tensor,
+    eps_core: complex | float | None,
+    eps_clad: complex | float | None,
+    fallback_bounds: tuple[Tensor, Tensor] | None = None,
+    w_z: float = 1.0,
+    detach: bool = False,
+) -> Tensor:
+    """Convert a 2D or 3D permittivity slice to normalized occupancy in [0, 1]."""
+    if eps_core is not None and eps_clad is not None:
+        occ = _infer_material_fraction(
+            tensor_slice, eps_core=eps_core, eps_clad=eps_clad, eps=1e-12
+        )
+    else:
+        t_real = tensor_slice.real if torch.is_complex(tensor_slice) else tensor_slice
+        if fallback_bounds is not None:
+            emin, emax = fallback_bounds
+        else:
+            emin = t_real.amin()
+            emax = t_real.amax()
+        denom = (emax - emin).clamp_min(1e-12)
+        occ = (t_real - emin) / denom
+
+    if 1e-6 < w_z < 1.0 - 1e-6:
+        max_val = float(occ.detach().amax().item()) if occ.numel() > 0 else 0.0
+        if max_val <= w_z + 1e-3:
+            occ = occ / w_z
+
+    if detach:
+        return occ.clamp(0.0, 1.0).detach()
+    from core.invdes.models.layers.parametrization.utils import ApplyBothLimit
+
+    return ApplyBothLimit.apply(occ, 1.0, 0.0)
+
+
+def erosion_dilation_penalty(
+    epsilon_map: Tensor | None = None,
+    *,
+    rho: Tensor | None = None,
+    fixed_epsilon_map: Tensor | np.ndarray | None = None,
+    design_region_mask: tuple[slice, ...] | Tensor | None = None,
+    eps_core: complex | float | None = None,
+    eps_clad: complex | float | None = None,
+    length_scale: float = 0.15,
+    pixel_size: float | Sequence[float] = 0.02,
+    planes: str | Sequence[str] = ("middle",),
+    plane_weights: dict[str, float] | Sequence[float] | None = None,
+    aggregation: str = "mean",
+    beta: float = 100.0,
+    eta: float = 0.5,
+    delta_eta: float = 0.01,
+    axis_weights: Sequence[np.ndarray | Tensor] | None = None,
+    evaluation_band: float = 0.0,
+    evaluation_band_px: int = 0,
+    extra_halo_px: int = 0,
+    operator_mode: str = "tidy3d",
+    grid_metadata: RectilinearGridMetadata | dict[str, Any] | None = None,
+    design_region_cfg: dict[str, Any] | None = None,
+    design_region_param_cfg: dict[str, Any] | None = None,
+    rho_coords: Sequence[np.ndarray | Tensor] | None = None,
+    return_details: bool = False,
+    _context_cache: dict[tuple, dict[str, Any]] | None = None,
+    _cache_key_prefix: tuple | None = None,
+    _cache_stats: dict[str, int] | None = None,
+) -> Tensor | tuple[Tensor, dict[str, Any]]:
+    """Compute differentiable erosion-dilation manufacturing penalty.
+
+    Args:
+        epsilon_map (Tensor | None): Complex or real permittivity tensor [X, Y] or [X, Y, Z].
+        rho (Tensor | None): Optional material fraction tensor in [0, 1]. If None, inferred
+            from epsilon_map.
+        fixed_epsilon_map (Tensor | np.ndarray | None): Full simulation domain background
+            permittivity map.
+        design_region_mask (tuple[slice, ...] | Tensor | None): Spatial bounding box or mask
+            locating the design region inside fixed_epsilon_map.
+        eps_core (complex | float | None): Core material permittivity for fraction inference.
+        eps_clad (complex | float | None): Cladding material permittivity for fraction inference.
+        length_scale (float): Minimum feature size length scale in microns. Defaults to 0.15.
+        pixel_size (float | Sequence[float]): Grid spacing (dl_x, dl_y) in microns. Defaults to 0.02.
+        planes (str | Sequence[str]): Slices to evaluate ('top', 'bottom', 'middle').
+            Defaults to ('middle',).
+        plane_weights (dict[str, float] | Sequence[float] | None): Relative plane weighting.
+        aggregation (str): Aggregation method ('mean', 'sum', 'max', 'min'). Defaults to 'mean'.
+        beta (float): Tanh projection sharpness parameter. Defaults to 100.0.
+        eta (float): Projection threshold midpoint. Defaults to 0.5.
+        delta_eta (float): Binarization threshold offset. Defaults to 0.01.
+        axis_weights (Sequence[np.ndarray | Tensor] | None): Optional per-axis grid weights.
+        evaluation_band (float): Margin width in microns to expand or shrink evaluation. Defaults to 0.0.
+        evaluation_band_px (int): Margin width in pixels to expand or shrink evaluation. Defaults to 0.
+        extra_halo_px (int): Additional halo padding in pixels. Defaults to 0.
+        operator_mode (str): Execution operator ('tidy3d' or 'morph_op'). Defaults to 'tidy3d'.
+        grid_metadata (RectilinearGridMetadata | dict[str, Any] | None): Optional rectilinear
+            grid metadata (containing 'coords', 'boundaries', 'is_uniform') for resampling
+            nonuniform simulation grids onto a uniform evaluation grid.
+        design_region_cfg (dict[str, Any] | None): Optional design region configuration
+            dictionary containing physical 'center' and 'size' in microns.
+        design_region_param_cfg (dict[str, Any] | None): Optional parametrization configuration
+            dictionary (e.g. containing 'phi_resolution' or 'rho_resolution').
+        rho_coords (Sequence[np.ndarray | Tensor] | None): Optional explicit 1D physical
+            coordinates (x_coords, y_coords) for a uniform internal design-region tensor rho.
+        return_details (bool): Whether to return a diagnostics dictionary alongside penalty.
+
+    Returns:
+        Tensor | tuple[Tensor, dict[str, Any]]: Scalar penalty tensor, or (penalty, details) if return_details=True.
+
+    Raises:
+        ValueError: If neither epsilon_map nor rho is supplied, or parameters are invalid.
+    """
+    if rho is None and epsilon_map is None:
+        raise ValueError("Either epsilon_map or rho must be provided.")
+
+    primary_in = rho if rho is not None else epsilon_map
+    if not isinstance(primary_in, Tensor):
+        primary_in = torch.as_tensor(primary_in, dtype=torch.float32)
+    target_device = primary_in.device
+    target_dtype = (
+        primary_in.real.dtype if torch.is_complex(primary_in) else primary_in.dtype
+    )
+    if not target_dtype.is_floating_point:
+        target_dtype = torch.float32
+
+    dl_x = float(pixel_size if isinstance(pixel_size, (int, float)) else pixel_size[0])
+    dl_y = float(pixel_size if isinstance(pixel_size, (int, float)) else pixel_size[1])
+    if design_region_param_cfg is not None:
+        param_res = design_region_param_cfg.get(
+            "phi_resolution"
+        ) or design_region_param_cfg.get("rho_resolution")
+        if (
+            isinstance(param_res, (tuple, list))
+            and len(param_res) >= 2
+            and float(param_res[0]) > 0
+            and float(param_res[1]) > 0
+        ):
+            dl_x = 1.0 / float(param_res[0])
+            dl_y = 1.0 / float(param_res[1])
+    rx, ry = get_ed_kernel_radius_px(length_scale, (dl_x, dl_y))
+
+    slice_x, slice_y, slice_z = None, None, None
+    if design_region_mask is not None:
+        if hasattr(design_region_mask, "x") and hasattr(design_region_mask, "y"):
+            slice_x = design_region_mask.x
+            slice_y = design_region_mask.y
+            slice_z = getattr(design_region_mask, "z", None)
+        elif isinstance(design_region_mask, (tuple, list)):
+            slice_x = design_region_mask[0]
+            slice_y = design_region_mask[1]
+            slice_z = design_region_mask[2] if len(design_region_mask) >= 3 else None
+        elif isinstance(design_region_mask, (torch.Tensor, np.ndarray)):
+            nz = torch.nonzero(torch.as_tensor(design_region_mask))
+            if nz.numel() > 0:
+                slice_x = slice(int(nz[:, 0].min()), int(nz[:, 0].max()) + 1)
+                slice_y = slice(int(nz[:, 1].min()), int(nz[:, 1].max()) + 1)
+                slice_z = (
+                    slice(int(nz[:, 2].min()), int(nz[:, 2].max()) + 1)
+                    if nz.shape[1] >= 3
+                    else None
+                )
+
+    sim_shape = (
+        tuple(fixed_epsilon_map.shape)
+        if fixed_epsilon_map is not None
+        else tuple(primary_in.shape)
+    )
+
+    if slice_x is not None:
+        nat_dr_x0, nat_dr_x1 = int(slice_x.start or 0), int(slice_x.stop)
+        nat_dr_y0, nat_dr_y1 = int(slice_y.start or 0), int(slice_y.stop)
+    else:
+        nat_dr_x0, nat_dr_x1 = 0, int(sim_shape[0])
+        nat_dr_y0, nat_dr_y1 = 0, int(sim_shape[1])
+
+    nat_dr_nx = nat_dr_x1 - nat_dr_x0
+    nat_dr_ny = nat_dr_y1 - nat_dr_y0
+    primary_is_full_domain = int(primary_in.shape[0]) == int(sim_shape[0]) and int(
+        primary_in.shape[1]
+    ) == int(sim_shape[1])
+    has_internal_res_mismatch = (not primary_is_full_domain) and (
+        int(primary_in.shape[0]) != nat_dr_nx or int(primary_in.shape[1]) != nat_dr_ny
+    )
+
+    src_x: np.ndarray | None = None
+    src_y: np.ndarray | None = None
+    raw_bounds: Sequence[Any] | None = None
+    grid_needs_resample = False
+
+    if grid_metadata is not None:
+        meta_dict = (
+            grid_metadata.to_dict()
+            if hasattr(grid_metadata, "to_dict")
+            else dict(grid_metadata)
+        )
+        raw_coords = meta_dict.get("coords", None)
+        raw_bounds = meta_dict.get("boundaries", None)
+        if (
+            raw_coords is not None
+            and len(raw_coords) >= 2
+            and len(raw_coords[0]) == sim_shape[0]
+            and len(raw_coords[1]) == sim_shape[1]
+        ):
+            src_x = np.asarray(raw_coords[0], dtype=np.float64)
+            src_y = np.asarray(raw_coords[1], dtype=np.float64)
+            dx_arr = np.diff(src_x) if len(src_x) > 1 else np.array([dl_x])
+            dy_arr = np.diff(src_y) if len(src_y) > 1 else np.array([dl_y])
+            is_xy_nonuniform = (
+                not np.allclose(dx_arr, dx_arr[0], rtol=1e-4, atol=1e-7)
+            ) or (not np.allclose(dy_arr, dy_arr[0], rtol=1e-4, atol=1e-7))
+            is_xy_spacing_mismatch = (
+                abs(float(np.mean(dx_arr)) - dl_x) > 1e-3 * max(dl_x, 1e-9)
+            ) or (abs(float(np.mean(dy_arr)) - dl_y) > 1e-3 * max(dl_y, 1e-9))
+            grid_needs_resample = bool(is_xy_nonuniform or is_xy_spacing_mismatch)
+
+    use_coord_resampling = bool(
+        has_internal_res_mismatch or grid_needs_resample or (rho_coords is not None)
+    )
+
+    u_sim_x: np.ndarray | None = None
+    u_sim_y: np.ndarray | None = None
+
+    if use_coord_resampling:
+        if src_x is not None and src_y is not None:
+            if (
+                raw_bounds is not None
+                and len(raw_bounds) >= 2
+                and len(raw_bounds[0]) == sim_shape[0] + 1
+                and len(raw_bounds[1]) == sim_shape[1] + 1
+            ):
+                b_x = np.asarray(raw_bounds[0], dtype=np.float64)
+                b_y = np.asarray(raw_bounds[1], dtype=np.float64)
+                sim_x_min, sim_x_max = float(b_x[0]), float(b_x[-1])
+                sim_y_min, sim_y_max = float(b_y[0]), float(b_y[-1])
+                dr_x_min, dr_x_max = float(b_x[nat_dr_x0]), float(b_x[nat_dr_x1])
+                dr_y_min, dr_y_max = float(b_y[nat_dr_y0]), float(b_y[nat_dr_y1])
+            else:
+                dx0 = float(src_x[1] - src_x[0]) if len(src_x) > 1 else dl_x
+                dxN = float(src_x[-1] - src_x[-2]) if len(src_x) > 1 else dl_x
+                dy0 = float(src_y[1] - src_y[0]) if len(src_y) > 1 else dl_y
+                dyN = float(src_y[-1] - src_y[-2]) if len(src_y) > 1 else dl_y
+                sim_x_min = float(src_x[0]) - 0.5 * dx0
+                sim_x_max = float(src_x[-1]) + 0.5 * dxN
+                sim_y_min = float(src_y[0]) - 0.5 * dy0
+                sim_y_max = float(src_y[-1]) + 0.5 * dyN
+                dr_x_min = float(src_x[nat_dr_x0]) - 0.5 * (
+                    float(src_x[nat_dr_x0] - src_x[nat_dr_x0 - 1])
+                    if nat_dr_x0 > 0
+                    else dx0
+                )
+                dr_x_max = float(src_x[nat_dr_x1 - 1]) + 0.5 * (
+                    float(src_x[nat_dr_x1] - src_x[nat_dr_x1 - 1])
+                    if nat_dr_x1 < len(src_x)
+                    else dxN
+                )
+                dr_y_min = float(src_y[nat_dr_y0]) - 0.5 * (
+                    float(src_y[nat_dr_y0] - src_y[nat_dr_y0 - 1])
+                    if nat_dr_y0 > 0
+                    else dy0
+                )
+                dr_y_max = float(src_y[nat_dr_y1 - 1]) + 0.5 * (
+                    float(src_y[nat_dr_y1] - src_y[nat_dr_y1 - 1])
+                    if nat_dr_y1 < len(src_y)
+                    else dyN
+                )
+            if (
+                design_region_cfg is not None
+                and "center" in design_region_cfg
+                and "size" in design_region_cfg
+            ):
+                cx = float(design_region_cfg["center"][0])
+                cy = float(design_region_cfg["center"][1])
+                sx_cfg = float(design_region_cfg["size"][0])
+                sy_cfg = float(design_region_cfg["size"][1])
+                if (
+                    cx - 0.5 * sx_cfg >= sim_x_min - 1e-5
+                    and cx + 0.5 * sx_cfg <= sim_x_max + 1e-5
+                    and cy - 0.5 * sy_cfg >= sim_y_min - 1e-5
+                    and cy + 0.5 * sy_cfg <= sim_y_max + 1e-5
+                ):
+                    dr_x_min, dr_x_max = cx - 0.5 * sx_cfg, cx + 0.5 * sx_cfg
+                    dr_y_min, dr_y_max = cy - 0.5 * sy_cfg, cy + 0.5 * sy_cfg
+        else:
+            if design_region_cfg is not None and "size" in design_region_cfg:
+                sx_phys = float(design_region_cfg["size"][0])
+                sy_phys = float(design_region_cfg["size"][1])
+            elif not primary_is_full_domain:
+                sx_phys = float(primary_in.shape[0]) * dl_x
+                sy_phys = float(primary_in.shape[1]) * dl_y
+            else:
+                sx_phys = float(nat_dr_nx) * dl_x
+                sy_phys = float(nat_dr_ny) * dl_y
+            ctx_dx = sx_phys / max(nat_dr_nx, 1)
+            ctx_dy = sy_phys / max(nat_dr_ny, 1)
+            sim_x_min, sim_x_max = 0.0, float(sim_shape[0]) * ctx_dx
+            sim_y_min, sim_y_max = 0.0, float(sim_shape[1]) * ctx_dy
+            dr_x_min, dr_x_max = float(nat_dr_x0) * ctx_dx, float(nat_dr_x1) * ctx_dx
+            dr_y_min, dr_y_max = float(nat_dr_y0) * ctx_dy, float(nat_dr_y1) * ctx_dy
+            src_x = (np.arange(sim_shape[0], dtype=np.float64) + 0.5) * ctx_dx
+            src_y = (np.arange(sim_shape[1], dtype=np.float64) + 0.5) * ctx_dy
+
+        sx = max(dr_x_max - dr_x_min, 1e-9)
+        sy = max(dr_y_max - dr_y_min, 1e-9)
+
+        if rho_coords is not None and len(rho_coords) >= 2:
+            u_dr_x = np.asarray(rho_coords[0], dtype=np.float64)
+            u_dr_y = np.asarray(rho_coords[1], dtype=np.float64)
+            dr_u_nx, dr_u_ny = len(u_dr_x), len(u_dr_y)
+            step_x = (
+                float(u_dr_x[-1] - u_dr_x[0]) / max(dr_u_nx - 1, 1)
+                if dr_u_nx > 1
+                else dl_x
+            )
+            step_y = (
+                float(u_dr_y[-1] - u_dr_y[0]) / max(dr_u_ny - 1, 1)
+                if dr_u_ny > 1
+                else dl_y
+            )
+            dl_x, dl_y = step_x, step_y
+            rx, ry = get_ed_kernel_radius_px(length_scale, (dl_x, dl_y))
+        elif not primary_is_full_domain:
+            dr_u_nx = int(primary_in.shape[0])
+            dr_u_ny = int(primary_in.shape[1])
+            step_x = sx / max(dr_u_nx, 1)
+            step_y = sy / max(dr_u_ny, 1)
+            dl_x, dl_y = step_x, step_y
+            rx, ry = get_ed_kernel_radius_px(length_scale, (dl_x, dl_y))
+            u_dr_x = np.linspace(
+                dr_x_min + 0.5 * step_x,
+                dr_x_max - 0.5 * step_x,
+                dr_u_nx,
+                dtype=np.float64,
+            )
+            u_dr_y = np.linspace(
+                dr_y_min + 0.5 * step_y,
+                dr_y_max - 0.5 * step_y,
+                dr_u_ny,
+                dtype=np.float64,
+            )
+        else:
+            dr_u_nx = max(2, int(round(sx / dl_x)))
+            dr_u_ny = max(2, int(round(sy / dl_y)))
+            step_x = sx / dr_u_nx
+            step_y = sy / dr_u_ny
+            dl_x, dl_y = step_x, step_y
+            rx, ry = get_ed_kernel_radius_px(length_scale, (dl_x, dl_y))
+            u_dr_x = np.linspace(
+                dr_x_min + 0.5 * step_x,
+                dr_x_max - 0.5 * step_x,
+                dr_u_nx,
+                dtype=np.float64,
+            )
+            u_dr_y = np.linspace(
+                dr_y_min + 0.5 * step_y,
+                dr_y_max - 0.5 * step_y,
+                dr_u_ny,
+                dtype=np.float64,
+            )
+
+        n_left_x = max(
+            0, int(math.floor((u_dr_x[0] - sim_x_min) / max(step_x, 1e-12) + 1e-9))
+        )
+        n_right_x = max(
+            0, int(math.floor((sim_x_max - u_dr_x[-1]) / max(step_x, 1e-12) + 1e-9))
+        )
+        n_left_y = max(
+            0, int(math.floor((u_dr_y[0] - sim_y_min) / max(step_y, 1e-12) + 1e-9))
+        )
+        n_right_y = max(
+            0, int(math.floor((sim_y_max - u_dr_y[-1]) / max(step_y, 1e-12) + 1e-9))
+        )
+        dom_nx = n_left_x + dr_u_nx + n_right_x
+        dom_ny = n_left_y + dr_u_ny + n_right_y
+        u_sim_x = u_dr_x[0] + (np.arange(dom_nx, dtype=np.float64) - n_left_x) * step_x
+        u_sim_y = u_dr_y[0] + (np.arange(dom_ny, dtype=np.float64) - n_left_y) * step_y
+        u_sim_x[n_left_x : n_left_x + dr_u_nx] = u_dr_x
+        u_sim_y[n_left_y : n_left_y + dr_u_ny] = u_dr_y
+        dr_x0, dr_x1 = n_left_x, n_left_x + dr_u_nx
+        dr_y0, dr_y1 = n_left_y, n_left_y + dr_u_ny
+    else:
+        dom_nx, dom_ny = int(sim_shape[0]), int(sim_shape[1])
+        dr_x0, dr_x1 = nat_dr_x0, nat_dr_x1
+        dr_y0, dr_y1 = nat_dr_y0, nat_dr_y1
+
+    if evaluation_band_px != 0:
+        band_x = int(evaluation_band_px)
+        band_y = int(evaluation_band_px)
+    elif evaluation_band != 0.0:
+        band_x = int(round(float(evaluation_band) / dl_x))
+        band_y = int(round(float(evaluation_band) / dl_y))
+    else:
+        band_x = 0
+        band_y = 0
+
+    eval_x0 = dr_x0 - band_x
+    eval_x1 = dr_x1 + band_x
+    eval_y0 = dr_y0 - band_y
+    eval_y1 = dr_y1 + band_y
+    eval_shape = (eval_x1 - eval_x0, eval_y1 - eval_y0)
+    if eval_shape[0] <= 0 or eval_shape[1] <= 0:
+        raise ValueError(
+            f"Invalid evaluation region shape {eval_shape}; check design_region_mask and evaluation_band."
+        )
+
+    if isinstance(planes, str):
+        plane_list = [planes]
+    else:
+        plane_list = list(planes)
+    if len(plane_list) == 0:
+        raise ValueError("planes must contain at least one evaluation plane.")
+
+    is_3d = (len(sim_shape) >= 3) or (primary_in.ndim >= 3)
+
+    z0, z1 = (
+        (int(slice_z.start or 0), int(slice_z.stop))
+        if (is_3d and slice_z is not None)
+        else (0, int(sim_shape[-1]) if is_3d else 1)
+    )
+
+    def _get_wz(z_index: int | None) -> float:
+        if z_index is not None and axis_weights is not None and len(axis_weights) >= 3:
+            rel_z = int(z_index) - z0
+            z_weights = axis_weights[2]
+            if 0 <= rel_z < len(z_weights):
+                return float(z_weights[rel_z])
+        return 1.0
+
+    eps_fallback_bounds: tuple[Tensor, Tensor] | None = None
+    if rho is None and (eps_core is None or eps_clad is None):
+        eps_r = primary_in.real if torch.is_complex(primary_in) else primary_in
+        eps_fallback_bounds = (eps_r.amin(), eps_r.amax())
+
+    fixed_fallback_bounds: tuple[Tensor, Tensor] | None = None
+
+    def _resample_full_domain_2d(
+        tensor_in: Tensor | np.ndarray,
+        u_x0: int,
+        u_x1: int,
+        u_y0: int,
+        u_y1: int,
+        z_index: int | None,
+    ) -> Tensor:
+        assert (
+            u_sim_x is not None
+            and u_sim_y is not None
+            and src_x is not None
+            and src_y is not None
+        )
+        dst_x_np = np.clip(u_sim_x[u_x0:u_x1], float(src_x[0]), float(src_x[-1]))
+        dst_y_np = np.clip(u_sim_y[u_y0:u_y1], float(src_y[0]), float(src_y[-1]))
+        nx0 = max(0, int(np.searchsorted(src_x, float(dst_x_np[0]), side="right")) - 2)
+        nx1 = min(
+            len(src_x),
+            int(np.searchsorted(src_x, float(dst_x_np[-1]), side="left")) + 2,
+        )
+        ny0 = max(0, int(np.searchsorted(src_y, float(dst_y_np[0]), side="right")) - 2)
+        ny1 = min(
+            len(src_y),
+            int(np.searchsorted(src_y, float(dst_y_np[-1]), side="left")) + 2,
+        )
+        if tensor_in.ndim >= 3 and z_index is not None:
+            raw_sub = tensor_in[nx0:nx1, ny0:ny1, z_index]
+        else:
+            raw_sub = tensor_in[nx0:nx1, ny0:ny1]
+        if isinstance(raw_sub, np.ndarray):
+            sub_t = torch.as_tensor(raw_sub, device=target_device)
+        else:
+            sub_t = raw_sub.to(device=target_device)
+        if not torch.is_complex(sub_t):
+            sub_t = sub_t.to(dtype=target_dtype)
+        return resample_rectilinear_tensor(
+            sub_t,
+            src_coords=(
+                torch.as_tensor(
+                    src_x[nx0:nx1], device=target_device, dtype=target_dtype
+                ),
+                torch.as_tensor(
+                    src_y[ny0:ny1], device=target_device, dtype=target_dtype
+                ),
+            ),
+            dst_coords=(
+                torch.as_tensor(dst_x_np, device=target_device, dtype=target_dtype),
+                torch.as_tensor(dst_y_np, device=target_device, dtype=target_dtype),
+            ),
+            axes=(0, 1),
+            mode="cartesian",
+            interpolation="linear",
+        )
+
+    def _extract_primary_slice(
+        x_start: int, x_stop: int, y_start: int, y_stop: int, z_index: int | None
+    ) -> Tensor:
+        w_z = _get_wz(z_index)
+        if rho is not None:
+            r_in = rho.real if torch.is_complex(rho) else rho
+            if use_coord_resampling and primary_is_full_domain:
+                slc = _resample_full_domain_2d(
+                    r_in, x_start, x_stop, y_start, y_stop, z_index
+                )
+            elif r_in.ndim >= 3 and z_index is not None:
+                if primary_is_full_domain:
+                    slc = r_in[x_start:x_stop, y_start:y_stop, z_index]
+                else:
+                    zt = (
+                        z_index - z0
+                        if (0 <= z_index - z0 < r_in.shape[-1])
+                        else (z_index if z_index < r_in.shape[-1] else -1)
+                    )
+                    slc = r_in[:, :, zt]
+            else:
+                if primary_is_full_domain:
+                    slc = r_in[x_start:x_stop, y_start:y_stop]
+                else:
+                    slc = r_in
+            if use_coord_resampling and not primary_is_full_domain:
+                target_h = x_stop - x_start
+                target_w = y_stop - y_start
+                if slc.shape[0] != target_h or slc.shape[1] != target_w:
+                    slc = F.interpolate(
+                        slc.to(dtype=target_dtype).unsqueeze(0).unsqueeze(0),
+                        size=(target_h, target_w),
+                        mode="bilinear",
+                        align_corners=False,
+                    )[0, 0]
+            if 1e-6 < w_z < 1.0 - 1e-6:
+                max_val = float(slc.detach().amax().item()) if slc.numel() > 0 else 0.0
+                if max_val <= w_z + 1e-3:
+                    slc = slc / w_z
+            from core.invdes.models.layers.parametrization.utils import ApplyBothLimit
+
+            return ApplyBothLimit.apply(slc.to(dtype=target_dtype), 1.0, 0.0)
+
+        assert epsilon_map is not None
+        if use_coord_resampling and primary_is_full_domain:
+            raw_slc = _resample_full_domain_2d(
+                epsilon_map, x_start, x_stop, y_start, y_stop, z_index
+            )
+        elif epsilon_map.ndim >= 3 and z_index is not None:
+            if primary_is_full_domain:
+                raw_slc = epsilon_map[x_start:x_stop, y_start:y_stop, z_index]
+            else:
+                zt = (
+                    z_index - z0
+                    if (0 <= z_index - z0 < epsilon_map.shape[-1])
+                    else (z_index if z_index < epsilon_map.shape[-1] else -1)
+                )
+                raw_slc = epsilon_map[:, :, zt]
+        else:
+            if primary_is_full_domain:
+                raw_slc = epsilon_map[x_start:x_stop, y_start:y_stop]
+            else:
+                raw_slc = epsilon_map
+        occ_slc = _normalize_slice_to_occupancy(
+            raw_slc,
+            eps_core=eps_core,
+            eps_clad=eps_clad,
+            fallback_bounds=eps_fallback_bounds,
+            w_z=w_z,
+            detach=False,
+        ).to(dtype=target_dtype)
+        if use_coord_resampling and not primary_is_full_domain:
+            target_h = x_stop - x_start
+            target_w = y_stop - y_start
+            if occ_slc.shape[0] != target_h or occ_slc.shape[1] != target_w:
+                occ_slc = F.interpolate(
+                    occ_slc.unsqueeze(0).unsqueeze(0),
+                    size=(target_h, target_w),
+                    mode="bilinear",
+                    align_corners=False,
+                )[0, 0]
+        return occ_slc
+
+    details: dict[str, Any] = {
+        "planes": {},
+        "plane_penalties": {},
+        "use_coord_resampling": use_coord_resampling,
+        "uniform_domain_shape": (dom_nx, dom_ny),
+        "effective_pixel_size": (dl_x, dl_y),
+    }
+    penalties: dict[str, Tensor] = {}
+    eval_memo: dict[int, tuple[Tensor, Tensor, Tensor, Tensor]] = {}
+
+    for p in plane_list:
+        if is_3d:
+            if p in ("bottom", "b"):
+                z_idx: int | None = z0
+            elif p in ("top", "t"):
+                z_idx = z1 - 1
+            elif p in ("middle", "m"):
+                z_idx = (z0 + z1 - 1) // 2
+            elif isinstance(p, int):
+                z_idx = p
+            else:
+                z_idx = (z0 + z1 - 1) // 2
+        else:
+            z_idx = None
+
+        halo_x = 2 * rx + int(extra_halo_px)
+        halo_y = 2 * ry + int(extra_halo_px)
+
+        req_start_x = eval_x0 - halo_x
+        req_stop_x = eval_x1 + halo_x
+        req_start_y = eval_y0 - halo_y
+        req_stop_y = eval_y1 + halo_y
+
+        cache_entry = None
+        ckey = None
+        if _context_cache is not None and _cache_key_prefix is not None:
+            ckey = (
+                *_cache_key_prefix,
+                str(p),
+                int(z_idx if z_idx is not None else -1),
+                tuple(sim_shape),
+                (dom_nx, dom_ny),
+                bool(use_coord_resampling),
+                int(rx),
+                int(ry),
+                (eval_x0, eval_x1, eval_y0, eval_y1),
+                int(extra_halo_px),
+                str(target_device),
+                str(target_dtype),
+            )
+            cache_entry = _context_cache.get(ckey)
+
+        if cache_entry is not None:
+            if _cache_stats is not None:
+                _cache_stats["hits"] = _cache_stats.get("hits", 0) + 1
+            crop_x0 = cache_entry["crop_x0"]
+            crop_x1 = cache_entry["crop_x1"]
+            idx_x = cache_entry["idx_x"]
+            crop_y0 = cache_entry["crop_y0"]
+            crop_y1 = cache_entry["crop_y1"]
+            idx_y = cache_entry["idx_y"]
+            cached_fixed_crop = cache_entry["fixed_crop_occ"]
+        else:
+            if _context_cache is not None and _cache_stats is not None:
+                _cache_stats["misses"] = _cache_stats.get("misses", 0) + 1
+            crop_x0, crop_x1, idx_x = _build_reflect_axis_indices(
+                dom_nx, req_start_x, req_stop_x, device=target_device
+            )
+            crop_y0, crop_y1, idx_y = _build_reflect_axis_indices(
+                dom_ny, req_start_y, req_stop_y, device=target_device
+            )
+            cached_fixed_crop = None
+            if fixed_epsilon_map is not None:
+                w_z = _get_wz(z_idx)
+                if use_coord_resampling:
+                    fixed_slice_t = _resample_full_domain_2d(
+                        fixed_epsilon_map, crop_x0, crop_x1, crop_y0, crop_y1, z_idx
+                    )
+                else:
+                    if fixed_epsilon_map.ndim >= 3 and z_idx is not None:
+                        raw_fixed_slice = fixed_epsilon_map[
+                            crop_x0:crop_x1, crop_y0:crop_y1, z_idx
+                        ]
+                    else:
+                        raw_fixed_slice = fixed_epsilon_map[
+                            crop_x0:crop_x1, crop_y0:crop_y1
+                        ]
+                    if isinstance(raw_fixed_slice, np.ndarray):
+                        fixed_slice_t = torch.as_tensor(
+                            raw_fixed_slice, device=target_device
+                        )
+                    else:
+                        fixed_slice_t = raw_fixed_slice.to(device=target_device)
+                    if not torch.is_complex(fixed_slice_t):
+                        fixed_slice_t = fixed_slice_t.to(dtype=target_dtype)
+                if (
+                    eps_core is None or eps_clad is None
+                ) and fixed_fallback_bounds is None:
+                    if isinstance(fixed_epsilon_map, np.ndarray):
+                        f_real = np.real(fixed_epsilon_map)
+                        fixed_fallback_bounds = (
+                            torch.as_tensor(
+                                float(np.min(f_real)),
+                                device=target_device,
+                                dtype=target_dtype,
+                            ),
+                            torch.as_tensor(
+                                float(np.max(f_real)),
+                                device=target_device,
+                                dtype=target_dtype,
+                            ),
+                        )
+                    else:
+                        f_real_t = (
+                            fixed_epsilon_map.real
+                            if torch.is_complex(fixed_epsilon_map)
+                            else fixed_epsilon_map
+                        )
+                        fixed_fallback_bounds = (
+                            f_real_t.amin().to(
+                                device=target_device, dtype=target_dtype
+                            ),
+                            f_real_t.amax().to(
+                                device=target_device, dtype=target_dtype
+                            ),
+                        )
+                cached_fixed_crop = _normalize_slice_to_occupancy(
+                    fixed_slice_t,
+                    eps_core=eps_core,
+                    eps_clad=eps_clad,
+                    fallback_bounds=fixed_fallback_bounds,
+                    w_z=w_z,
+                    detach=True,
+                )
+            if _context_cache is not None and ckey is not None:
+                _context_cache[ckey] = {
+                    "crop_x0": crop_x0,
+                    "crop_x1": crop_x1,
+                    "idx_x": idx_x,
+                    "crop_y0": crop_y0,
+                    "crop_y1": crop_y1,
+                    "idx_y": idx_y,
+                    "fixed_crop_occ": cached_fixed_crop,
+                    "eval_shape": eval_shape,
+                    "rx": rx,
+                    "ry": ry,
+                }
+
+        if cached_fixed_crop is not None:
+            base_crop = cached_fixed_crop.clone()
+        else:
+            base_crop = _extract_primary_slice(
+                crop_x0, crop_x1, crop_y0, crop_y1, z_idx
+            ).clone()
+
+        if slice_x is not None:
+            ov_x0 = max(dr_x0, crop_x0)
+            ov_x1 = min(dr_x1, crop_x1)
+            ov_y0 = max(dr_y0, crop_y0)
+            ov_y1 = min(dr_y1, crop_y1)
+            if ov_x1 > ov_x0 and ov_y1 > ov_y0:
+                dr_plane = _extract_primary_slice(dr_x0, dr_x1, dr_y0, dr_y1, z_idx)
+                base_crop[
+                    ov_x0 - crop_x0 : ov_x1 - crop_x0,
+                    ov_y0 - crop_y0 : ov_y1 - crop_y0,
+                ] = dr_plane[
+                    ov_x0 - dr_x0 : ov_x1 - dr_x0,
+                    ov_y0 - dr_y0 : ov_y1 - dr_y0,
+                ]
+
+        ed_input = base_crop[idx_x, :][:, idx_y]
+
+        # Deduplicate redundant filtering when multiple requested planes share identical Z slice
+        memo_key = int(z_idx if z_idx is not None else -1)
+        if memo_key in eval_memo:
+            p_pen, p_opened, p_closed, ed_input = eval_memo[memo_key]
+        else:
+            p_pen, p_opened, p_closed = _eval_ed_2d_from_halo(
+                ed_input,
+                rx=rx,
+                ry=ry,
+                eval_shape=eval_shape,
+                beta=beta,
+                eta=eta,
+                delta_eta=delta_eta,
+                operator_mode=operator_mode,
+                axis_weights=axis_weights,
+            )
+            eval_memo[memo_key] = (p_pen, p_opened, p_closed, ed_input)
+
+        penalties[p] = p_pen
+        if return_details:
+            details["planes"][p] = {
+                "penalty": p_pen,
+                "opened": p_opened,
+                "closed": p_closed,
+                "diff": p_closed - p_opened,
+                "composite_halo": ed_input,
+                "crop_bounds": (crop_x0, crop_x1, crop_y0, crop_y1),
+                "eval_shape": eval_shape,
+            }
+            details["plane_penalties"][p] = p_pen
+
+    if plane_weights is not None:
+        if isinstance(plane_weights, dict):
+            w_map = {p: float(plane_weights.get(p, 1.0)) for p in plane_list}
+        elif isinstance(plane_weights, (tuple, list)):
+            w_map = {p: float(plane_weights[i]) for i, p in enumerate(plane_list)}
+        else:
+            w_map = {p: 1.0 for p in plane_list}
+    else:
+        w_map = {p: 1.0 for p in plane_list}
+
+    if aggregation not in ("mean", "sum", "max", "min"):
+        raise ValueError(f"Unknown aggregation: {aggregation}")
+
+    weighted_terms = [w_map[p] * penalties[p] for p in plane_list]
+    if len(weighted_terms) == 1:
+        total_penalty = weighted_terms[0]
+    elif aggregation == "mean":
+        total_penalty = torch.stack(weighted_terms).mean()
+    elif aggregation == "sum":
+        total_penalty = torch.stack(weighted_terms).sum()
+    elif aggregation == "max":
+        total_penalty = torch.stack(weighted_terms).max()
+    else:
+        total_penalty = torch.stack(weighted_terms).min()
+
+    if return_details:
+        details["total_penalty"] = total_penalty
+        details["eval_shape"] = eval_shape
+        details["kernel_radius_px"] = (rx, ry)
+        return total_penalty, details
+
+    return total_penalty

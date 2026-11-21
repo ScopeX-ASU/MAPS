@@ -38,30 +38,37 @@ def wdm_opt(
     perturb_probs=[0.05, 0.1, 0.15],
 ):
     set_torch_deterministic(int(device_id))
-    dump_data_path = f"./data/fdfd/wdm/raw_opt_traj_ptb"
+
     sim_cfg = DefaultSimulationConfig()
     target_img_size = 512
     resolution = 50
     target_cell_size = target_img_size / resolution  # 10.24
-    port_len = round(random.uniform(2, 2.4) * resolution) / resolution
+    # port_len = round(random.uniform(2, 2.4) * resolution) / resolution
 
-    wdm_region_size = [
-        round((target_cell_size - 2 * port_len) * resolution) / resolution,
-        round((target_cell_size - 2 * port_len) * resolution) / resolution,
-    ]
-    assert (
-        round(wdm_region_size[0] + 2 * port_len, 2) == target_cell_size
-    ), f"right hand side: {wdm_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
+    # wdm_region_size = [
+    #     round((target_cell_size - 2 * port_len) * resolution) / resolution,
+    #     round((target_cell_size - 2 * port_len) * resolution) / resolution,
+    # ]
+    # assert (
+    #     round(wdm_region_size[0] + 2 * port_len, 2) == target_cell_size
+    # ), f"right hand side: {wdm_region_size[0] + 2 * port_len}, target_cell_size: {target_cell_size}"
 
+    # wdm_region_size = [5, 5]
+    wdm_region_size = [6.5, 6.5]
+
+    # wdm_region_size = [8, 8]
+
+    port_len = 1.8
     input_port_width = 0.48
     output_port_width = 0.48
 
+    dump_data_path = f"./data/fdfd/wdm/raw_opt_traj_ptb/6p5by6p5_mfs50"
     sim_cfg.update(
         dict(
             solver="ceviche_torch",
             border_width=[0, 0, port_len, port_len],
             resolution=resolution,
-            plot_root=f"./data/fdfd/wdm/plot_opt_traj_ptb/wdm_{device_id}",
+            plot_root=f"./data/fdfd/wdm/plot_opt_traj_ptb/wdm_6p5x6p5_mfs50_{device_id}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -79,7 +86,8 @@ def wdm_opt(
         port_width=(input_port_width, output_port_width),
         device=operation_device,
     )
-    hr_device = device.copy(resolution=310)
+    hr_device = device.copy(resolution=300)
+    # hr_device = device.copy(resolution=1000)
     print(device)
     opt = WDMOptimization(
         device=device,
@@ -175,18 +183,29 @@ def wdm_opt(
         sharpness = sharp_scheduler.get_sharpness()
         results = opt.forward(sharpness=sharpness)
         # results = opt.forward(sharpness=256)
-        print(f"Step {step}:", end=" ")
+        printable_parts = []
+        current_breakdown = {}
         for k, obj in results["breakdown"].items():
-            print(f"{k}: {obj['value']:.3f}", end=", ")
-        print()
+            val = obj.get("value")
+            if torch.is_tensor(val):
+                if val.numel() != 1:
+                    continue
+                val = val.detach().item()
+            else:
+                try:
+                    val = float(val)
+                except (TypeError, ValueError):
+                    continue
+            printable_parts.append(f"{k}: {val:.3f}")
+            current_breakdown[k] = val
+        print(f"Step {step}: " + ", ".join(printable_parts))
 
         (-results["obj"]).backward()
         current_design_region_dict = opt.get_design_region_eps_dict()
         filename_h5 = dump_data_path + f"/wdm_id-{device_id}_opt_step_{step}.h5"
         filename_yml = dump_data_path + f"/wdm_id-{device_id}.yml"
 
-        # Store the current breakdown for early stopping
-        current_breakdown = {k: obj["value"] for k, obj in results["breakdown"].items()}
+        # Store scalar breakdown values for early stopping
         breakdown_history.append(current_breakdown)
 
         # Keep only the last `patience` results in the history
@@ -202,11 +221,11 @@ def wdm_opt(
                 )
                 for previous_breakdown in breakdown_history[:-1]
             ]
-            if all(change < early_stop_threshold for change in changes):
-                print(
-                    f"Early stopping at step {step}: No significant changes in {patience} epochs."
-                )
-                break
+            # if all(change < early_stop_threshold for change in changes):
+            #     print(
+            #         f"Early stopping at step {step}: No significant changes in {patience} epochs."
+            #     )
+            #     break
 
         if last_design_region_dict is None:
             opt.dump_data(filename_h5=filename_h5, filename_yml=filename_yml, step=step)
@@ -231,12 +250,28 @@ def wdm_opt(
                 exclude_slice_names=[],
             )
         else:
-            cosine_similarity = compare_designs(
-                last_design_region_dict, current_design_region_dict
-            )
-            if cosine_similarity < 0.996 or step == n_epoch - 1 or each_step:
+            # cosine_similarity = compare_designs(
+            #     last_design_region_dict, current_design_region_dict
+            # )
+            # if (
+            #     cosine_similarity < 0.998
+            #     or step == n_epoch - 1
+            #     or each_step
+            #     or step % 5 == 0
+            # ):
+            if (
+                # cosine_similarity < 0.998
+                step == n_epoch - 1
+                or each_step
+                # or step % 5 == 0
+            ):
+                # if cosine_similarity < 0.996 or step == n_epoch - 1 or each_step:
                 opt.dump_data(
-                    filename_h5=filename_h5, filename_yml=filename_yml, step=step
+                    filename_h5=filename_h5,
+                    filename_yml=filename_yml,
+                    step=step,
+                    use_high_res_eps=True,
+                    binarize_eps=True,
                 )
                 last_design_region_dict = current_design_region_dict
                 dumped_data = True
@@ -265,6 +300,7 @@ def wdm_opt(
         scheduler.step()
         sharp_scheduler.step()
         if dumped_data and include_perturb:
+            print(1)
             for i, prob in enumerate(perturb_probs):
                 perturb_and_dump(step, flip_prob=prob, i=i)
             dumped_data = False
@@ -277,11 +313,10 @@ def main():
     parser.add_argument("--gpu_id", type=int, default=0)
     parser.add_argument("--each_step", type=int, default=0)
     parser.add_argument("--include_perturb", type=int, default=0)
-    args = parser.parse_args()
-    random_seed = args.random_seed
-    gpu_id = args.gpu_id
-    each_step = args.each_step
-    include_perturb = args.include_perturb
+    random_seed = parser.parse_args().random_seed
+    gpu_id = parser.parse_args().gpu_id
+    each_step = parser.parse_args().each_step
+    include_perturb = parser.parse_args().include_perturb
     torch.cuda.set_device(gpu_id)
     device = torch.device("cuda:" + str(gpu_id))
     torch.backends.cudnn.benchmark = True

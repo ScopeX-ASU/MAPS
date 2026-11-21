@@ -44,6 +44,10 @@ class FourPortCoupler(N_Ports):
             0.48,
         ),  # (x-directed width, y-directed width) — usually equal
         port_box_margin: float = 0.2,
+        port_sidewall_angle: float | None = None,
+        etch_depth: float = 0.22,  # default full etch
+        pol: str = "Hz",
+        is_3d: bool = False,
         device: torch.device = torch.device("cuda:0"),
     ):
         # assert box_size[1] - 2 * port_box_margin >= port_width[0], (
@@ -54,6 +58,8 @@ class FourPortCoupler(N_Ports):
         # )
 
         wl_cen = sim_cfg["wl_cen"]
+        self.pol = pol
+        self.is_3d = is_3d
 
         # Materials
         if isinstance(material_r1, str):
@@ -70,50 +76,110 @@ class FourPortCoupler(N_Ports):
         else:
             eps_r2_fn = lambda wl: material_r2
 
-        eps_bg_fn = material_fn_dict[material_bg]
+        if isinstance(material_bg, str):
+            eps_bg_fn = material_fn_dict[material_bg]
+        else:
+            eps_bg_fn = lambda wl: material_bg
+
+        box_size = list(box_size)
+        self.box_size = box_size
+        if is_3d and len(box_size) == 2:
+            box_size.append(thickness_r1)
+        if is_3d:
+            assert len(box_size) == 3, "box_size should be a tuple of length 3"
+            if (
+                port_sidewall_angle is not None
+                and not -90.0 <= port_sidewall_angle <= 90.0
+            ):
+                raise ValueError(
+                    "port_sidewall_angle must be in the interval [-90, 90] degrees."
+                )
+        grid_step = 1 / sim_cfg["resolution"]
+
+        port_geometry_kwargs = (
+            {"sidewall_angle": port_sidewall_angle}
+            if is_3d and port_sidewall_angle is not None
+            else {}
+        )
 
         port_cfgs = dict(
             in_port_1=dict(
                 type="box",
                 direction="x",
-                center=[-(port_len[0] + box_size[0]) / 2, 0.0],
-                size=[port_len[0], port_width[0]],
+                center=[-(port_len[0] + box_size[0]) / 2 + grid_step / 2, 0.0]
+                + ([0] if is_3d else []),
+                size=[port_len[0] + grid_step, port_width[0]]
+                + ([thickness_r1] if is_3d else []),
                 eps=eps_r1_fn(wl_cen),
+                **port_geometry_kwargs,
             ),
             out_port_1=dict(
                 type="box",
                 direction="x",
-                center=[(port_len[0] + box_size[0]) / 2, 0.0],
-                size=[port_len[0], port_width[0]],
+                center=[(port_len[0] + box_size[0]) / 2 - grid_step / 2, 0.0]
+                + ([0] if is_3d else []),
+                size=[port_len[0] + grid_step, port_width[0]]
+                + ([thickness_r1] if is_3d else []),
                 eps=eps_r1_fn(wl_cen),
+                **port_geometry_kwargs,
             ),
             out_port_2=dict(
                 type="box",
                 direction="y",
-                center=[0.0, (port_len[1] + box_size[1]) / 2],
-                size=[port_width[1], port_len[1]],
+                center=[0.0, (port_len[1] + box_size[1]) / 2 - grid_step / 2]
+                + ([0] if is_3d else []),
+                size=[port_width[1], port_len[1] + grid_step]
+                + ([thickness_r1] if is_3d else []),
                 eps=eps_r1_fn(wl_cen),
+                **port_geometry_kwargs,
             ),
             out_port_3=dict(
                 type="box",
                 direction="y",
-                center=[0.0, -(port_len[1] + box_size[1]) / 2],
-                size=[port_width[1], port_len[1]],
+                center=[0.0, -(port_len[1] + box_size[1]) / 2 + grid_step / 2]
+                + ([0] if is_3d else []),
+                size=[port_width[1], port_len[1] + grid_step]
+                + ([thickness_r1] if is_3d else []),
                 eps=eps_r1_fn(wl_cen),
+                **port_geometry_kwargs,
             ),
         )
 
-        geometry_cfgs = dict()
-
-        design_region_cfgs = dict(
-            fourport_region=dict(
-                type="box",
-                center=[0.0, 0.0],
-                size=list(box_size),
-                eps=eps_r1_fn(wl_cen),
-                eps_bg=eps_r2_fn(wl_cen),
+        if etch_depth < thickness_r1:
+            # this is partial etch
+            slab_thickness = thickness_r1 - etch_depth
+            geometry_cfgs = dict(
+                slab=dict(
+                    type="box",
+                    center=[0.0, 0.0]
+                    + ([-thickness_r1 / 2 + slab_thickness / 2] if is_3d else []),
+                    size=box_size[:2] + ([slab_thickness] if is_3d else []),
+                    eps=eps_r1_fn(wl_cen),
+                    eps_bg=eps_r2_fn(wl_cen),
+                ),
             )
-        )
+            design_region_cfgs = dict(
+                fourport_region=dict(
+                    type="box",
+                    center=[0.0, 0.0]
+                    + ([thickness_r1 / 2 - etch_depth / 2] if is_3d else []),
+                    size=box_size[:2] + ([etch_depth] if is_3d else []),
+                    eps=eps_r1_fn(wl_cen),
+                    eps_bg=eps_r2_fn(wl_cen),
+                )
+            )
+        else:
+            geometry_cfgs = dict()
+
+            design_region_cfgs = dict(
+                fourport_region=dict(
+                    type="box",
+                    center=[0.0, 0.0] + ([0] if is_3d else []),
+                    size=box_size,
+                    eps=eps_r1_fn(wl_cen),
+                    eps_bg=eps_r2_fn(wl_cen),
+                )
+            )
 
         super().__init__(
             eps_bg=eps_bg_fn(wl_cen),
@@ -125,7 +191,18 @@ class FourPortCoupler(N_Ports):
         )
 
     def init_monitors(self, verbose: bool = True):
-        rel_width = 2
+        rel_width = 4
+        rel_height = (
+            (
+                self.box_size[2]
+                + self.sim_cfg["border_width"][4]
+                + self.sim_cfg["border_width"][5]
+                - self.sim_cfg["PML"][-1] * 2
+            )
+            / self.box_size[2]
+            if self.is_3d
+            else None
+        )
         if verbose:
             lg.info("Start generating sources and monitors (FourPortNSEW) ...")
         pml = self.sim_cfg["PML"][0]
@@ -141,6 +218,7 @@ class FourPortCoupler(N_Ports):
                 slice_name="in_slice_1",
                 rel_loc=offset_x / port_len_x,
                 rel_width=rel_width,
+                rel_height=rel_height,
             )
         ]
         refl_slices = [
@@ -149,6 +227,7 @@ class FourPortCoupler(N_Ports):
                 slice_name="refl_slice_1",
                 rel_loc=(offset_x + 0.1) / port_len_x,
                 rel_width=rel_width,
+                rel_height=rel_height,
             )
         ]
 
@@ -158,24 +237,25 @@ class FourPortCoupler(N_Ports):
                 slice_name="out_slice_1",
                 rel_loc=1 - offset_x / port_len_x,
                 rel_width=rel_width,
+                rel_height=rel_height,
+                direction="x+",
             ),
             self.build_port_monitor_slice(
                 port_name="out_port_2",
                 slice_name="out_slice_2",
                 rel_loc=1 - offset_y / port_len_y,
                 rel_width=rel_width,
+                rel_height=rel_height,
+                direction="y+",
             ),
-            self.build_port_monitor_slice(
-                port_name="out_port_3",
-                slice_name="out_slice_3",
-                rel_loc=offset_y / port_len_y,
-                rel_width=rel_width,
-            ),
+            # The lower y port is represented by y symmetry.
         ]
 
         self.ports_regions = self.build_port_region(self.port_cfgs, rel_width=rel_width)
-        radiation_monitor = self.build_radiation_monitor(monitor_name="rad_monitor")
-        return src_slices, out_slices, refl_slices, radiation_monitor
+        if not self.is_3d:
+            radiation_monitor = self.build_radiation_monitor(monitor_name="rad_monitor")
+            return src_slices, out_slices, refl_slices, radiation_monitor
+        return src_slices, out_slices, refl_slices
 
     def norm_run(self, verbose: bool = True):
         if verbose:
@@ -183,13 +263,13 @@ class FourPortCoupler(N_Ports):
 
         norm_source_profiles = [
             self.build_norm_sources(
-                source_modes=("Ez1",),
+                source_modes=(f"{self.pol}1",),
                 input_port_name="in_port_1",
                 input_slice_name="in_slice_1",
                 wl_cen=self.sim_cfg["wl_cen"],
                 wl_width=self.sim_cfg["wl_width"],
                 n_wl=self.sim_cfg["n_wl"],
-                solver="ceviche",
+                solver=self.sim_cfg["solver"],
                 plot=True,
                 require_sim=True,
             )
@@ -197,13 +277,13 @@ class FourPortCoupler(N_Ports):
 
         norm_refl_profiles = [
             self.build_norm_sources(
-                source_modes=("Ez1",),
+                source_modes=(f"{self.pol}1",),
                 input_port_name="in_port_1",
                 input_slice_name="refl_slice_1",
                 wl_cen=self.sim_cfg["wl_cen"],
                 wl_width=self.sim_cfg["wl_width"],
                 n_wl=self.sim_cfg["n_wl"],
-                solver="ceviche",
+                solver=self.sim_cfg["solver"],
                 plot=True,
                 require_sim=False,
             )
@@ -211,41 +291,28 @@ class FourPortCoupler(N_Ports):
 
         norm_monitor_profiles = [
             self.build_norm_sources(
-                source_modes=("Ez1",),
+                source_modes=(f"{self.pol}1",),
                 input_port_name="out_port_1",
                 input_slice_name="out_slice_1",
                 wl_cen=self.sim_cfg["wl_cen"],
                 wl_width=self.sim_cfg["wl_width"],
                 n_wl=self.sim_cfg["n_wl"],
-                # solver=self.sim_cfg["solver"],
-                solver="ceviche",
+                solver=self.sim_cfg["solver"],
                 plot=True,
                 require_sim=False,
             ),
             self.build_norm_sources(
-                source_modes=("Ez1",),
+                source_modes=(f"{self.pol}1",),
                 input_port_name="out_port_2",
                 input_slice_name="out_slice_2",
                 wl_cen=self.sim_cfg["wl_cen"],
                 wl_width=self.sim_cfg["wl_width"],
                 n_wl=self.sim_cfg["n_wl"],
-                # solver=self.sim_cfg["solver"],
-                solver="ceviche",
+                solver=self.sim_cfg["solver"],
                 plot=True,
                 require_sim=False,
             ),
-            self.build_norm_sources(
-                source_modes=("Ez1",),
-                input_port_name="out_port_3",
-                input_slice_name="out_slice_3",
-                wl_cen=self.sim_cfg["wl_cen"],
-                wl_width=self.sim_cfg["wl_width"],
-                n_wl=self.sim_cfg["n_wl"],
-                # solver=self.sim_cfg["solver"],
-                solver="ceviche",
-                plot=True,
-                require_sim=False,
-            ),
+            # The lower y port is represented by y symmetry.
         ]
 
         return norm_source_profiles, norm_refl_profiles, norm_monitor_profiles

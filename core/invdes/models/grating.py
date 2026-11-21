@@ -5,7 +5,10 @@ from .base_optimization import BaseOptimization, DefaultOptimizationConfig
 
 
 class DefaultConfig(DefaultOptimizationConfig):
+    """Default FDFD and objective configuration for the Grating optimization."""
+
     def __init__(self):
+        """Initialize the Grating configuration tree."""
         super().__init__()
         self.update(
             dict(
@@ -68,6 +71,28 @@ class DefaultConfig(DefaultOptimizationConfig):
 
 
 class GratingOptimization(BaseOptimization):
+    """Inverse-design optimization model for the integrated grating device.
+
+    Args:
+        device: Simulation-resolution device with the grating geometry and
+            design-region definitions.
+        hr_device: Higher-resolution device used by the parameterization.
+        design_region_param_cfgs: Optional design-region mappings. The current
+            implementation rebuilds the level-set mapping for every device
+            design region.
+        sim_cfg: Overrides for the default Ceviche/FDFD simulation settings.
+        obj_cfgs: Objective configuration overrides.
+        operation_device: PyTorch device for optimization tensors.
+
+    Notes:
+        The default design representation uses ``rho_resolution=[25, 25]``, an
+        FFT-based minimum-feature-size transform with ``mfs=0.1`` in ``xy``,
+        binarization, random initialization, linear-epsilon denormalization,
+        bilinear interpolation, and binary projection thresholds of 100.
+        The default objective evaluates an S-matrix and a forward eigenmode
+        transmission at 1.6 um.
+    """
+
     def __init__(
         self,
         device,

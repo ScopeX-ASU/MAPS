@@ -2,9 +2,7 @@ import os
 import sys
 
 # Add the project root to sys.path
-project_root = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../../../../MAPS")
-)
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 sys.path.insert(0, project_root)
 
 import argparse
@@ -29,7 +27,7 @@ from core.train.models.utils import from_Ez_to_Hx_Hy
 from core.train.trainer import PredTrainer
 from core.utils import cal_total_field_adj_src_from_fwd_field
 from core.utils import train_configs as configs
-from thirdparty.ceviche.ceviche.constants import C_0
+from thirdparty.ceviche.constants import C_0
 
 
 class dual_predictor(nn.Module):

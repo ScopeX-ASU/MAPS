@@ -13,12 +13,14 @@ sys.path.insert(
 import matplotlib.pyplot as plt
 import torch
 from pyutils.config import Config
+from pyutils.general import logger
 
 from core.invdes.invdesign import InvDesign
 from core.invdes.models import TDMOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import TDM
 from core.invdes.models.layers.thermal_control import canonicalize_currents
+from core.invdes.run_management import OptimizationRunManager
 from core.utils import set_torch_deterministic
 
 sys.path.pop(0)
@@ -133,7 +135,21 @@ def generate_tdm_3d(gpu_id, mfs):
     mode = "Hz1"
     wl_cen = 1.55
     resolution = 40
-    exp_name = f"tdm_3d_tin_top_{region_size[0]}x{region_size[1]}"
+    sidewall_angle = 0.0
+    exp_name = f"tdm_3d_tin_top_{region_size[0]}x{region_size[1]}_jax_matrix_free_line"
+    # exp_name = f"tdm_3d_tin_top_{region_size[0]}x{region_size[1]}_jax_uniform"
+    # exp_name = f"tdm_3d_tin_top_{region_size[0]}x{region_size[1]}_jax_uniform_matrix_free_line"
+    work_root = "./runs"
+    resume_checkpoint = os.environ.get("MAPS_RESUME_CHECKPOINT")
+
+    run_manager = OptimizationRunManager(
+        root=work_root,
+        experiment="tdm_3d",
+        tag=exp_name,
+        resume=resume_checkpoint is not None,
+        resume_from=resume_checkpoint,
+    )
+    run_manager.attach_logger(logger)
 
     # jax (reduced_free_dof): forward 6s, adjoint 4s
     # pydiso (reduced_free_dof): forward 154s, adjoint 3.63s
@@ -142,7 +158,8 @@ def generate_tdm_3d(gpu_id, mfs):
             solver="fdtdx",
             border_width=[0, 0, 1.5, 1.5, 0.9, 1.8],
             resolution=resolution,
-            max_time=2e-13,
+            subpixel=False,
+            max_time=6e-13,
             optical_grid={
                 "mode": "fdtdx_rectilinear_nonuniform",
                 "wavelength": wl_cen,
@@ -150,7 +167,6 @@ def generate_tdm_3d(gpu_id, mfs):
                 "grid_y": {"type": "auto", "min_steps_per_wvl": 15},
                 "grid_z": {"type": "auto", "min_steps_per_wvl": 15},
             },
-            plot_root=f"./figs/{exp_name}",
             PML=[0.4, 0.4, 0.4],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -159,13 +175,17 @@ def generate_tdm_3d(gpu_id, mfs):
             wl_width=0,
             n_wl=1,
             heat={
+                # "backend": "jax",
                 "backend": "jax",
+                "mesh_type": "fixed_rectilinear_nonuniform",
+                "solve_interval": 4,  # re-solve heat every 4 iterations to reuse heat solution, e.g., ~1 K temperature error in early iterations.
+                # "backend": "amjax",
                 # "backend": "pydiso",
                 "grid_spec": {
                     "wavelength": 1.55,
                     "grid_x": {"type": "auto", "min_steps_per_wvl": 12},
                     "grid_y": {"type": "auto", "min_steps_per_wvl": 12},
-                    "grid_z": {"type": "auto", "min_steps_per_wvl": 20},
+                    "grid_z": {"type": "auto", "min_steps_per_wvl": 25},
                 },
                 "padding": {
                     # "distance": [4.0, 4.0, 4.0, 4.0, 0.6, 0.0],
@@ -202,6 +222,35 @@ def generate_tdm_3d(gpu_id, mfs):
                         "residual_rtol": 1e-6,
                         "residual_atol": 1e-8,
                     },
+                    "amjax_solver": {
+                        "method": "cg",
+                        "pyamg_solver": "smoothed_aggregation",
+                        "pyamg_kwargs": {
+                            "strength": ("symmetric", {"theta": 0.05}),
+                            "presmoother": ("jacobi", {"omega": 4.0 / 3.0}),
+                            "postsmoother": ("jacobi", {"omega": 4.0 / 3.0}),
+                            "max_coarse": 1000,
+                        },
+                        "cycle": "V",
+                        "tol": 1e-6,
+                        "atol": 1e-8,
+                        "maxiter": 1000,
+                        "solve_dtype": "float64",
+                        "reuse_hierarchy": False,
+                        "check_residual": True,
+                        "residual_rtol": 1e-6,
+                        "residual_atol": 1e-8,
+                    },
+                    "jax_matrix_free_solver": {
+                        "method": "cg",
+                        "precond": "line",
+                        "line_axis": "auto",
+                        "solve_dtype": "float64",
+                        "check_residual": True,
+                        "residual_rtol": 1e-6,
+                        "residual_atol": 1e-8,
+                        "maxiter": 1000,
+                    },
                 },
                 "adjoint_solver_options": {
                     "dirichlet_mode": "reduced_free_dof",
@@ -222,6 +271,7 @@ def generate_tdm_3d(gpu_id, mfs):
             },
         )
     )
+    run_manager.bind_simulation_config(sim_cfg)
 
     heat_source_names = ("heater_1",)
     off_control_key = canonicalize_currents(
@@ -376,8 +426,8 @@ def generate_tdm_3d(gpu_id, mfs):
                 mode="regular",
             ),
             dims=(0, 1),
-            extrude_direction="-",
-            extrude_angle=90.0,
+            reference_plane="middle",
+            extrude_angle=sidewall_angle,
         )
 
     opt = TDMOptimization(
@@ -389,7 +439,7 @@ def generate_tdm_3d(gpu_id, mfs):
         operation_device=operation_device,
     ).to(operation_device)
 
-    plot_device_maps(
+    device_maps_path = plot_device_maps(
         device,
         sim_cfg["plot_root"],
         map_names=[
@@ -398,9 +448,11 @@ def generate_tdm_3d(gpu_id, mfs):
             # "thermo_optic_coeff_map",
         ],
     )
+    run_manager.register_artifact("device_maps", device_maps_path, checksum=True)
 
     invdesign = InvDesign(
         devOptimization=opt,
+        run_manager=run_manager,
         run=Config(
             n_epochs=100,
         ),
@@ -438,6 +490,8 @@ def generate_tdm_3d(gpu_id, mfs):
             dump_gds=True,
             gds_name=f"{exp_name}",
             upsample_eps_to_1nm=True,
+            load_ckpt=resume_checkpoint,
+            resume=resume_checkpoint is not None,
         ),
     )
     invdesign.optimize()

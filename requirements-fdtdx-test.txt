@@ -1,0 +1,4 @@
+# Isolated CPU environment for the FDTDX regression tier.
+pytest>=8,<9
+# Pin the exact public FDTDX commit validated by MAPS. Do not replace with a release tag.
+fdtdx @ git+https://github.com/ymahlau/fdtdx.git@77b4bc523a8e98cb7dd388e99481a0000f71dd4d

@@ -11,6 +11,34 @@ __all__ = ["EdgeCoupler"]
 
 
 class EdgeCoupler(N_Ports):
+    """Define a two-port edge-coupler inverse-design device with a rectangular design region.
+
+    Args:
+        material_r (str): Waveguide/design-region material key used with ``material_fn_dict``.
+            Defaults to ``"Si"``.
+        material_bg (str): Background material key. Defaults to ``"SiO2"``.
+        sim_cfg (dict): Optical simulation configuration containing border/PML widths,
+            cell size, resolution, center wavelength, wavelength span, and wavelength count.
+            Defaults to the built-in configuration declared in the signature.
+        box_size (tuple[float, float]): Design-region ``(x, y)`` size in micrometers.
+            Defaults to ``(1.5, 1.5)``.
+        port_len (tuple[float, float]): Input/output port lengths in micrometers.
+            Defaults to ``(1.8, 1.8)``.
+        port_width (tuple[float, float]): Input/output port widths in micrometers.
+            Defaults to ``(0.48, 0.48)``.
+        out_slice_dx (float): Output-monitor longitudinal offset used to place ``out_slice_1``.
+            Defaults to 1.
+        out_slice_size (float): Output-monitor transverse size in micrometers. Defaults to 2.5.
+        device (torch.device): Torch device used by the underlying ``N_Ports`` device state.
+            Defaults to ``torch.device("cuda:0")``.
+
+    Attributes:
+        out_slice_dx (float): Stored output-monitor longitudinal offset.
+        out_slice_size (float): Stored output-monitor transverse size.
+        port_cfgs (dict): Input/output port definitions built during initialization.
+        design_region_cfgs (dict): ``edge_coupler_region`` physical design-region configuration.
+    """
+
     def __init__(
         self,
         material_r: str = "Si",  # waveguide material
@@ -36,6 +64,23 @@ class EdgeCoupler(N_Ports):
         out_slice_size: float = 2.5,
         device: torch.device = torch.device("cuda:0"),
     ):
+        """Initialize the edge-coupler geometry, ports, and design-region configuration.
+
+        Args:
+            material_r (str): Waveguide/design-region material key. Defaults to ``"Si"``.
+            material_bg (str): Background material key. Defaults to ``"SiO2"``.
+            sim_cfg (dict): Optical simulation configuration. Defaults to the built-in
+                two-dimensional configuration in the signature.
+            box_size (tuple[float, float]): Design-region size in micrometers. Defaults to ``(1.5, 1.5)``.
+            port_len (tuple[float, float]): Input/output port lengths in micrometers.
+                Defaults to ``(1.8, 1.8)``.
+            port_width (tuple[float, float]): Input/output port widths in micrometers.
+                Defaults to ``(0.48, 0.48)``.
+            out_slice_dx (float): Output-monitor longitudinal offset. Defaults to 1.
+            out_slice_size (float): Output-monitor transverse size in micrometers. Defaults to 2.5.
+            device (torch.device): Device for the underlying ``N_Ports`` state.
+                Defaults to ``torch.device("cuda:0")``.
+        """
         # ----------------------------------
         # |                                |
         # |                                |
@@ -100,6 +145,16 @@ class EdgeCoupler(N_Ports):
         )
 
     def init_monitors(self, verbose: bool = True):
+        """Build source, reflection, output, port-region, and radiation monitors.
+
+        Args:
+            verbose (bool): Whether to log monitor/source construction. Defaults to True.
+
+        Returns:
+            tuple[Any, Any, Any, Any]: ``(src_slice, out_slice, refl_slice, radiation_monitor)``.
+            The first three entries are port-monitor slice objects; the last is the
+            radiation-monitor object returned by ``build_radiation_monitor``.
+        """
         rel_width = 2
         if verbose:
             logger.info("Start generating sources and monitors ...")
@@ -132,6 +187,17 @@ class EdgeCoupler(N_Ports):
         return src_slice, out_slice, refl_slice, radiation_monitor
 
     def norm_run(self, verbose: bool = True):
+        """Run normalization-mode source construction for forward and reflection paths.
+
+        Args:
+            verbose (bool): Whether to log the normalization run. Defaults to True.
+
+        Returns:
+            tuple[dict, dict]: ``(norm_source_profiles, norm_refl_profiles)`` returned by
+            two ``build_norm_sources`` calls using ``Ez1`` on the input source and
+            reflection slices. Both calls use the ``ceviche`` normalization solver;
+            the reflection profiles are generated with ``require_sim=False``.
+        """
         if verbose:
             logger.info("Start normalization run ...")
         # norm_run_sim_cfg = copy.deepcopy(self.sim_cfg)

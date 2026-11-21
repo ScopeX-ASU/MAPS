@@ -12,12 +12,14 @@ sys.path.insert(
 )
 import torch
 from pyutils.config import Config
+from pyutils.general import logger
 
 from core.invdes.invdesign import InvDesign
 from core.invdes.models import TDMOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import TDM
 from core.invdes.models.layers.thermal_control import canonicalize_currents
+from core.invdes.run_management import OptimizationRunManager
 from core.utils import set_torch_deterministic
 
 sys.path.pop(0)
@@ -37,6 +39,17 @@ def generate_tdm(gpu_id, mfs):
     input_port_width = 0.5
     output_port_width = 0.5
     exp_name = f"tdm_opt_mfs{mfs * 1000:.0f}_500_100ls"
+    work_root = "./runs"
+    resume_checkpoint = os.environ.get("MAPS_RESUME_CHECKPOINT")
+
+    run_manager = OptimizationRunManager(
+        root=work_root,
+        experiment="tdm",
+        tag=exp_name,
+        resume=resume_checkpoint is not None,
+        resume_from=resume_checkpoint,
+    )
+    run_manager.attach_logger(logger)
 
     sim_cfg.update(
         dict(
@@ -44,7 +57,6 @@ def generate_tdm(gpu_id, mfs):
             # border_width=[port_len, port_len, 2, 2],
             border_width=[0, 0, 2, 2],
             resolution=25,
-            plot_root=f"./figs/{exp_name}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -66,6 +78,7 @@ def generate_tdm(gpu_id, mfs):
             },
         )
     )
+    run_manager.bind_simulation_config(sim_cfg)
     heater_on_current = 7.5e-3
     heat_source_names = ("heater_1",)
     off_control_key = canonicalize_currents(
@@ -139,6 +152,7 @@ def generate_tdm(gpu_id, mfs):
     ).to(operation_device)
     invdesign = InvDesign(
         devOptimization=opt,
+        run_manager=run_manager,
         run=Config(
             n_epochs=100,
         ),
@@ -166,6 +180,8 @@ def generate_tdm(gpu_id, mfs):
             dump_gds=True,
             gds_name=f"{exp_name}",
             upsample_eps_to_1nm=True,
+            load_ckpt=resume_checkpoint,
+            resume=resume_checkpoint is not None,
         ),
     )
     invdesign.optimize()

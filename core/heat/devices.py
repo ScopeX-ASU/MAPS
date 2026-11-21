@@ -4,8 +4,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib as mpl
-
-mpl.rcParams["text.usetex"] = False
 import matplotlib.pyplot as plt
 import numpy as np
 import torch

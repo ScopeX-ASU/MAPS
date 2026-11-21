@@ -8,6 +8,87 @@ except Exception:
     cKDTree = None
 
 
+def _axis_overlap_average_matrix(source_boundaries, target_boundaries):
+    """Build intensive-value averaging weights between one-dimensional cells."""
+    source = np.asarray(source_boundaries, dtype=np.float64)
+    target = np.asarray(target_boundaries, dtype=np.float64)
+    for name, boundaries in (("source", source), ("target", target)):
+        if boundaries.ndim != 1 or boundaries.size < 2:
+            raise ValueError(f"{name}_boundaries must be a non-empty 1D cell grid.")
+        if np.any(np.diff(boundaries) <= 0.0):
+            raise ValueError(f"{name}_boundaries must be strictly increasing.")
+    scale = max(abs(source[0]), abs(source[-1]), abs(target[0]), abs(target[-1]), 1.0)
+    if not np.allclose(
+        (source[0], source[-1]),
+        (target[0], target[-1]),
+        rtol=1e-10,
+        atol=1e-12 * scale,
+    ):
+        raise ValueError(
+            "Conservative rectilinear remapping requires identical source and "
+            "target physical extents."
+        )
+    overlap = np.maximum(
+        0.0,
+        np.minimum(target[1:, None], source[None, 1:])
+        - np.maximum(target[:-1, None], source[None, :-1]),
+    )
+    return overlap / np.diff(target)[:, None]
+
+
+def conservative_rectilinear_remap(values, source_boundaries, target_boundaries):
+    """Remap cell-average intensive values using exact Cartesian overlaps.
+
+    Args:
+        values: Torch tensor whose final spatial dimensions correspond to the
+            source cells.
+        source_boundaries: Per-axis source cell-boundary coordinates.
+        target_boundaries: Per-axis target cell-boundary coordinates. Each axis
+            must have the same physical endpoints as its source counterpart.
+
+    Returns:
+        Tensor of target-cell averages. Its leading dimensions, device, and
+        dtype match ``values``. For a volumetric density ``q``, the operation
+        preserves ``sum(q * cell_volume)`` up to floating-point roundoff.
+
+    Notes:
+        The overlap matrices depend only on host-side grid geometry. Tensor
+        contractions are native Torch operations and remain differentiable with
+        respect to ``values`` on both CPU and CUDA.
+    """
+    if not isinstance(values, torch.Tensor):
+        values = torch.as_tensor(np.asarray(values))
+    source_boundaries = tuple(source_boundaries)
+    target_boundaries = tuple(target_boundaries)
+    dim = len(source_boundaries)
+    if dim == 0 or len(target_boundaries) != dim or values.ndim < dim:
+        raise ValueError(
+            "values and source/target boundaries must describe the same "
+            "non-empty spatial dimension."
+        )
+    expected_shape = tuple(len(axis) - 1 for axis in source_boundaries)
+    if tuple(values.shape[-dim:]) != expected_shape:
+        raise ValueError(
+            f"values spatial shape must be {expected_shape}, got "
+            f"{tuple(values.shape[-dim:])}."
+        )
+
+    result = values
+    first_spatial_axis = values.ndim - dim
+    for offset, (source_axis, target_axis) in enumerate(
+        zip(source_boundaries, target_boundaries)
+    ):
+        weights = torch.as_tensor(
+            _axis_overlap_average_matrix(source_axis, target_axis),
+            dtype=values.dtype,
+            device=values.device,
+        )
+        axis = first_spatial_axis + offset
+        moved = result.movedim(axis, -1)
+        result = torch.matmul(moved, weights.transpose(0, 1)).movedim(-1, axis)
+    return result
+
+
 def _grid_centers(shape, spacing):
     axes = [
         (np.arange(n, dtype=np.float64) + 0.5) * float(d)

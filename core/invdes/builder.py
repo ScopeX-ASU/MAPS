@@ -1,3 +1,16 @@
+"""Factories for MAPS inverse-design devices, optimizers, and schedulers.
+
+This module translates the InvDes configuration tree into concrete runtime
+objects.  It is distinct from the top-level ``core.builder`` training/ML
+factory: optimizer names, scheduler names, configuration fields, and closure
+requirements documented here belong to the physics-based inverse-design path.
+
+Notes:
+    Factory dispatch strings are configuration-facing API. Renaming a class or
+    optimizer without updating experiment configurations changes user-visible
+    behavior.
+"""
+
 import random
 from typing import Tuple
 
@@ -32,6 +45,32 @@ __all__ = [
 
 
 def make_device(device: Device, config=None):
+    """Construct the physical device selected by an InvDes configuration.
+
+    Args:
+        device: PyTorch execution device passed to the device constructor, for
+            example ``torch.device("cuda:0")``.
+        config: Device/model configuration object. It must provide
+            ``device_type`` and ``sim_cfg``. ``device_type`` is resolved by
+            name from the device/model symbols imported into this module.
+
+    Returns:
+        The constructed device instance. Its concrete type is selected by
+        ``config.device_type``.
+
+    Example:
+        A configuration containing ``device_type="Bending"`` and a valid
+        ``sim_cfg`` constructs the same physical-device layer used by the
+        Bending inverse-design workflow::
+
+            dev = make_device(torch.device("cuda:0"), config=model_cfg)
+
+    Notes:
+        This factory constructs the physical device, not the learnable
+        optimization model. Geometry rasterization, grids, ports, monitors,
+        sources, and design-region masks are established by the selected
+        device class.
+    """
     device_to_opt = eval(config.device_type)(
         sim_cfg=config.sim_cfg,
         device=device,
@@ -40,6 +79,27 @@ def make_device(device: Device, config=None):
 
 
 def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
+    """Legacy inverse-design model factory; currently disabled.
+
+    Args:
+        device: Intended PyTorch execution device for the model.
+        random_state: Intended random seed/state selector. It is not consumed
+            because the function currently exits immediately.
+        **kwargs: Legacy model-construction arguments.
+
+    Returns:
+        This function does not currently return a model.
+
+    Raises:
+        NotImplementedError: Always, before the legacy dispatch code below is
+            reached.
+
+    Notes:
+        The code after the leading ``raise`` is retained legacy dispatch logic
+        and is unreachable in the current baseline. Do not document those
+        branches as supported public construction paths until this function is
+        intentionally re-enabled and tested.
+    """
     raise NotImplementedError
     if (
         "repara_phc_1x1" in configs.model.name.lower()
@@ -91,39 +151,52 @@ def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
             ),
             device=device,
         ).to(device)
-    elif "metalens" in configs.model.name.lower():
-        model = eval(configs.model.name)(
-            ridge_height_max=configs.model.ridge_height_max,
-            sub_height=configs.model.sub_height,
-            aperture=configs.model.aperture,
-            f_min=configs.model.f_min,
-            f_max=configs.model.f_max,
-            eps_r=configs.model.eps_r,
-            eps_bg=configs.model.eps_bg,
-            sim_cfg=configs.model.sim_cfg,
-            ls_cfg=configs.model.ls_cfg,
-            mfs=configs.model.mfs,
-            binary_projection_threshold=configs.model.binary_projection_threshold,
-            build_method=configs.model.build_method,
-            center_ridge=configs.model.center_ridge,
-            max_num_ridges_single_side=configs.model.max_num_ridges_single_side,
-            operation_device=device,
-            aspect_ratio=configs.model.aspect_ratio,
-            initial_point=configs.model.initial_point,
-            if_constant_period=configs.model.if_constant_period,
-            focal_constant=configs.model.focal_constant,
-        ).to(device)
-    elif configs.model.name.lower() == "metacoupleroptimization":
-        model = eval(configs.model.name)(
-            device=kwargs["optDevice"],
-            sim_cfg=configs.model.sim_cfg,
-        ).to(device)
     else:
         raise NotImplementedError(f"Not supported model name: {configs.model.name}")
     return model
 
 
 def make_optimizer(params, total_config=None) -> Optimizer:
+    """Build the optimizer used to update inverse-design parameters.
+
+    Args:
+        params: Iterable of PyTorch parameters or optimizer parameter-group
+            dictionaries, normally ``devOptimization.parameters()``. Parameter
+            tensor shapes are defined by the selected design parameterization;
+            this factory does not reshape, copy, or move them.
+        total_config: InvDes configuration object containing an ``optimizer``
+            section. The common fields are ``name``, ``lr``, and
+            ``weight_decay``; optimizer-specific optional fields are read with
+            the defaults shown in the implementation.
+
+    Returns:
+        Configured optimizer instance. Depending on ``optimizer.name`` this may
+        be a PyTorch optimizer or a MAPS custom optimizer implementing the same
+        step/gradient-update role.
+
+    Raises:
+        NotImplementedError: If ``optimizer.name`` is not one of the supported
+            dispatch names.
+
+    Example:
+        The standard ``InvDesign`` path uses this factory directly::
+
+            optimizer = make_optimizer(
+                params=dev_optimization.parameters(),
+                total_config=cfg,
+            )
+
+    Notes:
+        Supported names in this baseline are ``sgd``, ``adam``, ``adamw``,
+        ``dadaptadam``, ``sam_sgd``, ``sam_adam``, ``lbfgs``, ``nesterov``,
+        ``adahessian``, ``muon``, and the nonlinear-CG variants ``cg_fr``,
+        ``cg_prp``, ``cg_hs``, ``cg_cd``, ``cg_ls``, ``cg_dy``, ``cg_hz``,
+        and ``cg_hs-dy``.
+
+        Closure semantics differ by optimizer family. ``InvDesign`` supplies a
+        closure returning ``-results["obj"]`` so minimization-oriented
+        optimizers maximize the physical figure of merit.
+    """
     config = total_config.optimizer
     name = config.name.lower()
     if name == "sgd":
@@ -307,6 +380,44 @@ def make_optimizer(params, total_config=None) -> Optimizer:
 def make_scheduler(
     optimizer: Optimizer, scheduler_type, config_total: dict = {}
 ) -> Scheduler:
+    """Build an InvDes learning-rate or physical continuation scheduler.
+
+    Args:
+        optimizer: Optimizer associated with the run. PyTorch learning-rate
+            schedulers update this object; physical schedulers such as
+            sharpness, temperature, and resolution retain the argument only as
+            part of the common factory interface.
+        scheduler_type: Name of the configuration section whose ``name`` field
+            selects the scheduler, typically ``"lr_scheduler"`` or
+            ``"sharp_scheduler"``. The temperature and resolution branches
+            additionally read ``temp_scheduler`` and ``res_scheduler`` fields.
+        config_total: Complete InvDes configuration. ``run.n_epochs`` defines
+            the schedule horizon in optimization steps/epochs.
+
+    Returns:
+        Scheduler instance selected by the configuration. Physical schedulers
+        expose their corresponding state (for example sharpness) while PyTorch
+        schedulers update optimizer learning rates.
+
+    Raises:
+        NotImplementedError: If the selected scheduler name is unsupported.
+
+    Example:
+        ``InvDesign`` constructs its continuation schedule as::
+
+            sharp_scheduler = make_scheduler(
+                optimizer,
+                scheduler_type="sharp_scheduler",
+                config_total=cfg,
+            )
+            sharpness = sharp_scheduler.get_sharpness()
+
+    Notes:
+        ``sharpness`` is a continuation/design-projection parameter, not a
+        Maxwell-solver tolerance. Increasing it changes the parameterization
+        toward a sharper/binary design according to the selected
+        parameterization pipeline.
+    """
     config = config_total
     name = getattr(config, scheduler_type).name.lower()
     if (
@@ -359,6 +470,23 @@ def make_scheduler(
 
 
 def make_criterion(name: str = None, cfg=None) -> nn.Module:
+    """Legacy criterion factory; currently disabled.
+
+    Args:
+        name: Intended criterion dispatch name.
+        cfg: Intended criterion-specific configuration.
+
+    Returns:
+        The function currently returns the ``NotImplementedError`` class object
+        immediately; it does not instantiate a loss module.
+
+    Notes:
+        This behavior differs from ``make_model``, which raises
+        ``NotImplementedError``. The legacy criterion dispatch code below the
+        immediate return is unreachable in the current baseline. This
+        docstring records the implementation as-is and does not normalize that
+        inconsistency.
+    """
     return NotImplementedError
     name = (name or configs.criterion.name).lower()
     cfg = cfg or configs.criterion

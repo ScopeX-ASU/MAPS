@@ -7,7 +7,10 @@ from core.invdes.models.base_optimization import (
 
 
 class DefaultConfig(DefaultOptimizationConfig):
+    """Default Ceviche/FDFD and through-port objective configuration for MRR."""
+
     def __init__(self):
+        """Initialize the MRR default configuration tree."""
         super().__init__()
         off_currents = [dict(heater_1=0.0)]
         on_currents = [dict(heater_1=7.5e-3)]
@@ -47,6 +50,29 @@ class DefaultConfig(DefaultOptimizationConfig):
 
 
 class MRROptimization(BaseOptimization):
+    """Inverse-design optimization model for a microring resonator.
+
+    Args:
+        device: Simulation-resolution MRR device and design-region definitions.
+        hr_device: Higher-resolution device used by the parameterization.
+        design_region_param_cfgs: Optional per-region overrides. The built-in
+            level-set parameterization is first constructed for each region,
+            then matching supplied regions are updated with user values.
+        sim_cfg: Overrides for the default ``ceviche_torch`` simulation settings.
+        obj_cfgs: Objective overrides. ``override=True`` clears the default
+            objective mapping before applying supplied terms.
+        operation_device: PyTorch device for optimization tensors.
+
+    Notes:
+        The default design uses ``rho_resolution=[100,100]``, blur with
+        ``mfs=0.08`` in ``xy``, binarization, ``init_method="ones"``,
+        Gaussian-linear interpolation, and binary projection thresholds of 100.
+        The active objective is forward eigenmode transmission from
+        ``in_slice_1`` to ``through_slice`` using mode ``Hz1`` at 1.55 um.
+        ``off_currents`` and ``on_currents`` are defined in the default config
+        for heater-related workflows but are not consumed by this constructor.
+    """
+
     def __init__(
         self,
         device,

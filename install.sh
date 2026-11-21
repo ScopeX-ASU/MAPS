@@ -12,6 +12,8 @@ PYG_WHEEL_URL="https://data.pyg.org/whl/torch-2.9.1+cu128.html"
 TORCH_SCATTER_REPO_URL="https://github.com/rusty1s/pytorch_scatter.git"
 TORCH_SPARSE_REPO_URL="https://github.com/rusty1s/pytorch_sparse.git"
 PYUTILITY_REPO_URL="https://github.com/JeremieMelo/pyutility.git"
+FDTDX_REPO_URL="${FDTDX_REPO_URL:-https://github.com/ymahlau/fdtdx.git}"
+FDTDX_COMMIT="${FDTDX_COMMIT:-77b4bc523a8e98cb7dd388e99481a0000f71dd4d}"
 TORCH_SCATTER_VERSION="2.1.2"
 TORCH_SPARSE_VERSION="0.6.18"
 INSTALL_OPTIONAL_3D="${INSTALL_OPTIONAL_3D:-0}"
@@ -324,7 +326,6 @@ install_core_pip_packages() {
     "pyyaml==6.0.3" \
     "ryaml==0.4.0" \
     "scikit-learn==1.5.2" \
-    "tensorflow==2.20.0" \
     "tensorly==0.8.1" \
     "tensorly-torch==0.5.0" \
     "tidy3d==2.11.2" \
@@ -355,17 +356,52 @@ install_optional_app_packages() {
     return
   fi
 
-  log "Installing optional app, geometry, and layout packages"
+  log "Installing optional geometry and layout packages"
   pip_install \
     "gdsfactory==9.14.1" \
     "gdspy==1.6.13" \
     "gdstk==0.9.55" \
-    "gradio==6.8.0" \
     "klayout==0.30.3"
 
-  verify_import gradio
   verify_import gdstk
   verify_import klayout
+}
+
+has_fdtdx_pinned_commit() {
+  local expected_commit="$1"
+
+  run_in_env python - "$expected_commit" <<'PY' >/dev/null 2>&1
+import json
+import pathlib
+import subprocess
+import sys
+import urllib.parse
+from importlib import metadata
+
+expected_commit = sys.argv[1]
+dist = metadata.distribution("fdtdx")
+direct_url_text = dist.read_text("direct_url.json")
+if not direct_url_text:
+    raise SystemExit(1)
+
+direct_url = json.loads(direct_url_text)
+vcs_info = direct_url.get("vcs_info") or {}
+commit_id = vcs_info.get("commit_id")
+
+if commit_id is None:
+    url = direct_url.get("url", "")
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme == "file":
+        repo_path = pathlib.Path(urllib.parse.unquote(parsed.path))
+        if (repo_path / ".git").exists():
+            commit_id = subprocess.check_output(
+                ["git", "-C", str(repo_path), "rev-parse", "HEAD"],
+                text=True,
+            ).strip()
+
+if commit_id != expected_commit:
+    raise SystemExit(1)
+PY
 }
 
 install_optional_3d_packages() {
@@ -374,10 +410,10 @@ install_optional_3d_packages() {
     return
   fi
 
-  log "Installing optional JAX, heat, Tidy3D, and fdtdx packages"
+  require_cmd git
+  log "Installing optional JAX, heat, and 3D support packages"
   pip_install \
     "equinox==0.13.6" \
-    "fdtdx==0.6.2" \
     "fenics-basix==0.10.0" \
     "gmsh==4.15.2" \
     "jax==0.9.2" \
@@ -392,6 +428,17 @@ install_optional_3d_packages() {
     "rich==14.1.0" \
     "trimesh==4.11.5"
 
+  # IMPORTANT: MAPS requires a specific post-0.6.2 upstream fdtdx commit, NOT
+  # the PyPI fdtdx==0.6.2 release (even though upstream metadata at this commit
+  # still reports version 0.6.2). Reinstall if PyPI 0.6.2 or another commit is present.
+  if has_fdtdx_pinned_commit "$FDTDX_COMMIT"; then
+    log "fdtdx already installed at pinned commit $FDTDX_COMMIT"
+  else
+    log "Installing pinned fdtdx commit $FDTDX_COMMIT from $FDTDX_REPO_URL (PyPI fdtdx==0.6.2 is incompatible)"
+    pip_install --force-reinstall --no-deps \
+      "fdtdx @ git+${FDTDX_REPO_URL}@${FDTDX_COMMIT}"
+  fi
+
   verify_import jax
   verify_import fdtdx
 }
@@ -400,10 +447,9 @@ install_repo_editable() {
   log "Installing this repository in editable mode"
   run_in_env bash -lc "cd '$REPO_ROOT' && python -m pip install --no-build-isolation -e ."
   run_in_env python - <<'PY'
-import app
 import core
 import data
-import drc
+import gpu_subpixel
 import thirdparty
 print('editable-install-ok')
 PY

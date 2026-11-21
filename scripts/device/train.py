@@ -65,8 +65,7 @@ def task_launcher(args):
             f"--plot.root={'./plot/'}",
             f"--plot.dir_name={device}_{exp_name}_{id}",
         ]
-        logger.info(f"running command:\n\t{' '.join(pres + exp)}")
-
+        logger.info(f"running command {pres + exp}")
         subprocess.call(pres + exp, stderr=wfid, stdout=wfid)
 
 
@@ -75,9 +74,10 @@ if __name__ == "__main__":
     mlflow.set_experiment(configs.run.experiment)  # set experiments first
 
     tasks = [
-        ["Bending", 0, 0.02, 4, 200, 50, 50, 50, 0, "comment_here"],
+        ["Bending", 0, 0.02, 4, 200, 50, 50, 50, 0, "put_your_comment_here"],
     ]
+    # tasks = [[0, 1]]
 
-    with Pool(1) as p:
+    with Pool(4) as p:
         p.map(task_launcher, tasks)
     logger.info(f"Exp: {configs.run.experiment} Done.")

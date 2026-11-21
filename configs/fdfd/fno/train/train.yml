@@ -98,7 +98,7 @@ quantize:
 
 checkpoint:
   save_best_model_k: 3
-  checkpoint_dir: "metacoupler/local_search/train_local_search"
+  checkpoint_dir: "bending/local_search/train_local_search"
   model_comment: ""
   resume: 0
   restore_checkpoint: ""

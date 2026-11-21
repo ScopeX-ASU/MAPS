@@ -1,0 +1,7 @@
+pytest>=8,<9
+numpy>=2,<3
+scipy>=1.15,<2
+autograd>=1.7,<2
+opencv-python-headless>=4.10,<5
+matplotlib==3.10.8
+ryaml==0.5.1

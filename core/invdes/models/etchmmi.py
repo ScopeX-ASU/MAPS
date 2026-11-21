@@ -4,7 +4,10 @@ from .base_optimization import BaseOptimization, DefaultOptimizationConfig
 
 
 class DefaultConfig(DefaultOptimizationConfig):
+    """Default FDFD and S-matrix configuration for etched MMI optimization."""
+
     def __init__(self):
+        """Initialize the default EtchMMI configuration tree."""
         super().__init__()
         self.update(
             dict(
@@ -23,7 +26,7 @@ class DefaultConfig(DefaultOptimizationConfig):
                     wl_cen=1.55,
                     wl_width=0,
                     n_wl=1,
-                    plot_root="./figs/etchmmi",
+                    plot_root="./figs/bending",
                 ),
                 obj_cfgs=dict(
                     smatrix=dict(
@@ -137,6 +140,26 @@ class DefaultConfig(DefaultOptimizationConfig):
 
 
 class EtchMMIOptimization(BaseOptimization):
+    """Inverse-design optimization model for the etched MMI workflow.
+
+    Args:
+        device: Simulation-resolution MMI device and design-region definitions.
+        hr_device: Higher-resolution device used by the design representation.
+        design_region_param_cfgs: Optional parameterization mapping. The current
+            implementation constructs a box/2D-array parameterization for each
+            design region.
+        sim_cfg: Overrides for the default Ceviche/FDFD settings.
+        obj_cfgs: Objective overrides.
+        operation_device: PyTorch device for optimization state.
+
+    Notes:
+        The active default design representation is a ``box`` parameterization
+        with ``batch_dims=(16, 16)`` and ``size_dim=2`` (two size parameters per
+        box), initialized by the ``2d_array`` strategy and linearly denormalized
+        to permittivity. The model retains commented alternative modal/phase
+        objectives in the source; those comments are not active configuration.
+    """
+
     def __init__(
         self,
         device,

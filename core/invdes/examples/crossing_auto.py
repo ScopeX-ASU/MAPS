@@ -19,12 +19,14 @@ sys.path.insert(
 )
 import torch
 from pyutils.config import Config
+from pyutils.general import logger
 
 from core.invdes.autotune import AutoTune
 from core.invdes.invdesign import InvDesign
 from core.invdes.models import CrossingOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import Crossing
+from core.invdes.run_management import OptimizationRunManager
 from core.utils import set_torch_deterministic
 
 sys.path.pop(0)
@@ -50,19 +52,27 @@ if __name__ == "__main__":
 
         input_port_width = 0.48
         output_port_width = 0.48
+        exp_name = f"crossing_autotune_{iter}"
+
+        run_manager = OptimizationRunManager(
+            root="./runs",
+            experiment="crossing_auto",
+            tag=exp_name,
+        )
+        run_manager.attach_logger(logger)
 
         sim_cfg.update(
             dict(
                 solver="ceviche_torch",
                 border_width=[0, 0, 0, 0],
                 resolution=50,
-                plot_root=f"./figs/crossing_{'autotune'}",
                 PML=[0.5, 0.5],
                 neural_solver=None,
                 numerical_solver="solve_direct",
                 use_autodiff=False,
             )
         )
+        run_manager.bind_simulation_config(sim_cfg)
 
         device = Crossing(
             sim_cfg=sim_cfg,
@@ -205,6 +215,7 @@ if __name__ == "__main__":
         ).to(operation_device)
         invdesign = InvDesign(
             devOptimization=opt,
+            run_manager=run_manager,
             run=Config(
                 n_epochs=10,
             ),
@@ -214,17 +225,23 @@ if __name__ == "__main__":
                 lr=1e-2,
                 use_bb=False,
             ),
+            plot_cfgs=Config(
+                plot=True,
+                interval=1,
+                plot_name=exp_name,
+                objs=["fwd_trans"],
+                field_keys=[("in_slice_1", 1.55, "Ez1", 300)],
+                in_slice_names=["in_slice_1"],
+                exclude_slice_names=[],
+            ),
+            checkpoint_cfgs=Config(
+                save_model=False,
+                ckpt_name=exp_name,
+                dump_gds=True,
+                gds_name=exp_name,
+            ),
         )
-        invdesign.optimize(
-            plot=True,
-            plot_filename=f"crossing_{'autotune'}_{iter}",
-            objs=["fwd_trans"],
-            field_keys=[("in_slice_1", 1.55, "Ez1", 300)],
-            in_slice_names=["in_slice_1"],
-            exclude_slice_names=[],
-            dump_gds=True,
-            verbose=False,
-        )
+        invdesign.optimize(verbose=False)
         obj = invdesign.results["obj"]
         return obj, invdesign
 

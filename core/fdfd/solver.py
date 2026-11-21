@@ -585,16 +585,30 @@ class SparseSolveTorchFunction(torch.autograd.Function):
                 adj = torch.from_numpy(adj).to(torch.complex128).to(eps_matrix.device)
             solver_instance.adj_field[(slice_name, mode, temp)] = adj
 
+            # ``adj`` is the conjugated adjoint field produced by solving
+            # ``A.T @ adj = grad.conj()``.  Consequently the raw material
+            # sensitivity is ``S = -adj * x`` and the real directional
+            # derivative is ``real(S * d_epsilon)``.  For a complex input,
+            # autograd expects the standard complex gradient G satisfying
+            # ``dL = real(conj(G) * d_epsilon)``, hence G = conj(S).  Keeping
+            # this complex value is essential when the material has an
+            # independently varying loss (imaginary-permittivity) channel.
             if ctx.pol == "Ez":
-                grad_epsilon = -(adj.mul_(x).real.to(eps_matrix.device))
+                sensitivity = -adj * x
+                if torch.is_complex(eps_matrix):
+                    grad_epsilon = sensitivity.conj().to(eps_matrix.device)
+                else:
+                    grad_epsilon = sensitivity.real.to(eps_matrix.device)
             elif ctx.pol == "Hz":
                 indices = eps_matrix.indices()
-                grad_epsilon = -(
-                    adj[indices[0]].mul_(x[indices[1]]).real.to(eps_matrix.device)
-                )
+                sensitivity = -adj[indices[0]] * x[indices[1]]
+                if torch.is_complex(eps_matrix):
+                    grad_values = sensitivity.conj().to(eps_matrix.device)
+                else:
+                    grad_values = sensitivity.real.to(eps_matrix.device)
                 grad_epsilon = torch.sparse_coo_tensor(
-                    indices, grad_epsilon, eps_matrix.shape
-                )
+                    indices, grad_values, eps_matrix.shape, device=eps_matrix.device
+                ).coalesce()
             else:
                 raise ValueError(f"pol {ctx.pol} not supported")
             ## this grad_epsilon = adj * x in ceviche
@@ -608,8 +622,11 @@ class SparseSolveTorchFunction(torch.autograd.Function):
             if (slice_name != "Norm" and mode != "Norm" and temp != "Norm") or (
                 slice_name != "adj" and mode != "adj" and temp != "adj"
             ):
+                gradient_dtype = (
+                    eps_matrix.dtype if torch.is_complex(eps_matrix) else torch.float32
+                )
                 solver_instance.gradient[(slice_name, mode, temp)] = grad_epsilon.to(
-                    torch.float32
+                    gradient_dtype
                 ).detach()
             grad_b = None
             return (

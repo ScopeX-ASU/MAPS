@@ -7,7 +7,10 @@ from core.invdes.models.base_optimization import (
 
 
 class DefaultConfig(DefaultOptimizationConfig):
+    """Default two-wavelength FDFD objective configuration for WDM."""
+
     def __init__(self):
+        """Initialize the WDM default configuration tree."""
         super().__init__()
         self.update(
             dict(
@@ -263,6 +266,28 @@ class DefaultConfig(DefaultOptimizationConfig):
 
 
 class WDMOptimization(BaseOptimization):
+    """Inverse-design model for wavelength-division multiplexing/demultiplexing.
+
+    Args:
+        device: Simulation-resolution WDM device with wavelength-dependent ports
+            and design regions.
+        hr_device: Higher-resolution device used for parameterization transforms.
+        design_region_param_cfgs: Optional per-region parameterization mapping.
+            Empty input creates the built-in level-set configuration.
+        sim_cfg: Overrides for the default ``ceviche_torch`` simulation settings.
+        obj_cfgs: Objective overrides for the two target wavelengths, crosstalk,
+            reflection, and radiation penalties.
+        operation_device: PyTorch device used for optimization state.
+
+    Notes:
+        The default simulation covers a 0.6 um wavelength window with
+        ``n_wl=2`` around ``wl_cen=1.55``. The active objectives target 1.54 um
+        at ``out_slice_1`` and 1.56 um at ``out_slice_2`` while penalizing the
+        opposite output and radiation channels. The default design uses
+        ``rho_resolution=[50,50]``, blur ``mfs=0.08`` in ``xy``, binarization,
+        ``init_method="ones"``, and Gaussian-linear interpolation.
+    """
+
     def __init__(
         self,
         device,

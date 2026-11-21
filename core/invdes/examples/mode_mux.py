@@ -13,12 +13,14 @@ sys.path.insert(
 
 import torch
 from pyutils.config import Config
+from pyutils.general import logger
 
 from core.invdes import builder
 from core.invdes.invdesign import InvDesign
 from core.invdes.models import ModeCvtMuxOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import ModeCvtMux
+from core.invdes.run_management import OptimizationRunManager
 from core.utils import set_torch_deterministic
 
 sys.path.pop(0)
@@ -42,6 +44,17 @@ if __name__ == "__main__":
     exp_name = (
         f"mode_mux_{mode_mux_region_size[0]}x{mode_mux_region_size[1]}_{exp_comment}"
     )
+    work_root = "./runs"
+    resume_checkpoint = os.environ.get("MAPS_RESUME_CHECKPOINT")
+
+    run_manager = OptimizationRunManager(
+        root=work_root,
+        experiment="mode_mux",
+        tag=exp_name,
+        resume=resume_checkpoint is not None,
+        resume_from=resume_checkpoint,
+    )
+    run_manager.attach_logger(logger)
 
     sim_cfg.update(
         dict(
@@ -49,13 +62,13 @@ if __name__ == "__main__":
             # border_width=[port_len, port_len, 2, 2],
             border_width=[0, 0, 2, 2],
             resolution=50,
-            plot_root=f"./figs/{exp_name}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
             use_autodiff=False,
         )
     )
+    run_manager.bind_simulation_config(sim_cfg)
 
     def fom_func(breakdown):
         ## maximization fom
@@ -87,6 +100,7 @@ if __name__ == "__main__":
     ).to(operation_device)
     invdesign = InvDesign(
         devOptimization=opt,
+        run_manager=run_manager,
         optimizer=Config(
             # name="adam",
             name="nesterov",
@@ -113,6 +127,8 @@ if __name__ == "__main__":
             ckpt_name=f"{exp_name}",
             dump_gds=True,
             gds_name=f"{exp_name}",
+            load_ckpt=resume_checkpoint,
+            resume=resume_checkpoint is not None,
         ),
     )
     invdesign.optimize()

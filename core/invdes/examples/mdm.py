@@ -13,12 +13,14 @@ sys.path.insert(
 
 import torch
 from pyutils.config import Config
+from pyutils.general import logger
 
 from core.invdes import builder
 from core.invdes.invdesign import InvDesign
 from core.invdes.models import MDMOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import MDM
+from core.invdes.run_management import OptimizationRunManager
 from core.utils import set_torch_deterministic
 
 sys.path.pop(0)
@@ -37,7 +39,19 @@ def generate_mdm(gpu_id, mfs):
 
     input_port_width = 0.8
     output_port_width = 0.8
-    exp_name = f"mdm_opt_mfs{mfs * 1000:.0f}_500_100ls"
+    # exp_name = f"mdm_opt_mfs{mfs * 1000:.0f}_500_100ls"
+    exp_name = f"mdm_opt_edge"
+    work_root = "./runs"
+    resume_checkpoint = os.environ.get("MAPS_RESUME_CHECKPOINT")
+
+    run_manager = OptimizationRunManager(
+        root=work_root,
+        experiment="mdm",
+        tag=exp_name,
+        resume=resume_checkpoint is not None,
+        resume_from=resume_checkpoint,
+    )
+    run_manager.attach_logger(logger)
 
     sim_cfg.update(
         dict(
@@ -45,13 +59,13 @@ def generate_mdm(gpu_id, mfs):
             # border_width=[port_len, port_len, 2, 2],
             border_width=[0, 0, 2, 2],
             resolution=100,
-            plot_root=f"./drc_experiment/{exp_name}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
             use_autodiff=False,
         )
     )
+    run_manager.bind_simulation_config(sim_cfg)
 
     device = MDM(
         sim_cfg=sim_cfg,
@@ -65,10 +79,43 @@ def generate_mdm(gpu_id, mfs):
     print(device)
 
     design_region_param_cfgs = dict()
+    # for region_name in device.design_region_cfgs.keys():
+    #     design_region_param_cfgs[region_name] = dict(
+    #         method="levelset",
+    #         rho_resolution=[100, 100],
+    #         transform=[
+    #             dict(
+    #                 type="blur",
+    #                 mfs=mfs,
+    #                 resolutions=[hr_device.resolution, hr_device.resolution],
+    #                 dim="xy",
+    #             ),
+    #             dict(type="binarize"),
+    #         ],
+    #         init_method="random",
+    #         denorm_mode="linear_eps",
+    #         interpolation="gaussian_linear",
+    #         binary_projection=dict(
+    #             fw_threshold=100,
+    #             bw_threshold=100,
+    #             mode="regular",
+    #         ),
+    #     )
+
     for region_name in device.design_region_cfgs.keys():
         design_region_param_cfgs[region_name] = dict(
-            method="levelset",
-            rho_resolution=[100, 100],
+            method="edgebox",
+            geometry_cfgs=dict(
+                enabled_edges=("y-", "y+"),
+                pair_symmetry="mirror",
+                box_center=None,
+                box_size=None,
+                rho_resolution={"y-": 50, "y+": 50},
+                default_rho_resolution=50,
+                degree=3,
+                border_band_um=0.02,
+                constraints={"y+": (0, 1)},
+            ),
             transform=[
                 dict(
                     type="blur",
@@ -97,6 +144,7 @@ def generate_mdm(gpu_id, mfs):
     ).to(operation_device)
     invdesign = InvDesign(
         devOptimization=opt,
+        run_manager=run_manager,
         run=Config(
             n_epochs=100,
         ),
@@ -118,6 +166,8 @@ def generate_mdm(gpu_id, mfs):
             dump_gds=True,
             gds_name=f"{exp_name}",
             upsample_eps_to_1nm=True,
+            load_ckpt=resume_checkpoint,
+            resume=resume_checkpoint is not None,
         ),
     )
     invdesign.optimize()

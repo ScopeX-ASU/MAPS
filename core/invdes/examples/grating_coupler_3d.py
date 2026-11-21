@@ -2,9 +2,9 @@
 Description:
 Author: Jiaqi Gu (jiaqigu@asu.edu)
 Date: 2026-05-08 20:18:18
-LastEditors: Jiaqi Gu (jiaqigu@asu.edu)
-LastEditTime: 2026-05-08 21:50:18
-FilePath: /MAPS_fdtdx/core/invdes/examples/grating_coupler_3d.py
+LastEditors: Jiaqi Gu && jqgu@utexas.edu
+LastEditTime: 2026-09-02 15:59:37
+FilePath: /MAPS/core/invdes/examples/grating_coupler_3d.py
 """
 
 """
@@ -21,11 +21,13 @@ sys.path.insert(
 )
 import torch
 from pyutils.config import Config
+from pyutils.general import logger
 
 from core.invdes.invdesign import InvDesign
 from core.invdes.models import GratingCouplerOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import GratingCoupler
+from core.invdes.run_management import OptimizationRunManager
 from core.utils import set_torch_deterministic
 
 sys.path.pop(0)
@@ -40,8 +42,9 @@ if __name__ == "__main__":
     sim_cfg = DefaultSimulationConfig()
 
     # edge_coupler_region_size = (1.6, 1.6)
-    edge_coupler_region_size = (8, 8)
-    # edge_coupler_region_size = (4, 4)
+    # edge_coupler_region_size = (8, 8)
+    # edge_coupler_region_size = (14, 14)
+    edge_coupler_region_size = (4, 4)
     # port_len = 1.5
     port_len = 1.9
     top_port_len = 2.5
@@ -52,32 +55,44 @@ if __name__ == "__main__":
     wl_cen = 1.310
     # exp_name = f"grating_coupler_{wl_cen}_{edge_coupler_region_size[0]}x{edge_coupler_region_size[1]}_uniform25_sym"
     # exp_name = f"grating_coupler_{wl_cen}_{edge_coupler_region_size[0]}x{edge_coupler_region_size[1]}_autogrid10_sym"
-    exp_name = f"grating_coupler_{wl_cen}_{edge_coupler_region_size[0]}x{edge_coupler_region_size[1]}_autogrid10_sym_new"
-    wl_width = 0.0
+    # exp_name = f"grating_coupler_{wl_cen}_{edge_coupler_region_size[0]}x{edge_coupler_region_size[1]}_autogrid10_sym_new"
+    # exp_name = f"grating_coupler_{wl_cen}_{edge_coupler_region_size[0]}x{edge_coupler_region_size[1]}_autogrid15_sym_new2_sparse"
+    exp_name = f"grating_coupler_{wl_cen}_{edge_coupler_region_size[0]}x{edge_coupler_region_size[1]}_autogrid15_sym_new2_sparse3"
+    work_root = "./runs"
+    resume_checkpoint = os.environ.get("MAPS_RESUME_CHECKPOINT")
+    wl_width = 0.00
     n_wl = 1
     in_mode = "Hz2"  # z-direction Y-polarized gaussian beam
     out_mode = "Hz1"  # TE00 mode in the waveguide
     resolution = 50
+    sidewall_angle = 0.0
+
+    # Initialize run management before device construction so normalization
+    # plots and logs are routed into this run from the beginning.
+    run_manager = OptimizationRunManager(
+        root=work_root,
+        experiment="grating_coupler_3d",
+        tag=exp_name,
+        resume=resume_checkpoint is not None,
+        resume_from=resume_checkpoint,
+    )
+    run_manager.attach_logger(logger)
 
     sim_cfg.update(
         dict(
             solver="fdtdx",
             subpixel=True,
-            # border_width=[0, port_len, 0.6, 0.6, 0.7, 0.7],
-            # border_width=[0, port_len, 0.6, 0.6, 1.3, 1.3],
-            # border_width=[port_len, 0, 1.0, 1.0, 0.9, 0.0],
             border_width=[port_len, 0, 1.0, 1.0, 0.0, 0.0],
             resolution=resolution,
-            max_time=4e-13,
+            max_time=8e-13,
             symmetry=(0, -1, 0),  # PEC on y direction.
             optical_grid={
                 "mode": "fdtdx_rectilinear_nonuniform",
                 "wavelength": wl_cen,
-                "grid_x": {"type": "auto", "min_steps_per_wvl": 10},
-                "grid_y": {"type": "auto", "min_steps_per_wvl": 10},
+                "grid_x": {"type": "auto", "min_steps_per_wvl": 15},
+                "grid_y": {"type": "auto", "min_steps_per_wvl": 15},
                 "grid_z": {"type": "auto", "min_steps_per_wvl": 15},
             },
-            plot_root=f"./figs/{exp_name}",
             # PML=[0.4, 0.4, 0.4],
             PML=[0.8, 0.8, 0.8],
             neural_solver=None,
@@ -88,14 +103,13 @@ if __name__ == "__main__":
             n_wl=n_wl,
         )
     )
+    run_manager.bind_simulation_config(sim_cfg)
 
     device = GratingCoupler(
         material_r=3.5**2,
-        # material_r=1.444**2,
         material_layers=[3.5**2, 2**2],
-        # material_layers=[1.444**2, 1.444**2],
-        # material_bg="SiO2",
-        material_bg=1.44**2,
+        material_buried=1.44**2,
+        material_cladding=1.44**2,
         thickness_layers=[0.22, 0.6],
         etch_depth_layers=[0.16, 0.6],
         gap_layers=(0.0, 0.1),
@@ -107,22 +121,15 @@ if __name__ == "__main__":
         top_port_len=top_port_len,
         substrate_thickness=1.0,
         substrate_gap=2.0,
-        # gaussian_waist=5.6568,
-        waist_radius=1,  # SMF-28 1310nm
-        waist_distance=-5.0,  # SMF-28 1310nm
+        waist_radius=2,  # SMF-28 1310nm
+        # waist_distance=-5.0,  # SMF-28 1310nm
+        waist_distance=-0.0,  # SMF-28 1310nm
+        # source_gap=0.7,
         is_3d=True,
         in_mode=in_mode,
         out_mode=out_mode,
         device=operation_device,
     )
-
-    # import matplotlib.pyplot as plt
-    # print(device.epsilon_map.shape)
-    # fig, ax = plt.subplots(1, 5, figsize=(20, 3))
-    # for i in range(5):
-    #     ax[i].imshow(device.epsilon_map.real[..., device.epsilon_map.shape[-1]//2-i].T, origin="lower", cmap="Greys")
-    # plt.savefig(f"{exp_name}_init.png", dpi=300)
-    # exit(0)
 
     hr_device = device.copy(resolution=resolution)
     print(device)
@@ -193,6 +200,18 @@ if __name__ == "__main__":
         direction="z",
         requires_grad=False,
     )
+    obj_cfgs["ed_penalty"] = dict(
+        weight=-0.05,
+        type="erosion_dilation_penalty",
+        temp=[300],
+        requires_adjoint=False,
+        length_scale=0.15,
+        planes=("middle",),
+        aggregation="mean",
+        beta=100.0,
+        eta=0.5,
+        delta_eta=0.01,
+    )
 
     def fom_func(breakdown):
         ## input_flux = |Pin - Pref|; refl_flux = |Pref|; Pref > 0; |Pin| = input_flux + refl_flux
@@ -208,9 +227,21 @@ if __name__ == "__main__":
         spectrum = {}
         fom = 0
         for wl, s, s_flux in zip(wls, trans, trans_flux):
-            spectrum[f"|s21|^2 at {wl:.2f}"] = {"weight": 1, "value": s_flux.item()}
-            fom = fom - breakdown["fwd_trans"]["weight"] * (s - 1) ** 2
-        spectrum["avg|s21|^2"] = {"weight": 1, "value": trans_flux.mean().item()}
+            spectrum[f"|s21|^2 at {wl:.2f}"] = {"weight": 1, "value": s.item()}
+            spectrum[f"flux at {wl:.2f}"] = {"weight": 1, "value": s_flux.item()}
+            # fom = fom - breakdown["fwd_trans"]["weight"] * (s - 1) ** 2
+            fom = fom + breakdown["fwd_trans"]["weight"] * s
+        if "ed_penalty" in breakdown:
+            ed_val = breakdown["ed_penalty"]["value"]
+            ed_w = breakdown["ed_penalty"]["weight"]
+            fom = fom + ed_w * ed_val
+            spectrum["ed_penalty"] = {
+                "weight": ed_w,
+                "value": (
+                    ed_val.item() if isinstance(ed_val, torch.Tensor) else float(ed_val)
+                ),
+            }
+        spectrum["avg|s21|^2"] = {"weight": 1, "value": trans.mean().item()}
         return fom, spectrum
 
     obj_cfgs["_fusion_func"] = fom_func
@@ -243,8 +274,8 @@ if __name__ == "__main__":
                 mode="regular",
             ),
             dims=(0, 1),
-            extrude_direction="-",
-            extrude_angle=90.0,
+            reference_plane="middle",
+            extrude_angle=sidewall_angle,
         )
 
     opt = GratingCouplerOptimization(
@@ -257,8 +288,9 @@ if __name__ == "__main__":
     ).to(operation_device)
     invdesign = InvDesign(
         devOptimization=opt,
+        run_manager=run_manager,
         run=Config(
-            n_epochs=100,
+            n_epochs=int(os.environ.get("MAPS_N_EPOCHS", 100)),
         ),
         optimizer=Config(
             name="Adam",
@@ -275,7 +307,7 @@ if __name__ == "__main__":
             mode="cosine",
             name="sharpness",
             init_sharp=5,
-            final_sharp=5,
+            final_sharp=32,
         ),
         plot_cfgs=Config(
             plot=True,
@@ -287,10 +319,17 @@ if __name__ == "__main__":
             exclude_port_names=[],
             field_component="Ey",
             eps_grad=True,
+            param_grad=True,
         ),
         checkpoint_cfgs=Config(
-            save_model=False,
+            save_model=True,
             ckpt_name=f"{exp_name}",
+            interval=1,
+            save_latest=True,
+            load_ckpt=resume_checkpoint,
+            resume=resume_checkpoint is not None,
+            dump_tidy3d=True,
+            tidy3d_name=f"{exp_name}_tidy3d_geometry",
             dump_gds=True,
             gds_name=f"{exp_name}",
         ),

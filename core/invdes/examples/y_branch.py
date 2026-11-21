@@ -13,11 +13,13 @@ sys.path.insert(
 import torch
 from autograd.numpy import array as npa
 from pyutils.config import Config
+from pyutils.general import logger
 
 from core.invdes.invdesign import InvDesign
 from core.invdes.models import MMIOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import MMI
+from core.invdes.run_management import OptimizationRunManager
 from core.utils import set_torch_deterministic
 
 sys.path.pop(0)
@@ -30,6 +32,9 @@ if __name__ == "__main__":
     # first we need to instantiate the a optimization object
     sim_cfg = DefaultSimulationConfig()
 
+    # mmi_region_size = (5, 5)
+    # mmi_region_size = (15, 10)
+    # mmi_region_size = (10, 10)
     mmi_region_size = (2, 2)
     port_len = 1.5
     wl_cen = 1.55
@@ -44,8 +49,19 @@ if __name__ == "__main__":
 
     material_r1 = "Si_eff"
     exp_name = (
-        f"y_branch_{material_r1}_{mmi_region_size[0]}x{mmi_region_size[1]}"
+        f"y_branch_{material_r1}_{mmi_region_size[0]}x{mmi_region_size[1]}_nonuniform25"
     )
+    work_root = "./runs"
+    resume_checkpoint = os.environ.get("MAPS_RESUME_CHECKPOINT")
+
+    run_manager = OptimizationRunManager(
+        root=work_root,
+        experiment="y_branch",
+        tag=exp_name,
+        resume=resume_checkpoint is not None,
+        resume_from=resume_checkpoint,
+    )
+    run_manager.attach_logger(logger)
 
     sim_cfg.update(
         dict(
@@ -59,13 +75,13 @@ if __name__ == "__main__":
             },
             border_width=[0, 0, 1, 1],  # left, right, lower, upper, containing PML
             resolution=resolution,
-            plot_root=f"./figs/{exp_name}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
             use_autodiff=False,
         )
     )
+    run_manager.bind_simulation_config(sim_cfg)
 
     def fom_func(breakdown):
         ## maximization fom
@@ -144,7 +160,11 @@ if __name__ == "__main__":
     )
 
     device = MMI(
-        material_r1=material_r1,
+        material_ports=(material_r1, material_r1),
+        material_cladding="SiO2",
+        region_material_r1_layers=(material_r1,),
+        region_material_r2_layers=("SiO2",),
+        is_design_region=(True,),
         sim_cfg=sim_cfg,
         box_size=mmi_region_size,
         port_len=(port_len, port_len),
@@ -241,6 +261,7 @@ if __name__ == "__main__":
     ).to(operation_device)
     invdesign = InvDesign(
         devOptimization=opt,
+        run_manager=run_manager,
         optimizer=Config(
             name="Adam",
             # lr=1e-2,
@@ -285,6 +306,8 @@ if __name__ == "__main__":
             dump_gds=True,
             gds_name=f"{exp_name}",
             upsample_eps_to_1nm=True,
+            load_ckpt=resume_checkpoint,
+            resume=resume_checkpoint is not None,
         ),
         after_step_callbacks=[],  # no callbacks for edgebox, need to use clamp for levelset
     )

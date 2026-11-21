@@ -37,7 +37,7 @@ sys.path.insert(
 )
 import matplotlib.pyplot as plt
 
-from core.utils import print_stat
+from core.utils import print_stat, resample_rectilinear_plane
 from thirdparty.ceviche.constants import C_0, MICRON_UNIT
 
 from .layers.device_base import N_Ports
@@ -46,7 +46,12 @@ from .layers.objective import ObjectiveFunc
 from .layers.parametrization import parametrization_builder
 from .layers.parametrization.base_parametrization import _convert_resolution
 from .layers.thermal_control import collect_unique_control_states
-from .layers.utils import plot_eps_field, plot_eps_field_3d
+from .layers.utils import (
+    loc2ind,
+    plot_eps_field,
+    plot_eps_field_3d,
+    plot_monitor_fields,
+)
 
 sys.path.pop(0)
 
@@ -58,6 +63,20 @@ __all__ = [
 
 
 class DefaultSimulationConfig(Config):
+    """
+    Default electromagnetic simulation configuration used by InvDes.
+
+    Attributes:
+        solver: Forward-solver identifier.
+        border_width: Simulation border widths in the device/solver convention.
+        PML: PML thickness configuration.
+        resolution: Optical grid resolution in pixels per micrometer.
+        wl_cen: Center wavelength in micrometers.
+        wl_width: Wavelength span in micrometers.
+        n_wl: Number of wavelength samples.
+        plot_root: Directory for simulation/plot artifacts.
+    """
+
     def __init__(self):
         super().__init__()
         self.update(
@@ -75,12 +94,21 @@ class DefaultSimulationConfig(Config):
                 wl_cen=1.55,
                 wl_width=0,
                 n_wl=1,
-                plot_root="./figs/metacoupler",
+                plot_root="./figs/bending",
             )
         )
 
 
 def _sum_objectives(breakdowns):
+    """
+    Fuse objective breakdown entries into a weighted scalar objective.
+
+    Args:
+        breakdowns: Mapping from objective name to a dictionary containing ``weight`` and ``value``; names containing ``smatrix`` are excluded from scalar fusion.
+
+    Returns:
+        ``(loss, extra_breakdown)`` where ``loss`` is the weighted sum.
+    """
     loss = 0
     for name, obj in breakdowns.items():
         if "smatrix" in name:
@@ -91,6 +119,18 @@ def _sum_objectives(breakdowns):
 
 
 def _blend_design_region(eps_map, region_mask, region_eps, region_weight=None):
+    """
+    Blend a design-region tensor into an existing material/property map.
+
+    Args:
+        eps_map: Destination tensor; selected region is modified in-place.
+        region_mask: Tuple of spatial slices selecting the region.
+        region_eps: Tensor matching the selected region shape.
+        region_weight: Optional tensor matching ``region_eps``; blend is ``base * (1 - weight) + region * weight``.
+
+    Raises:
+        ValueError: If ``region_weight`` shape differs from ``region_eps``.
+    """
     if region_weight is None:
         eps_map[region_mask] = region_eps
         return
@@ -133,6 +173,19 @@ def _clone_material_map(material_map, *, dtype, device):
     return torch.as_tensor(material_map, dtype=dtype, device=device).clone()
 
 
+def _optimization_epsilon_tensor(device, operation_device):
+    """Create a complex64 optimization epsilon tensor without dropping loss."""
+    epsilon_map = np.asarray(device.epsilon_map)
+    has_complex_material = np.iscomplexobj(epsilon_map) or bool(
+        getattr(device, "_epsilon_inputs_are_complex", lambda: False)()
+    )
+    if has_complex_material:
+        # Complex endpoint values may only occur in design-region configs;
+        # promote the real background before region blending takes place.
+        epsilon_map = epsilon_map.astype(np.complex64)
+    return torch.from_numpy(epsilon_map).to(operation_device)
+
+
 def _coords_from_region_mask(coords, region_mask):
     return tuple(
         np.asarray(axis_coords[slc], dtype=np.float64)
@@ -152,6 +205,15 @@ def _fit_region_mask_to_shape(region_mask, map_shape):
 
 
 class DefaultOptimizationConfig(Config):
+    """
+    Default configuration for a MAPS inverse-design optimization model.
+
+    Attributes:
+        design_region_param_cfgs: Mapping from region name to parametrization configuration.
+        sim_cfg: Solver, grid, wavelength, PML, border, and output settings.
+        obj_cfgs: Objective definitions and optional custom fusion rule.
+    """
+
     def __init__(self):
         super().__init__()
         self.update(
@@ -198,6 +260,25 @@ class DefaultOptimizationConfig(Config):
 
 
 class BaseOptimization(nn.Module):
+    """
+    Base differentiable model connecting device, parametrization, simulation, objectives, and gradients.
+
+    Args:
+        device: Native-resolution device exposing epsilon/material maps, design-region masks, ports, monitors, normalization, and solver metadata.
+        hr_device: High-resolution device used for parametrization/export and high-resolution epsilon.
+        design_region_param_cfgs: Mapping from region name to parametrization configuration.
+        sim_cfg: Simulation configuration controlling solver, resolution, wavelength, PML/border, and output path.
+        obj_cfgs: Objective configuration and scalar objective-fusion rules.
+        operation_device: Torch device for learnable tensors and differentiable state.
+        verbose: Whether to emit diagnostics.
+
+    Key attributes:
+        ``epsilon_map`` and ``hr_eps_map`` are material maps; ``design_region_param_dict`` is the learnable ``nn.ModuleDict``; ``objective_layer`` is the differentiable FoM wrapper.
+
+    Contract:
+        Material-map tensors and objective fields must follow the MAPS cross-backend axis, dtype, unit, and coordinate conventions.
+    """
+
     def __init__(
         self,
         device: N_Ports,
@@ -224,12 +305,8 @@ class BaseOptimization(nn.Module):
         for name, cfg in self._cfgs.items():
             setattr(self, name, cfg)
 
-        self.epsilon_map = torch.from_numpy(device.epsilon_map).to(
-            self.operation_device
-        )
-        self.hr_eps_map = torch.from_numpy(hr_device.epsilon_map).to(
-            self.operation_device
-        )
+        self.epsilon_map = _optimization_epsilon_tensor(device, self.operation_device)
+        self.hr_eps_map = _optimization_epsilon_tensor(hr_device, self.operation_device)
         self.design_region_masks = device.design_region_masks
         self.design_region_mask_weights = getattr(
             device, "design_region_mask_weights", {}
@@ -342,6 +419,12 @@ class BaseOptimization(nn.Module):
                 design_region.reset_levelset_sdf()
 
     def reset_parameters(self):
+        """
+        Reset every configured design-region parametrization to its implementation-specific initial state.
+
+        Returns:
+            None.
+        """
         for design_region in self.design_region_param_dict.values():
             design_region.reset_parameters()
 
@@ -350,6 +433,12 @@ class BaseOptimization(nn.Module):
         ## each design region has a name, and it is an nn.Module.
         ## its self.weights is a nn.ParameterDict which contains all its learnable parameters
         ## during initialization, it will build all parameters and run reset_parameters
+        """
+        Build the learnable design-region parametrization modules and the differentiable FoM wrapper.
+
+        Returns:
+            None; ``design_region_param_dict`` becomes an ``nn.ModuleDict`` keyed by region name.
+        """
         if self.verbose:
             logger.info("Start building design region parametrizations ...")
         self.design_region_param_dict = parametrization_builder(
@@ -405,16 +494,41 @@ class BaseOptimization(nn.Module):
         target_device: N_Ports | None = None,
         region_masks: dict | None = None,
         resize_property_name: str | None = None,
+        region_mask_override=None,
+        region_weight_override=None,
     ) -> Tensor | None:
+        """Insert one region property tensor into a full-device property map.
+
+        Args:
+            base_map: Full-device destination property map, or None.
+            region_name: Design-region name used for masks and coverage metadata.
+            region_values: Property values to insert, or None.
+            target_device: Device owning the target map metadata. Defaults to the
+                native simulation device.
+            region_masks: Optional mask dictionary used instead of the target
+                device's design-region masks.
+            resize_property_name: Property name controlling any required
+                coordinate-aware resize.
+            region_mask_override: Optional support-region slice tuple. This is
+                used when sidewall extrusion extends beyond the design region.
+            region_weight_override: Optional coverage weight corresponding to
+                ``region_mask_override``.
+
+        Returns:
+            The modified ``base_map``, or None when the destination is None.
+        """
         if base_map is None or region_values is None:
             return base_map
         target_device = self.device if target_device is None else target_device
         region_masks = (
             target_device.design_region_masks if region_masks is None else region_masks
         )
-        region_mask = _fit_region_mask_to_shape(
-            region_masks[region_name], base_map.shape
+        selected_region_mask = (
+            region_masks[region_name]
+            if region_mask_override is None
+            else region_mask_override
         )
+        region_mask = _fit_region_mask_to_shape(selected_region_mask, base_map.shape)
         use_thermal_region_masks = region_masks is getattr(
             target_device, "thermal_design_region_masks", None
         ) and bool(getattr(target_device, "thermal_design_region_masks", {}))
@@ -434,20 +548,22 @@ class BaseOptimization(nn.Module):
                     target_shape,
                     property_name=resize_property_name,
                 )
-        region_weight = self._region_blend_weight(
-            region_name,
-            target_device=target_device,
-            axis_weights_dict=(
-                getattr(target_device, "thermal_design_region_axis_weights", {})
-                if use_thermal_region_masks
-                else None
-            ),
-            mask_weights_dict=(
-                getattr(target_device, "thermal_design_region_mask_weights", {})
-                if use_thermal_region_masks
-                else None
-            ),
-        )
+        region_weight = region_weight_override
+        if region_weight is None:
+            region_weight = self._region_blend_weight(
+                region_name,
+                target_device=target_device,
+                axis_weights_dict=(
+                    getattr(target_device, "thermal_design_region_axis_weights", {})
+                    if use_thermal_region_masks
+                    else None
+                ),
+                mask_weights_dict=(
+                    getattr(target_device, "thermal_design_region_mask_weights", {})
+                    if use_thermal_region_masks
+                    else None
+                ),
+            )
         if region_weight is not None and tuple(region_weight.shape) != tuple(
             target_shape
         ):
@@ -482,6 +598,15 @@ class BaseOptimization(nn.Module):
             )
             if region_name not in active_region_masks:
                 continue
+            use_support_region = (
+                active_region_masks is target_device.design_region_masks
+            )
+            region_mask_override = (
+                region_maps.get("_region_mask") if use_support_region else None
+            )
+            region_weight_override = (
+                region_maps.get("_region_weight") if use_support_region else None
+            )
             for property_name in property_names:
                 if property_name not in base_maps:
                     continue
@@ -492,6 +617,8 @@ class BaseOptimization(nn.Module):
                     target_device=target_device,
                     region_masks=active_region_masks,
                     resize_property_name=property_name,
+                    region_mask_override=region_mask_override,
+                    region_weight_override=region_weight_override,
                 )
         return base_maps
 
@@ -870,10 +997,14 @@ class BaseOptimization(nn.Module):
             hr_design_region_eps_dict[region_name] = hr_region_maps["permittivity"]
             design_region_material_dict[region_name] = region_maps
             eps_region_material_dict[region_name] = {
-                "permittivity": region_maps["permittivity"]
+                "permittivity": region_maps["permittivity"],
+                "_region_mask": region_maps.get("_region_mask"),
+                "_region_weight": region_maps.get("_region_weight"),
             }
             hr_eps_region_material_dict[region_name] = {
-                "permittivity": hr_region_maps["permittivity"]
+                "permittivity": hr_region_maps["permittivity"],
+                "_region_mask": hr_region_maps.get("_region_mask"),
+                "_region_weight": hr_region_maps.get("_region_weight"),
             }
 
         self._apply_region_material_maps(
@@ -895,6 +1026,185 @@ class BaseOptimization(nn.Module):
             hr_design_region_eps_dict,
             design_region_material_dict,
         )
+
+    def to_tidy3d_geometry_simulation(
+        self,
+        *,
+        eps_map=None,
+        sharpness: float | None = None,
+        region_name: str | None = None,
+        threshold: float | None = None,
+        frequency: float | None = None,
+        sidewall_angle: float | None = None,
+        pixel_exact: bool = False,
+    ):
+        """Materialize the current inverse design as Tidy3D geometry.
+
+        Args:
+            eps_map: Optional filled high-resolution permittivity map. By
+                default, the most recent forward map is used; if unavailable,
+                :meth:`build_device` evaluates the current parameters.
+            sharpness: Projection sharpness used only when a new map must be
+                built. Defaults to the current optimization sharpness or 1.
+            region_name: Optional design-region key. When omitted, every
+                configured design region is materialized.
+            threshold: Optional physical relative-permittivity threshold. The
+                material midpoint is used by default.
+            frequency: Optional contour sampling frequency in Hz. The device
+                center wavelength is used by default.
+            sidewall_angle: Design-region sidewall angle in degrees. By default,
+                the selected parameterization's ``extrude_angle`` is used.
+            pixel_exact: If true, preserve exact thresholded MAPS cell bounds.
+                Defaults to false so visualization uses Tidy3D's interpolated
+                contour extraction instead of staircase cell boundaries.
+
+        Returns:
+            Visualization-only ``tidy3d.Simulation`` containing fixed device
+            structures, explicit design-region geometry, and the physical port
+            source/monitor planes used by the optimization.
+
+        Notes:
+            This method does not mutate solver geometry or the optimization
+            state. It detaches tensors only for visualization.
+        """
+        from core.visualization.tidy3d import build_device_visualization_simulation
+
+        if eps_map is None:
+            eps_map = getattr(self, "_hr_eps_map", None)
+        if eps_map is None:
+            build_sharpness = (
+                float(sharpness)
+                if sharpness is not None
+                else float(getattr(self, "current_sharpness", 1.0))
+            )
+            eps_map = self.build_device(sharpness=build_sharpness)[2]
+
+        selected_region = region_name
+        if selected_region is None and len(self.hr_device.design_region_cfgs) == 1:
+            selected_region = next(iter(self.hr_device.design_region_cfgs))
+        if sidewall_angle is None:
+            param_cfg = self.design_region_param_cfgs.get(selected_region, {})
+            sidewall_angle = float(param_cfg.get("extrude_angle", 0.0))
+
+        return build_device_visualization_simulation(
+            self.hr_device,
+            eps_map,
+            port_device=self.device,
+            region_name=selected_region,
+            threshold=threshold,
+            frequency=frequency,
+            sidewall_angle=sidewall_angle,
+            pixel_exact=pixel_exact,
+        )
+
+    def save_tidy3d_geometry(
+        self,
+        path,
+        *,
+        eps_map=None,
+        sharpness: float | None = None,
+        region_name: str | None = None,
+        threshold: float | None = None,
+        frequency: float | None = None,
+        sidewall_angle: float | None = None,
+        pixel_exact: bool = False,
+    ) -> str:
+        """Save a self-contained Tidy3D geometry artifact for later viewing.
+
+        Args:
+            path: Destination ``.hdf5`` filename.
+            eps_map: Optional filled high-resolution permittivity map.
+            sharpness: Projection sharpness used when building a missing map.
+            region_name: Optional design-region key.
+            threshold: Optional physical relative-permittivity threshold.
+            frequency: Optional contour sampling frequency in Hz.
+            sidewall_angle: Optional design-region sidewall angle in degrees.
+            pixel_exact: Whether polygons preserve exact MAPS cell boundaries.
+                Defaults to false for smoother interpolated contours.
+
+        Returns:
+            Absolute path to the saved Tidy3D simulation artifact.
+
+        Notes:
+            The artifact stores already-materialized fixed/design geometry and
+            native Tidy3D representations of physical port sources and modal
+            monitors. It excludes auxiliary field/phasor monitors. Loading it
+            does not reconstruct the optimizer, run normalization, or execute
+            FDTD. If Tidy3D cannot represent a
+            nonzero-angle extrusion after narrow features change topology, export
+            logs a warning and preserves the exact footprint with vertical walls.
+        """
+        from pathlib import Path
+
+        artifact = Path(path).expanduser().resolve()
+        if artifact.suffix.lower() not in {".hdf5", ".h5"}:
+            raise ValueError("Tidy3D geometry artifacts must use .hdf5 or .h5")
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        simulation = self.to_tidy3d_geometry_simulation(
+            eps_map=eps_map,
+            sharpness=sharpness,
+            region_name=region_name,
+            threshold=threshold,
+            frequency=frequency,
+            sidewall_angle=sidewall_angle,
+            pixel_exact=pixel_exact,
+        )
+        fallback_structures = [
+            structure.name
+            for structure in simulation.structures
+            if structure.name and structure.name.endswith("vertical_sidewall_fallback")
+        ]
+        if fallback_structures:
+            logger.warning(
+                "Tidy3D geometry export used vertical sidewalls for structures %s "
+                "because the requested angled extrusion changed polygon topology",
+                fallback_structures,
+            )
+        # Tidy3D can read ``.h5`` through ``from_file()``, but its generic
+        # ``to_file()`` dispatch table only includes ``.hdf5``. Use the public
+        # HDF5 writer directly for the shorter, MAPS-standard suffix.
+        if artifact.suffix.lower() == ".h5":
+            simulation.to_hdf5(artifact)
+        else:
+            simulation.to_file(artifact)
+        return str(artifact)
+
+    def plot_3d(
+        self,
+        *,
+        eps_map=None,
+        sharpness: float | None = None,
+        region_name: str | None = None,
+        threshold: float | None = None,
+        frequency: float | None = None,
+        sidewall_angle: float | None = None,
+        pixel_exact: bool = False,
+    ):
+        """Display fixed and inverse-designed geometry in Tidy3D's 3-D viewer.
+
+        Args:
+            eps_map: Optional filled high-resolution permittivity map.
+            sharpness: Projection sharpness used when building a missing map.
+            region_name: Optional design-region key.
+            threshold: Optional physical relative-permittivity threshold.
+            frequency: Optional contour sampling frequency in Hz.
+            sidewall_angle: Optional design-region sidewall angle in degrees.
+            pixel_exact: Whether polygons preserve exact MAPS cell boundaries.
+                Defaults to false for smoother interpolated contours.
+
+        Returns:
+            The value returned by Tidy3D ``Simulation.plot_3d()``.
+        """
+        simulation = self.to_tidy3d_geometry_simulation(
+            eps_map=eps_map,
+            sharpness=sharpness,
+            region_name=region_name,
+            threshold=threshold,
+            frequency=frequency,
+            sidewall_angle=sidewall_angle,
+            pixel_exact=pixel_exact,
+        )
+        return simulation.plot_3d()
 
     def build_objective(
         self,
@@ -931,6 +1241,7 @@ class BaseOptimization(nn.Module):
         epsilon_map = (
             epsilon_map if epsilon_map is not None else self.device.epsilon_map
         )
+
         heat_source_names = tuple(getattr(self.device, "heat_source_cfgs", {}).keys())
         control_states, processed_obj_cfgs = collect_unique_control_states(
             obj_cfgs,
@@ -1054,6 +1365,10 @@ class BaseOptimization(nn.Module):
             cell_weights=cell_weights,
             design_region_masks=self.device.design_region_masks,
             design_region_cfgs=self.device.design_region_cfgs,
+            design_region_param_cfgs=getattr(self, "design_region_param_cfgs", None),
+            design_region_axis_weights=getattr(
+                self, "design_region_axis_weights", None
+            ),
         )
 
         obj_cfgs = copy.deepcopy(obj_cfgs)
@@ -1071,14 +1386,52 @@ class BaseOptimization(nn.Module):
         return self.objective
 
     def _get_region_param_grad_plot_data(self, region_name: str):
+        if region_name not in self.design_region_param_dict:
+            return None
         design_region = self.design_region_param_dict[region_name]
         if design_region is None:
             return None
 
+        if design_region.cfgs.get("method") == "edgebox":
+            if "edgebox" not in design_region.weights:
+                return None
+            geom = design_region.weights["edgebox"]
+            edges = []
+            for side, spline in geom.edge_modules.items():
+                physical_ctrl, _ = spline.physical_ctrl()
+                edges.append(
+                    dict(
+                        side=side,
+                        raw=spline.raw_ctrl.detach().cpu(),
+                        physical=physical_ctrl.detach().cpu(),
+                        grad=(
+                            None
+                            if spline.raw_ctrl.grad is None
+                            else spline.raw_ctrl.grad.detach().cpu()
+                        ),
+                    )
+                )
+            return {"edge_knots": edges}
+
+        if design_region.cfgs.get("method") == "polygon":
+            if "polygon" not in design_region.weights:
+                return None
+            polygon = design_region.weights["polygon"]
+            if polygon.raw_vertices.grad is None:
+                return None
+            return dict(
+                polygon_vertices=polygon._physical_vertices().detach().cpu().squeeze(0),
+                polygon_grad=polygon.raw_vertices.grad.detach().cpu().squeeze(0),
+                name="polygon vertices",
+            )
+
         grad_tensor = None
         grad_name = None
         for name, param in design_region.named_parameters():
-            if param.grad is None:
+            # A parameter can retain a gradient from a previous optimization
+            # stage after requires_grad is disabled. Such stale gradients must
+            # not drive the current parameter-gradient visualization.
+            if not param.requires_grad or param.grad is None:
                 continue
             tensor = param.grad.detach()
             if tensor.ndim == 2:
@@ -1090,6 +1443,14 @@ class BaseOptimization(nn.Module):
                 if squeezed.ndim == 2:
                     grad_tensor = squeezed
                     grad_name = name.split(".")[-1]
+                    break
+                if squeezed.ndim == 3 and squeezed.shape[-1] == 2:
+                    # Box geometry stores independent x/y size gradients in
+                    # the trailing channel. The plot has one scalar per box;
+                    # show the signed x-size gradient so its direction remains
+                    # visible instead of mixing the two controls by magnitude.
+                    grad_tensor = squeezed[..., 0]
+                    grad_name = f"{name.split('.')[-1]}_x"
                     break
 
         if grad_tensor is None:
@@ -1177,7 +1538,32 @@ class BaseOptimization(nn.Module):
         show_delta_eps: bool | None = None,
         eps_grad: bool | Tensor = False,
         param_grad: bool | Tensor | dict = False,
+        objective_name: str | None = None,
+        monitor_plots: list | tuple | None = None,
     ):
+        """Plot solved fields, material maps, gradients, and monitor projections.
+
+        Args:
+            plot_filename: Base PNG filename relative to ``sim_cfg.plot_root``.
+            eps_map: Optional runtime permittivity map.
+            obj: Objective value displayed in the device-plot title.
+            field_key: Simulation solution key.
+            field_component: Field component displayed in device cross-sections.
+            in_slice_name: Source slice highlighted in red.
+            exclude_slice_names: Monitor slices omitted from device plots.
+            thermal_map_name: Optional thermal map overlay.
+            show_delta_eps: Whether to plot the runtime-minus-base permittivity.
+            eps_grad: Whether or which epsilon gradient to plot.
+            param_grad: Whether or which design-parameter gradient to plot.
+            objective_name: Objective key used to resolve monitor diagnostics.
+            monitor_plots: Optional monitor-plot specifications. Each entry may
+                contain ``objective``, ``fields`` (``nearfield`` and/or
+                ``farfield``), ``components``, ``quantities``, and an optional
+                vector ``phase_reference`` component.
+
+        Returns:
+            None. Requested figures are written under ``sim_cfg.plot_root``.
+        """
         # print(
         #     "this is the keys of self.objective.solutions",
         #     list(self.objective.solutions.keys()),
@@ -1193,6 +1579,53 @@ class BaseOptimization(nn.Module):
             x_shift_coord = extended_Ez.shape[0] * self.device.grid_step
             x_shift_idx = extended_Ez.shape[0]
         monitors = []
+
+        def _mirror_plot_monitor(monitor):
+            """Return symmetry-reflected copies for visualization only."""
+            symmetry = self.sim_cfg.get("symmetry")
+            if not symmetry or not isinstance(monitor, tuple) or len(monitor) != 3:
+                return []
+
+            shape = getattr(self.device, "export_grid_metadata", {}).get("shape")
+            if shape is None:
+                shape = (
+                    getattr(self.device, "grid_info_dict", {})
+                    .get("export_epsilon_map", {})
+                    .get("shape")
+                )
+            if shape is None:
+                return []
+
+            mirrored = list(monitor)
+            changed = False
+            for axis, symmetry_value in enumerate(symmetry):
+                if symmetry_value == 0 or axis >= len(shape):
+                    continue
+
+                indexer = monitor[axis]
+                if not isinstance(indexer, slice):
+                    continue
+                if indexer.start is None or indexer.stop is None:
+                    continue
+
+                midpoint = (int(shape[axis]) - 1) / 2.0
+                indices = np.arange(indexer.start, indexer.stop)
+                if indices.size == 0:
+                    continue
+                reflected = 2.0 * midpoint - indices
+                if np.allclose(reflected, indices):
+                    continue
+
+                reflected = np.rint(reflected).astype(int)
+                if np.any(reflected < 0) or np.any(reflected >= int(shape[axis])):
+                    continue
+                mirrored[axis] = slice(
+                    int(reflected.min()), int(reflected.max()) + 1, indexer.step
+                )
+                changed = True
+
+            return [tuple(mirrored)] if changed else []
+
         for name, m in self.device.port_monitor_slices_export.items():
             if name in exclude_slice_names:
                 continue
@@ -1210,6 +1643,11 @@ class BaseOptimization(nn.Module):
             #         extended_m = torch.zeros_like(extended_Ez)
             #         m = torch.cat((m, extended_m), dim=0)
             monitors.append((m, color))
+            if isinstance(m, tuple):
+                monitors.extend(
+                    (_mirrored_monitor, color)
+                    for _mirrored_monitor in _mirror_plot_monitor(m)
+                )
         base_eps_map = self._eps_map
         eps_map = (
             eps_map if eps_map is not None else self._resolve_plot_eps_map(field_key)
@@ -1329,23 +1767,147 @@ class BaseOptimization(nn.Module):
                 }
             )
 
-            for map_name in map_dict:
-                map_values = map_dict[map_name]
-                src_grid = grid_dict[map_name]
-                if map_values is not None and src_grid is not None:
-                    map_dict[map_name] = self.device.resample_map_between_coords(
-                        values=map_values,
-                        src_coords=src_grid["coords"],
-                        dst_coords=self.device.export_grid_metadata["coords"],
+            use_sparse_plot_planes = (
+                os.environ.get("MAPS_SPARSE_PHASOR", "0") == "1"
+                and os.environ.get("MAPS_SPARSE_PHASOR_VISUALIZATION_PLANES", "1")
+                == "1"
+                and on_native_grid
+                and extended_Ez is None
+                and self.device.export_grid_metadata is not None
+                and grid_dict["eps_map"] is not None
+            )
+
+            if not use_sparse_plot_planes:
+                with torch.inference_mode():
+                    for map_name in map_dict:
+                        map_values = map_dict[map_name]
+                        src_grid = grid_dict[map_name]
+                        if map_values is not None and src_grid is not None:
+                            map_dict[map_name] = (
+                                self.device.resample_map_between_coords(
+                                    values=map_values,
+                                    src_coords=src_grid["coords"],
+                                    dst_coords=self.device.export_grid_metadata[
+                                        "coords"
+                                    ],
+                                    interpolation=(
+                                        "nearest"
+                                        if map_name in {"eps_map", "base_eps_map"}
+                                        else "linear"
+                                    ),
+                                ).data.cpu()
+                            )
+                eps_map = map_dict["eps_map"]
+                base_eps_map = map_dict["base_eps_map"]
+                thermal_map = map_dict["thermal_map"]
+                heat_source_map = map_dict["heat_source_map"]
+                eps_grad_map = map_dict["eps_grad_map"]
+                fields = {
+                    k: map_dict[k].data
+                    for k in fields
+                    if k.startswith(field_component[0])
+                }
+
+            def _sparse_export_plot_planes(plot_center):
+                """Build export-grid plot planes from native sparse slabs.
+
+                Args:
+                    plot_center: Physical ``(x, y, z)`` center in micrometers.
+
+                Returns:
+                    Three CPU plane dictionaries ordered as ``xy``, ``xz``,
+                    and ``yz`` for :func:`plot_eps_field_3d`.
+                """
+                export_grid = self.device.export_grid_metadata
+                export_shape = tuple(int(size) for size in export_grid["shape"])
+                fixed_indices = loc2ind(
+                    plot_center,
+                    tuple(float(size) for size in self.device.cell_size),
+                    export_shape,
+                ).tolist()
+                component_names = tuple(f"{field_component[0]}{axis}" for axis in "xyz")
+                missing_components = [
+                    name for name in component_names if name not in map_dict
+                ]
+                if missing_components:
+                    raise KeyError(
+                        "Sparse 3-D plotting requires all vector components; "
+                        f"missing {missing_components}."
                     )
-            eps_map = map_dict["eps_map"]
-            base_eps_map = map_dict["base_eps_map"]
-            thermal_map = map_dict["thermal_map"]
-            heat_source_map = map_dict["heat_source_map"]
-            eps_grad_map = map_dict["eps_grad_map"]
-            fields = {
-                k: map_dict[k].data for k in fields if k.startswith(field_component[0])
-            }
+
+                def _plane(map_name, fixed_axis, fixed_index):
+                    values = map_dict.get(map_name)
+                    if values is None:
+                        return None
+                    source_grid = grid_dict.get(map_name)
+                    if source_grid is None:
+                        raise ValueError(
+                            f"Grid metadata is unavailable for plot map {map_name!r}."
+                        )
+                    if not isinstance(values, torch.Tensor):
+                        values_array = np.asarray(values)
+                        values = torch.as_tensor(
+                            values_array,
+                            dtype=(
+                                torch.complex64
+                                if np.iscomplexobj(values_array)
+                                else torch.float32
+                            ),
+                            device=self.operation_device,
+                        )
+                    return (
+                        resample_rectilinear_plane(
+                            values,
+                            src_coords=source_grid["coords"],
+                            dst_coords=export_grid["coords"],
+                            fixed_axis=fixed_axis,
+                            dst_index=fixed_index,
+                            axes=(-3, -2, -1),
+                            mode="cartesian",
+                            interpolation=(
+                                "nearest"
+                                if map_name in {"eps_map", "base_eps_map"}
+                                else "linear"
+                            ),
+                        )
+                        .detach()
+                        .cpu()
+                    )
+
+                plot_planes = []
+                with torch.inference_mode():
+                    for fixed_axis in (2, 1, 0):
+                        fixed_index = int(fixed_indices[fixed_axis])
+                        vector_planes = {
+                            name: _plane(name, fixed_axis, fixed_index)
+                            for name in component_names
+                        }
+                        total_field_abs = torch.sqrt(
+                            sum(
+                                value.abs().square() for value in vector_planes.values()
+                            )
+                        )
+                        plot_planes.append(
+                            {
+                                "field": vector_planes[field_component],
+                                "total_field_abs": total_field_abs,
+                                "eps": _plane("eps_map", fixed_axis, fixed_index),
+                                "base_eps": _plane(
+                                    "base_eps_map", fixed_axis, fixed_index
+                                ),
+                                "eps_grad": _plane(
+                                    "eps_grad_map", fixed_axis, fixed_index
+                                ),
+                                "thermal": _plane(
+                                    "thermal_map", fixed_axis, fixed_index
+                                ),
+                                "heat_source": _plane(
+                                    "heat_source_map", fixed_axis, fixed_index
+                                ),
+                                "fixed_idx": fixed_index,
+                            }
+                        )
+                return plot_planes, export_shape
 
             for region_name, region_cfg in design_region_cfgs.items():
                 design_region_center = np.asarray(region_cfg["center"], dtype=float)
@@ -1356,34 +1918,57 @@ class BaseOptimization(nn.Module):
                     design_region_center = design_region_center.copy()
                     design_region_center[0] -= x_shift_coord
 
+                if use_sparse_plot_planes:
+                    precomputed_planes, plot_grid_shape = _sparse_export_plot_planes(
+                        design_region_center
+                    )
+                    plot_fields = None
+                    plot_eps = None
+                    plot_base_eps = None
+                    plot_thermal = None
+                    plot_heat_source = None
+                    plot_eps_grad = None
+                else:
+                    precomputed_planes = None
+                    plot_grid_shape = None
+                    plot_fields = fields
+                    plot_eps = eps_map
+                    plot_base_eps = base_eps_map
+                    plot_thermal = thermal_map
+                    plot_heat_source = heat_source_map
+                    plot_eps_grad = eps_grad_map
+
                 plot_eps_field_3d(
-                    fields,
+                    plot_fields,
                     field_component,
-                    eps_map,
-                    base_eps=base_eps_map,
+                    plot_eps,
+                    base_eps=plot_base_eps,
                     show_delta_eps=show_delta_eps,
-                    thermal_map=thermal_map,
-                    heat_source_map=heat_source_map,
+                    thermal_map=plot_thermal,
+                    heat_source_map=plot_heat_source,
                     thermal_map_name=thermal_map_name,
-                    eps_grad=eps_grad_map,
+                    eps_grad=plot_eps_grad,
                     param_grad=(
-                        None if region_param_grad is None else region_param_grad["grad"]
+                        None
+                        if region_param_grad is None
+                        else region_param_grad.get("grad")
                     ),
                     param_x_width=(
                         None
                         if region_param_grad is None
-                        else region_param_grad["x_width"]
+                        else region_param_grad.get("x_width")
                     ),
                     param_y_height=(
                         None
                         if region_param_grad is None
-                        else region_param_grad["y_height"]
+                        else region_param_grad.get("y_height")
                     ),
                     param_name=(
                         "param"
                         if region_param_grad is None
-                        else region_param_grad["name"]
+                        else region_param_grad.get("name", "param")
                     ),
+                    edgebox_grad=region_param_grad,
                     filepath=_region_plot_filepath(base_filepath, region_name),
                     monitors=monitors,
                     center=design_region_center,
@@ -1402,6 +1987,8 @@ class BaseOptimization(nn.Module):
                     zoom_eps_center=design_region_center,
                     x_shift_coord=x_shift_coord if extended_Ez is not None else 0,
                     x_shift_idx=x_shift_idx if extended_Ez is not None else 0,
+                    precomputed_planes=precomputed_planes,
+                    grid_shape=plot_grid_shape,
                 )
         else:
             # 2D FDFD fields may be retained on the native rectilinear grid.
@@ -1489,17 +2076,24 @@ class BaseOptimization(nn.Module):
                 thermal_map_name=thermal_map_name,
                 eps_grad=eps_grad_map,
                 param_grad=(
-                    None if region_param_grad is None else region_param_grad["grad"]
+                    None if region_param_grad is None else region_param_grad.get("grad")
                 ),
                 param_x_width=(
-                    None if region_param_grad is None else region_param_grad["x_width"]
+                    None
+                    if region_param_grad is None
+                    else region_param_grad.get("x_width")
                 ),
                 param_y_height=(
-                    None if region_param_grad is None else region_param_grad["y_height"]
+                    None
+                    if region_param_grad is None
+                    else region_param_grad.get("y_height")
                 ),
                 param_name=(
-                    "param" if region_param_grad is None else region_param_grad["name"]
+                    "param"
+                    if region_param_grad is None
+                    else region_param_grad.get("name", "param")
                 ),
+                edgebox_grad=region_param_grad,
                 filepath=os.path.join(self.sim_cfg["plot_root"], plot_filename),
                 monitors=monitors,
                 x_width=self.device.cell_size[0]
@@ -1515,7 +2109,324 @@ class BaseOptimization(nn.Module):
                 x_shift_idx=x_shift_idx if extended_Ez is not None else 0,
             )
 
+        if monitor_plots and objective_name is not None:
+            self.plot_monitor_diagnostics(
+                objective_name=objective_name,
+                monitor_plots=monitor_plots,
+                plot_filename=plot_filename,
+            )
+
+    def plot_monitor_diagnostics(
+        self,
+        *,
+        objective_name: str,
+        monitor_plots: list | tuple,
+        plot_filename: str,
+    ):
+        """Plot retained near-field and projected-field objective diagnostics.
+
+        Args:
+            objective_name: Key in ``self.objective.Js``.
+            monitor_plots: Plot specification dictionaries. A specification
+                applies when its optional ``objective`` equals
+                ``objective_name``. ``fields`` selects ``nearfield`` and/or
+                ``farfield``; ``components`` and ``quantities`` control the
+                panel rows and columns. ``phase_reference`` defines vector-row
+                phase when requested.
+            plot_filename: Base device-plot filename used to derive output names.
+
+        Returns:
+            List of generated PNG paths.
+
+        Raises:
+            KeyError: If ``objective_name`` is not registered.
+            ValueError: If a plot specification requests an unknown field kind.
+        """
+        if objective_name not in self.objective.Js:
+            raise KeyError(f"Unknown objective {objective_name!r}")
+        objective_fn = self.objective.Js[objective_name]["fn"]
+        attribute_by_kind = {
+            "nearfield": "last_nearfield_fields",
+            "farfield": "last_projected_fields",
+        }
+        base_path = os.path.join(self.sim_cfg["plot_root"], plot_filename)
+        root, extension = os.path.splitext(base_path)
+        extension = extension or ".png"
+        objective_suffix = (
+            ""
+            if os.path.basename(root).endswith(f"_{objective_name}")
+            else f"_{objective_name}"
+        )
+        outputs = []
+        for spec_index, spec in enumerate(monitor_plots):
+            spec_objective = spec.get("objective", objective_name)
+            if spec_objective != objective_name:
+                continue
+            requested_fields = spec.get("fields", ("nearfield", "farfield"))
+            if isinstance(requested_fields, str):
+                requested_fields = (requested_fields,)
+            components = spec.get("components", ("Ex", "Ey", "Ez"))
+            if isinstance(components, str):
+                components = (components,)
+            else:
+                components = tuple(components)
+            quantities = spec.get("quantities", ("intensity", "amplitude", "phase"))
+            if isinstance(quantities, str):
+                quantities = (quantities,)
+            else:
+                quantities = tuple(quantities)
+            phase_reference = spec.get("phase_reference")
+            for field_kind in requested_fields:
+                field_kind = str(field_kind).lower()
+                if field_kind not in attribute_by_kind:
+                    raise ValueError(
+                        f"Unsupported monitor field kind {field_kind!r}; expected "
+                        "'nearfield' or 'farfield'"
+                    )
+                diagnostic_fields = getattr(
+                    objective_fn, attribute_by_kind[field_kind], None
+                )
+                if diagnostic_fields is None:
+                    logger.warning(
+                        "Objective %s did not retain %s diagnostics; skipping plot",
+                        objective_name,
+                        field_kind,
+                    )
+                    continue
+                suffix = f"{objective_suffix}_{field_kind}"
+                if len(monitor_plots) > 1:
+                    suffix += f"_{spec_index}"
+                output_path = f"{root}{suffix}{extension}"
+                try:
+                    plot_monitor_fields(
+                        diagnostic_fields,
+                        filepath=output_path,
+                        title=f"{objective_name}: {field_kind}",
+                        components=components,
+                        quantities=quantities,
+                        phase_reference=phase_reference,
+                    )
+                except ValueError as error:
+                    logger.warning(
+                        "Unable to plot %s diagnostics for objective %s: %s",
+                        field_kind,
+                        objective_name,
+                        error,
+                    )
+                    continue
+                outputs.append(output_path)
+        return outputs
+
+    def _dump_gds_files_tidy3d(self, filename):
+        """Export the optimized device from one Tidy3D coordinate frame."""
+        import tidy3d as td
+
+        export_device = self.hr_device
+        export_map = getattr(self, "_hr_eps_map", None)
+        if export_map is None:
+            raise RuntimeError(
+                "_hr_eps_map is required for native GDS export; run a forward pass first"
+            )
+        if isinstance(export_map, Tensor):
+            export_map = export_map.detach().cpu().numpy()
+        elif isinstance(export_map, ArrayBox):
+            export_map = export_map._value
+        export_map = np.asarray(export_map)
+        if np.iscomplexobj(export_map):
+            export_map = export_map.real
+
+        grid = getattr(export_device, "optical_grid_metadata", None)
+        if grid is None:
+            grid = export_device.grid_info_dict.get("epsilon_map")
+        if grid is None:
+            raise RuntimeError("High-resolution epsilon-grid metadata is unavailable")
+        coords = tuple(np.asarray(axis, dtype=float) for axis in grid["coords"])
+        if len(coords) < 2:
+            raise ValueError("Tidy3D GDS export requires x and y export coordinates")
+
+        if not export_device.design_region_cfgs:
+            raise ValueError("Tidy3D GDS export requires a design region")
+        design_region = next(iter(export_device.design_region_cfgs.values()))
+        region_center = np.asarray(design_region["center"], dtype=float)
+        region_size = np.asarray(design_region["size"], dtype=float)
+        if region_center.size == 2:
+            region_center = np.append(region_center, 0.0)
+        if region_size.size == 2:
+            region_size = np.append(region_size, 1.0)
+
+        region_name = next(iter(export_device.design_region_cfgs))
+        region_mask = export_device.design_region_masks.get(region_name)
+        if region_mask is None:
+            raise RuntimeError(f"Design-region mask is unavailable for '{region_name}'")
+
+        def _mask_slice(axis: int, axis_name: str) -> slice:
+            value = getattr(region_mask, axis_name, None)
+            if value is None:
+                try:
+                    value = region_mask[axis]
+                except (IndexError, TypeError):
+                    value = None
+            if not isinstance(value, slice):
+                raise TypeError(
+                    f"Design-region mask axis '{axis_name}' must be a slice, got {value!r}"
+                )
+            if value.start is None or value.stop is None or value.step not in (None, 1):
+                raise ValueError(
+                    f"Design-region mask axis '{axis_name}' must have a contiguous slice"
+                )
+            return slice(int(value.start), int(value.stop))
+
+        x_slice = _mask_slice(0, "x")
+        y_slice = _mask_slice(1, "y")
+        if x_slice.stop > len(coords[0]) or y_slice.stop > len(coords[1]):
+            raise ValueError("Design-region mask lies outside the high-resolution grid")
+
+        if export_map.ndim == 3:
+            if len(coords) < 3:
+                raise ValueError("3D export map is missing z coordinates")
+            z_slice = (
+                _mask_slice(2, "z")
+                if getattr(region_mask, "z", None) is not None
+                else None
+            )
+            if z_slice is not None:
+                z_index = (z_slice.start + z_slice.stop - 1) // 2
+            else:
+                z_index = int(np.argmin(np.abs(coords[2] - region_center[2])))
+            design_map = export_map[x_slice, y_slice, z_index : z_index + 1]
+        elif export_map.ndim == 2:
+            design_map = export_map[x_slice, y_slice, None]
+        else:
+            raise ValueError(
+                f"Unsupported export epsilon map shape: {export_map.shape}"
+            )
+
+        design_x = coords[0][x_slice]
+        design_y = coords[1][y_slice]
+        middle_z = float(region_center[2])
+        boundaries = grid.get("boundaries")
+        if boundaries is not None and len(boundaries) >= 2:
+            design_x_bounds = np.asarray(boundaries[0], dtype=float)[
+                x_slice.start : x_slice.stop + 1
+            ]
+            design_y_bounds = np.asarray(boundaries[1], dtype=float)[
+                y_slice.start : y_slice.stop + 1
+            ]
+            design_geometry_center = (
+                float((design_x_bounds[0] + design_x_bounds[-1]) / 2),
+                float((design_y_bounds[0] + design_y_bounds[-1]) / 2),
+                middle_z,
+            )
+            design_geometry_size = (
+                float(design_x_bounds[-1] - design_x_bounds[0]),
+                float(design_y_bounds[-1] - design_y_bounds[0]),
+                float(region_size[2]),
+            )
+        else:
+            design_geometry_center = (
+                float((design_x[0] + design_x[-1]) / 2),
+                float((design_y[0] + design_y[-1]) / 2),
+                middle_z,
+            )
+            design_geometry_size = (
+                float(design_x[-1] - design_x[0]),
+                float(design_y[-1] - design_y[0]),
+                float(region_size[2]),
+            )
+        frequency = C_0 / (self.sim_cfg["wl_cen"] * MICRON_UNIT)
+        scalar_coords = {
+            "x": design_x,
+            "y": design_y,
+            "z": np.asarray([middle_z], dtype=float),
+            "f": np.asarray([frequency], dtype=float),
+        }
+        scalar_data = np.asarray(design_map, dtype=float)[..., None]
+        scalar = td.ScalarFieldDataArray(scalar_data, coords=scalar_coords)
+        eps_dataset = td.PermittivityDataset(
+            eps_xx=scalar,
+            eps_yy=scalar,
+            eps_zz=scalar,
+        )
+        custom_medium = td.CustomMedium(eps_dataset=eps_dataset)
+        design_structure = td.Structure(
+            geometry=td.Box(
+                center=design_geometry_center,
+                size=design_geometry_size,
+            ),
+            medium=custom_medium,
+            name="optimized_design_region",
+        )
+
+        structures = [
+            structure
+            for structure in export_device.geometry.values()
+            if isinstance(structure, td.Structure)
+        ]
+        structures.append(design_structure)
+        cell_extend = getattr(export_device, "cell_extend", None)
+        if cell_extend is not None and len(cell_extend) >= 2:
+            cell_center = tuple(
+                float((bounds[0] + bounds[1]) / 2) for bounds in cell_extend[:2]
+            )
+            cell_size_xy = tuple(
+                float(bounds[1] - bounds[0]) for bounds in cell_extend[:2]
+            )
+        else:
+            cell_center = (0.0, 0.0)
+            cell_size_xy = tuple(float(v) for v in export_device.cell_size[:2])
+        cell_center = (*cell_center, middle_z)
+        cell_size = (*cell_size_xy, max(float(region_size[2]), 1e-3))
+        grid_step = float(
+            getattr(export_device, "grid_step", 1.0 / export_device.resolution)
+        )
+        simulation = td.Simulation(
+            center=cell_center,
+            size=cell_size,
+            grid_spec=td.GridSpec.uniform(dl=grid_step),
+            medium=td.Medium(permittivity=float(export_device.eps_bg)),
+            structures=structures,
+            sources=[],
+            monitors=[],
+            run_time=1e-15,
+            boundary_spec=td.BoundarySpec.pml(x=False, y=False, z=False),
+        )
+        output_path = os.path.join(self.sim_cfg["plot_root"], filename)
+        ensure_dir(os.path.dirname(output_path))
+
+        def _real_scalar(value, name):
+            if isinstance(value, Tensor):
+                value = value.detach().cpu().item()
+            elif isinstance(value, np.ndarray):
+                value = np.asarray(value).item()
+            value = float(np.real(value))
+            if not np.isfinite(value):
+                raise ValueError(f"Design-region {name} must be finite")
+            return value
+
+        eps_bg = _real_scalar(
+            design_region.get("eps_bg", export_device.eps_bg), "eps_bg"
+        )
+        if "eps" not in design_region:
+            raise KeyError("Design-region GDS export requires an 'eps' value")
+        eps = _real_scalar(design_region["eps"], "eps")
+        permittivity_threshold = 0.5 * (eps_bg + eps)
+        layer_map = {custom_medium: (1, 0)}
+        for structure in structures:
+            if structure.medium not in layer_map:
+                layer_map[structure.medium] = (1, 0)
+        simulation.to_gds_file(
+            output_path,
+            z=middle_z,
+            frequency=frequency,
+            permittivity_threshold=permittivity_threshold,
+            gds_layer_dtype_map=layer_map,
+            pixel_exact=False,
+        )
+
     def dump_gds_files(self, filename):
+        return self._dump_gds_files_tidy3d(filename)
+
+    def _dump_gds_files_legacy(self, filename):
         def _resolve_port_axis(port_cfg: dict) -> str:
             direction = str(port_cfg.get("direction", "")).lower()
             if direction.startswith("x"):
@@ -1643,7 +2554,11 @@ class BaseOptimization(nn.Module):
 
         export_device = self.hr_device
 
-        export_eps_map = copy.deepcopy(self._hr_eps_map)
+        export_eps_map = copy.deepcopy(
+            export_device.export_epsilon_map
+            if export_device.export_epsilon_map is not None
+            else self._hr_eps_map
+        )
         if isinstance(export_eps_map, Tensor) and torch.is_complex(export_eps_map):
             export_eps_map = export_eps_map.real
         elif isinstance(export_eps_map, np.ndarray) and np.iscomplexobj(export_eps_map):
@@ -1651,9 +2566,14 @@ class BaseOptimization(nn.Module):
         design_region_mask_list = []
         for (
             design_region_name,
-            design_region_mask,
-        ) in export_device.design_region_masks.items():
-            design_region_mask_list.append(design_region_mask)
+            design_region_cfg,
+        ) in export_device.design_region_cfgs.items():
+            export_grid = export_device.export_grid_metadata
+            masks, _, _ = export_device._build_region_masks_from_boundaries(
+                {design_region_name: design_region_cfg},
+                export_grid["boundaries"],
+            )
+            design_region_mask_list.append(masks[design_region_name])
         assert (
             len(design_region_mask_list) == 1
         ), "Only support one design region for now"
@@ -1670,7 +2590,20 @@ class BaseOptimization(nn.Module):
 
         if export_eps_map.ndim == 3:
             export_eps_map = export_eps_map[:, :, export_eps_map.shape[2] // 2]
-            design_region_mask = design_region_mask[:2]
+
+        if not (hasattr(design_region_mask, "x") and hasattr(design_region_mask, "y")):
+            raise TypeError(
+                f"Unsupported export design-region mask type: {type(design_region_mask)}"
+            )
+        x_slice = slice(
+            int(np.min(design_region_mask.x)),
+            int(np.max(design_region_mask.x)) + 1,
+        )
+        y_slice = slice(
+            int(np.min(design_region_mask.y)),
+            int(np.max(design_region_mask.y)) + 1,
+        )
+        design_region_eps = np.asarray(export_eps_map)[x_slice, y_slice]
 
         if isinstance(export_eps_map, Tensor):
             final_design_eps = export_eps_map.detach().cpu().numpy()
@@ -1690,7 +2623,7 @@ class BaseOptimization(nn.Module):
         plt.close()
 
         nm_per_pixel = 1000 / export_device.resolution
-        print(nm_per_pixel)
+        print("nm_per_pixel:", nm_per_pixel)
         # Normalize eps map to [0, 1] before upsampling.
         eps_span = max_permittivity - min_permittivity
         if eps_span <= 0:
@@ -1704,47 +2637,8 @@ class BaseOptimization(nn.Module):
         target_nm_per_pixel = 1.0
 
         ## Todo: first upsampling the full eps map using the nearest method, then replace design region part with the upsampling mask using the bilinear method
-        if isinstance(design_region_mask, np.ndarray):
-            if design_region_mask.shape != final_design_eps.shape:
-                raise ValueError(
-                    "design_region_mask shape mismatch: "
-                    f"{design_region_mask.shape} vs {final_design_eps.shape}"
-                )
-            design_region_mask_dense = design_region_mask.astype(np.float32)
-        elif hasattr(design_region_mask, "x") and hasattr(design_region_mask, "y"):
-            design_region_mask_dense = np.zeros_like(final_design_eps, dtype=np.float32)
-            design_region_mask_dense[design_region_mask.x, design_region_mask.y] = 1.0
-        elif isinstance(design_region_mask, tuple) and len(design_region_mask) == 2:
-            design_region_mask_dense = np.zeros_like(final_design_eps, dtype=np.float32)
-            design_region_mask_dense[design_region_mask[0], design_region_mask[1]] = 1.0
-        else:
-            raise TypeError(
-                f"Unsupported design_region_mask type: {type(design_region_mask)}"
-            )
-
-        design_region_mask = final_design_eps[design_region_mask]
-        print("design_region_mask shape: ", design_region_mask.shape)
-        # full_up_nearest = upsample_to_1nm(
-        #     final_design_eps,
-        #     nm_per_pixel,
-        #     target_nm_per_pixel,
-        #     method="nearest",
-        # )
-        # full_up_bilinear = upsample_to_1nm(
-        #     final_design_eps,
-        #     nm_per_pixel,
-        #     target_nm_per_pixel,
-        #     method="bilinear",
-        # )
-        # design_region_up = upsample_to_1nm(
-        #     design_region_mask_dense,
-        #     nm_per_pixel,
-        #     target_nm_per_pixel,
-        #     method="nearest",
-        # ) >= 0.5
-
         design_region_up = upsample_to_1nm(
-            design_region_mask,
+            design_region_eps,
             nm_per_pixel,
             target_nm_per_pixel,
             method="bilinear",
@@ -1756,12 +2650,9 @@ class BaseOptimization(nn.Module):
         PDK = get_generic_pdk()
         PDK.activate()
 
-        from data.experiment.mask_to_gds import mask_to_gds
+        from .layers.mask_to_gds import mask_to_gds
 
-        mask_u8 = cv2.rotate(
-            np.ascontiguousarray((mask >= 0.5).astype(np.uint8) * 255),
-            cv2.ROTATE_90_COUNTERCLOCKWISE,
-        )
+        mask_u8 = np.ascontiguousarray((mask.T >= 0.5).astype(np.uint8) * 255)
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
             mask_png_path = tmpdir_path / "eps_mask.png"
@@ -2295,12 +3186,68 @@ class BaseOptimization(nn.Module):
     def switch_solver(self, neural_solver, numerical_solver, use_autodiff=False):
         self.objective.switch_solver(neural_solver, numerical_solver, use_autodiff)
 
+    def configure_variation(self, config, materializer=None, source_context=None):
+        """Opt into reproducible robust evaluation without changing nominal APIs.
+
+        Args:
+            config: Variation settings; ``enabled=False`` preserves nominal
+                forward evaluation and checkpoint schema.
+            materializer: Optional callable taking the nominal build tuple and
+                named geometry deviations, returning a material tensor.
+            source_context: Optional context-manager factory for source changes.
+
+        Notes:
+            Enabled checkpoints include sampler state. Reconfigure the same
+            adapters/settings before loading such a checkpoint. Robust evaluation
+            supports first-order optical gradients; coupled thermal runs require
+            a specialized adapter.
+        """
+        from core.invdes.variation import RobustForward
+
+        previous = getattr(self, "_variation_hook_handles", ())
+        for handle in previous:
+            handle.remove()
+        self._variation_hook_handles = []
+        self.variation = RobustForward(config, materializer, source_context)
+        if not self.variation.sampler.enabled:
+            return
+
+        def save_sampler(module, state, prefix, metadata):
+            state[prefix + "_variation_state"] = module.variation.state_dict()
+
+        def load_sampler(
+            module, state, prefix, metadata, strict, missing, unexpected, errors
+        ):
+            key = prefix + "_variation_state"
+            if key in state:
+                module.variation.load_state_dict(state.pop(key))
+
+        self._variation_hook_handles = [
+            self.register_state_dict_post_hook(save_sampler),
+            self.register_load_state_dict_pre_hook(load_sampler),
+        ]
+
     def forward(
         self,
         sharpness: float = 1,
         ls_knots: dict = None,
         custom_source: dict = None,
     ):
+        """Evaluate the nominal or explicitly enabled robust optical objective.
+
+        Args:
+            sharpness: Design-projection sharpness passed to parameterization.
+            ls_knots: Optional per-region level-set arguments.
+            custom_source: Optional existing source override dictionary.
+
+        Returns:
+            Dictionary containing scalar maximization ``obj``, objective
+            ``breakdown``, design-region tensors, and ``eps_map``. Robust mode
+            also includes detached scenario diagnostics; exported maps stay nominal.
+        """
+        variation = getattr(self, "variation", None)
+        if variation is not None and variation.sampler.enabled:
+            return variation.forward(self, sharpness, ls_knots, custom_source)
         # eps_map, design_region_eps_dict = self.build_device(sharpness)
         self.current_sharpness = sharpness
         (

@@ -4,7 +4,15 @@ from .base_optimization import BaseOptimization, DefaultOptimizationConfig
 
 
 class DefaultConfig(DefaultOptimizationConfig):
+    """Default configuration for the Bending inverse-design model.
+
+    The configuration defines the default FDFD solver settings and objective
+    terms used by :class:`BendingOptimization`, including forward eigenmode
+    transmission, reflection, radiation, and optional S-matrix metrics.
+    """
+
     def __init__(self):
+        """Initialize the default simulation, parameterization, and objective configuration."""
         super().__init__()
         self.update(
             dict(
@@ -141,6 +149,30 @@ class DefaultConfig(DefaultOptimizationConfig):
 
 
 class BendingOptimization(BaseOptimization):
+    """Inverse-design optimization model for a Bending device.
+
+    Args:
+        device: Simulation-resolution device containing geometry, grids, ports,
+            monitors, and design-region definitions.
+        hr_device: Higher-resolution device used by the design parameterization
+            and fabrication-oriented transforms.
+        design_region_param_cfgs: Mapping from design-region names to
+            parameterization configuration. If empty, a default level-set
+            configuration is generated for each device design region.
+        sim_cfg: Overrides for the default simulation configuration.
+        obj_cfgs: Overrides for the default objective configuration. The
+            special ``override`` key clears the default objective mapping before
+            applying the supplied entries.
+        operation_device: PyTorch device on which optimization tensors are held.
+
+    Notes:
+        The generated default parameterization uses a ``[50, 50]`` level-set
+        variable grid, transpose symmetry, Gaussian/linear interpolation,
+        ``mfs=0.08`` blur in ``xy``, and binary projection. The high-resolution
+        design device and the simulation-resolution device may have different
+        raster resolutions.
+    """
+
     def __init__(
         self,
         device,

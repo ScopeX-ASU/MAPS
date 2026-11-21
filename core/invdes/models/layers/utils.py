@@ -1,3 +1,4 @@
+import copy
 import math
 import os
 from typing import Callable, List, Tuple
@@ -5,6 +6,7 @@ from typing import Callable, List, Tuple
 import matplotlib
 
 matplotlib.use("Agg")  # Set non-interactive backend
+matplotlib.rcParams["text.usetex"] = False
 import matplotlib.patches as patches
 import matplotlib.pylab as plt
 import numpy as np
@@ -43,11 +45,396 @@ __all__ = [
     "InsensitivePeriodLayer",
     "poynting_vector",
     "plot_eps_field",
+    "plot_monitor_fields",
     "get_eigenmode_coefficients",
     "insert_mode",
     "get_temp_related_eps",
     "modulation_fn_dict",
+    "apply_line_edge_roughness",
+    "sample_correlated_roughness",
 ]
+
+
+def plot_monitor_fields(
+    fields: dict,
+    *,
+    filepath: str,
+    title: str,
+    components=("Ex", "Ey", "Ez"),
+    quantities=("intensity", "amplitude", "phase"),
+    phase_reference: str | None = None,
+):
+    """Plot complex vector fields sampled on a planar monitor.
+
+    Args:
+        fields: Mapping containing complex component arrays. Supported component
+            keys are ``Ex``, ``Ey``, ``Ez``, ``Hx``, ``Hy``, and ``Hz``.
+            Optional ``positions_m`` supplies physical planar coordinates, and
+            ``spacing_um`` supplies a uniform two-axis sampling pitch and
+            ``plane_axes`` names those axes, for example ``("x", "y")``.
+        filepath: Output PNG path.
+        title: Figure title.
+        components: Ordered plot rows. A single component may be passed as a
+            string. ``"E"`` and ``"H"`` request aggregate vector rows.
+        quantities: Any of ``intensity``, ``amplitude``, ``real``, and ``phase``.
+            Intensity and component magnitudes retain their raw values.
+        phase_reference: Optional Cartesian component used for a vector-row
+            phase or real-value panel. By default, the available component with
+            the largest integrated intensity is used.
+
+    Returns:
+        Absolute or relative path written to ``filepath``.
+
+    Raises:
+        ValueError: If fields cannot be represented as a planar two-dimensional
+            monitor or an unsupported quantity is requested.
+
+    Notes:
+        A vector field has no unique scalar phase. Therefore ``phase(E)`` and
+        ``phase(H)`` use the documented ``phase_reference`` convention.
+        Diagnostic tensors are expected to be detached by their owning
+        objective before this function is called.
+    """
+
+    def _numpy(value):
+        if isinstance(value, torch.Tensor):
+            return value.detach().cpu().numpy()
+        return np.asarray(value)
+
+    component_data = {
+        name: np.squeeze(_numpy(fields[name]))
+        for name in ("Ex", "Ey", "Ez", "Hx", "Hy", "Hz")
+        if fields.get(name) is not None
+    }
+    if not component_data:
+        raise ValueError("Monitor plot requires at least one vector-field component")
+
+    if isinstance(components, str):
+        components = (components,)
+    else:
+        components = tuple(components)
+    component_groups = {
+        "E": ("Ex", "Ey", "Ez"),
+        "H": ("Hx", "Hy", "Hz"),
+    }
+    if isinstance(quantities, str):
+        quantities = (quantities,)
+
+    reference = next(iter(component_data.values()))
+    positions = fields.get("positions_m")
+    axis_labels = ("axis 0", "axis 1")
+    extent = None
+    if reference.ndim == 1 and positions is not None:
+        positions_np = _numpy(positions)
+        if positions_np.shape != (reference.size, 3):
+            raise ValueError(
+                "Flattened monitor positions must have shape (samples, 3), got "
+                f"{positions_np.shape}"
+            )
+        spans = np.ptp(positions_np, axis=0)
+        varying = np.flatnonzero(spans > max(float(spans.max()), 1.0) * 1e-9)
+        if varying.size != 2:
+            raise ValueError(
+                "Flattened monitor plotting requires one planar surface; "
+                f"found {varying.size} varying coordinate axes"
+            )
+        coords = [np.unique(positions_np[:, axis]) for axis in varying]
+        if coords[0].size * coords[1].size != reference.size:
+            raise ValueError("Monitor samples do not form a complete Cartesian plane")
+        order = np.lexsort((positions_np[:, varying[1]], positions_np[:, varying[0]]))
+        shape = (coords[0].size, coords[1].size)
+        component_data = {
+            name: values[order].reshape(shape)
+            for name, values in component_data.items()
+        }
+        reference = next(iter(component_data.values()))
+        axis_labels = tuple(f"{'xyz'[axis]} (um)" for axis in varying)
+        extent = (
+            float(coords[0][0] * 1e6),
+            float(coords[0][-1] * 1e6),
+            float(coords[1][0] * 1e6),
+            float(coords[1][-1] * 1e6),
+        )
+    elif reference.ndim != 2:
+        raise ValueError(
+            f"Monitor components must be planar 2-D arrays, got {reference.shape}"
+        )
+    elif positions is not None:
+        positions_np = _numpy(positions)
+        if positions_np.shape == reference.shape + (3,):
+            spans = np.ptp(positions_np.reshape(-1, 3), axis=0)
+            varying = np.flatnonzero(spans > max(float(spans.max()), 1.0) * 1e-9)
+            if varying.size == 2:
+                axis_labels = tuple(f"{'xyz'[axis]} (um)" for axis in varying)
+                extent = (
+                    float(positions_np[..., varying[0]].min() * 1e6),
+                    float(positions_np[..., varying[0]].max() * 1e6),
+                    float(positions_np[..., varying[1]].min() * 1e6),
+                    float(positions_np[..., varying[1]].max() * 1e6),
+                )
+    elif fields.get("spacing_um") is not None:
+        spacing = tuple(float(value) for value in fields["spacing_um"])
+        if len(spacing) != 2:
+            raise ValueError("spacing_um must contain two transverse spacings")
+        extent = (
+            -0.5 * reference.shape[0] * spacing[0],
+            0.5 * reference.shape[0] * spacing[0],
+            -0.5 * reference.shape[1] * spacing[1],
+            0.5 * reference.shape[1] * spacing[1],
+        )
+        plane_axes = fields.get("plane_axes", ("u", "v"))
+        if isinstance(plane_axes, str) or len(plane_axes) != 2:
+            raise ValueError("plane_axes must contain two coordinate names")
+        axis_labels = tuple(f"{axis} (um)" for axis in plane_axes)
+
+    requested_quantities = tuple(str(value).lower() for value in quantities)
+    unsupported = set(requested_quantities) - {
+        "intensity",
+        "amplitude",
+        "real",
+        "phase",
+    }
+    if unsupported:
+        raise ValueError(f"Unsupported monitor plot quantities: {sorted(unsupported)}")
+
+    panels = []
+    for component in components:
+        family = [
+            name
+            for name in component_groups.get(component, (component,))
+            if name in component_data
+        ]
+        if not family:
+            continue
+        is_vector = component in component_groups
+        intensity = sum(np.abs(component_data[name]) ** 2 for name in family)
+        if is_vector:
+            if phase_reference is not None:
+                if phase_reference not in family:
+                    raise ValueError(
+                        f"phase_reference {phase_reference!r} is unavailable for "
+                        f"the {component} vector row; available: {family}"
+                    )
+                reference_name = phase_reference
+            else:
+                reference_name = max(
+                    family,
+                    key=lambda name: float(np.sum(np.abs(component_data[name]) ** 2)),
+                )
+        else:
+            reference_name = component
+        reference_values = component_data[reference_name]
+
+        for quantity in requested_quantities:
+            if quantity == "intensity":
+                panels.append((intensity, f"|{component}|² (raw)", "magma", None, None))
+            elif quantity == "amplitude":
+                panels.append(
+                    (np.sqrt(intensity), f"|{component}|", "magma", None, None)
+                )
+            elif quantity == "real":
+                real_values = np.real(reference_values)
+                limit = float(np.max(np.abs(real_values)))
+                limit = 1.0 if np.isclose(limit, 0.0) else limit
+                label = f"Re({component})"
+                if is_vector:
+                    label += f" [{reference_name} ref]"
+                panels.append((real_values, label, "RdBu_r", -limit, limit))
+            elif quantity == "phase":
+                label = f"phase({component})"
+                if is_vector:
+                    label += f" [{reference_name} ref]"
+                panels.append(
+                    (
+                        np.angle(reference_values),
+                        label,
+                        "twilight",
+                        -np.pi,
+                        np.pi,
+                    )
+                )
+    if not panels:
+        raise ValueError(
+            "Requested monitor components and quantities produced no panels"
+        )
+
+    ncols = min(len(requested_quantities), len(panels))
+    nrows = int(math.ceil(len(panels) / ncols))
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(4.0 * ncols, 3.5 * nrows),
+        constrained_layout=True,
+        squeeze=False,
+    )
+    for axis, (values, panel_label, cmap, vmin, vmax) in zip(axes.flat, panels):
+        image = axis.imshow(
+            np.asarray(values).T,
+            origin="lower",
+            extent=extent,
+            interpolation="nearest",
+            aspect="equal",
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
+        )
+        axis.set_title(panel_label)
+        axis.set_xlabel(axis_labels[0])
+        axis.set_ylabel(axis_labels[1])
+        colorbar = fig.colorbar(image, ax=axis, fraction=0.046, pad=0.04)
+        if not panel_label.startswith("phase("):
+            formatter = matplotlib.ticker.ScalarFormatter(
+                useMathText=True,
+                useOffset=False,
+            )
+            formatter.set_powerlimits((-3, 4))
+            colorbar.formatter = formatter
+            colorbar.update_ticks()
+    for axis in axes.flat[len(panels) :]:
+        axis.set_visible(False)
+    fig.suptitle(title)
+    output_dir = os.path.dirname(filepath)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    fig.savefig(filepath, dpi=180)
+    plt.close(fig)
+    return filepath
+
+
+def sample_correlated_roughness(
+    distances: np.ndarray,
+    amplitude: float,
+    correlation_length: float,
+    seed: int | None = None,
+) -> np.ndarray:
+    """Sample a Gaussian line process with K(r)=A^2 exp(-2 r^2/Lc^2)."""
+    distances = np.asarray(distances, dtype=float)
+    if distances.ndim != 1 or distances.size == 0:
+        raise ValueError("distances must be a non-empty one-dimensional array")
+    if amplitude < 0 or correlation_length <= 0:
+        raise ValueError(
+            "amplitude must be non-negative and correlation_length positive"
+        )
+
+    separation = distances[:, None] - distances[None, :]
+    covariance = amplitude**2 * np.exp(-2.0 * separation**2 / correlation_length**2)
+    covariance.flat[:: distances.size + 1] += max(amplitude**2, 1.0) * 1e-12
+    rng = np.random.default_rng(seed)
+    return np.linalg.cholesky(covariance) @ rng.standard_normal(distances.size)
+
+
+def _roughness_config(cfg: dict) -> dict | None:
+    roughness = cfg.get("roughness")
+    if roughness is None or roughness is False:
+        return None
+    if roughness is True:
+        raise ValueError("roughness must contain amplitude and correlation_length")
+    if not isinstance(roughness, dict):
+        raise TypeError("roughness must be a mapping or None")
+    return roughness
+
+
+def _line_roughness_samples(lengths, roughness, seed_offset=0):
+    amplitude = float(roughness["amplitude"])
+    correlation_length = float(roughness["correlation_length"])
+    seed = roughness.get("seed")
+    seed = None if seed is None else int(seed) + seed_offset
+    return sample_correlated_roughness(
+        np.asarray(lengths), amplitude, correlation_length, seed
+    )
+
+
+def apply_line_edge_roughness(cfg: dict) -> dict:
+    """Convert supported line-edge roughness configs into prism geometry."""
+    roughness = _roughness_config(cfg)
+    if roughness is None:
+        return cfg
+    if float(roughness.get("amplitude", 0.0)) == 0.0:
+        return cfg
+
+    geometry_type = cfg["type"]
+    samples = int(roughness.get("num_samples", cfg.get("num_samples", 100)))
+    if samples < 3:
+        raise ValueError("roughness num_samples must be at least 3")
+
+    if geometry_type == "box":
+        center = np.asarray(cfg["center"], dtype=float)
+        size = np.asarray(cfg["size"], dtype=float)
+        direction = cfg.get("direction", "x").lower()[0]
+        if direction not in ("x", "y"):
+            raise ValueError("roughness for box geometry requires x or y direction")
+        axis = 0 if direction == "x" else 1
+        transverse = 1 - axis
+        longitudinal = np.linspace(
+            center[axis] - size[axis] / 2,
+            center[axis] + size[axis] / 2,
+            samples,
+        )
+        edge_distance = longitudinal - longitudinal[0]
+        lower = _line_roughness_samples(edge_distance, roughness, 0)
+        upper = _line_roughness_samples(edge_distance, roughness, 1)
+        lower_coord = center[transverse] - size[transverse] / 2 + lower
+        upper_coord = center[transverse] + size[transverse] / 2 + upper
+        if direction == "x":
+            vertices = [[x, y] for x, y in zip(longitudinal, lower_coord)]
+            vertices += [[x, y] for x, y in zip(longitudinal[::-1], upper_coord[::-1])]
+        else:
+            vertices = [[x, y] for y, x in zip(longitudinal, lower_coord)]
+            vertices += [[x, y] for y, x in zip(longitudinal[::-1], upper_coord[::-1])]
+        result = copy.deepcopy(cfg)
+        result.update(type="prism", vertices=vertices)
+        result.pop("roughness", None)
+        if len(size) >= 3:
+            z_center = center[2]
+            result["slab_bounds"] = (
+                z_center - size[2] / 2,
+                z_center + size[2] / 2,
+            )
+        return result
+
+    if geometry_type != "sine_bend":
+        raise ValueError(f"Line-edge roughness is not supported for {geometry_type!r}")
+
+    start = np.asarray(cfg["start"], dtype=float)
+    end = np.asarray(cfg["end"], dtype=float)
+    direction = cfg.get("direction", "x").lower()
+    if direction not in ("x", "y"):
+        raise ValueError("roughness for sine_bend requires direction x or y")
+    parameter = np.linspace(0.0, 1.0, samples)
+    delta = end - start
+    smooth = parameter - np.sin(2 * np.pi * parameter) / (2 * np.pi)
+    if direction == "x":
+        centerline = np.column_stack(
+            (start[0] + parameter * delta[0], start[1] + smooth * delta[1])
+        )
+    else:
+        centerline = np.column_stack(
+            (start[0] + smooth * delta[0], start[1] + parameter * delta[1])
+        )
+    tangent = np.gradient(centerline, axis=0)
+    tangent /= np.linalg.norm(tangent, axis=1, keepdims=True)
+    normal = np.column_stack((-tangent[:, 1], tangent[:, 0]))
+    arc_length = np.concatenate(
+        [[0.0], np.cumsum(np.linalg.norm(np.diff(centerline, axis=0), axis=1))]
+    )
+    lower = _line_roughness_samples(arc_length, roughness, 0)
+    upper = _line_roughness_samples(arc_length, roughness, 1)
+    half_width = float(cfg["width"]) / 2
+    lower_edge = centerline + normal * (-half_width + lower[:, None])
+    upper_edge = centerline + normal * (half_width + upper[:, None])
+    result = copy.deepcopy(cfg)
+    result.update(
+        type="prism", vertices=lower_edge.tolist() + upper_edge[::-1].tolist()
+    )
+    result.pop("roughness", None)
+    if "slab_bounds" not in result and len(start) >= 3:
+        z_center = start[2]
+        thickness = float(cfg.get("height", 0.0))
+        result["slab_bounds"] = (
+            z_center - thickness / 2,
+            z_center + thickness / 2,
+        )
+    return result
 
 
 def get_temp_related_eps(
@@ -678,6 +1065,15 @@ def slice3d_to_indices(slice_obj, torch_tensor: bool = False):
     return xs, ys, zs
 
 
+def _symmetric_percentile_limit(values, percentile: float = 99.95) -> float:
+    values = np.asarray(values)
+    finite_abs = np.abs(values[np.isfinite(values)])
+    if finite_abs.size == 0:
+        return 1.0
+    limit = float(np.percentile(finite_abs, percentile))
+    return 1.0 if np.isclose(limit, 0.0) else limit
+
+
 def plot_eps_field(
     field,
     component: str,
@@ -692,6 +1088,7 @@ def plot_eps_field(
     param_x_width=None,
     param_y_height=None,
     param_name: str = "param",
+    edgebox_grad=None,
     monitors=[],
     filepath=None,
     zoom_eps_factor=1,
@@ -766,9 +1163,28 @@ def plot_eps_field(
         show_delta_eps = bool(show_delta_eps) and base_eps_arr is not None
 
     field_stat = field_stat.lower().split("_")
+    edgebox_edges = (
+        edgebox_grad.get("edge_knots", []) if isinstance(edgebox_grad, dict) else []
+    )
+    polygon_vertices = (
+        edgebox_grad.get("polygon_vertices") if isinstance(edgebox_grad, dict) else None
+    )
+    polygon_grad = (
+        edgebox_grad.get("polygon_grad") if isinstance(edgebox_grad, dict) else None
+    )
+    if polygon_vertices is not None:
+        polygon_vertices = np.asarray(polygon_vertices, dtype=float)
+        polygon_grad = np.asarray(polygon_grad, dtype=float)
+        if polygon_vertices.shape != polygon_grad.shape or polygon_vertices.ndim != 2:
+            raise ValueError(
+                "polygon_vertices and polygon_grad must both have shape [n_vertices, 2]"
+            )
     n_rows = len(field_stat) + 1 + int(eps_grad_arr is not None)
     n_rows += int(thermal_map_arr is not None)
     n_rows += int(show_delta_eps)
+    n_rows += len(edgebox_edges)
+    polygon_row_span = 2 if polygon_vertices is not None else 0
+    n_rows += int(polygon_vertices is not None)
 
     def _positive_float(name, value):
         value = float(value)
@@ -809,10 +1225,7 @@ def plot_eps_field(
             thermal_lim = 1.0
 
     if eps_grad_arr is not None:
-        grad_min, grad_max = _finite_minmax(np.real(eps_grad_arr))
-        grad_lim = max(abs(grad_min), abs(grad_max))
-        if np.isclose(grad_lim, 0.0):
-            grad_lim = 1.0
+        grad_lim = _symmetric_percentile_limit(np.real(eps_grad_arr))
 
     param_grad_arr = None
     if param_grad is not None:
@@ -890,6 +1303,63 @@ def plot_eps_field(
             panel_h / fig_h,
         ]
         return fig.add_axes(ax_rect), fig.add_axes(cax_rect)
+
+    def _add_edgebox_axes(row):
+        y_band0 = fig_h - top_margin - (row + 1) * row_band_h - row * row_gap
+        y0 = y_band0 + 0.5 * (row_band_h - panel_h)
+        content_width = fig_w - left_margin - right_margin
+        axis_gap = 0.55
+        axis_width = (content_width - 2 * axis_gap) / 3
+        axes = []
+        for col in range(3):
+            x0 = left_margin + col * (axis_width + axis_gap)
+            axes.append(
+                fig.add_axes(
+                    [
+                        x0 / fig_w,
+                        y0 / fig_h,
+                        axis_width / fig_w,
+                        panel_h / fig_h,
+                    ]
+                )
+            )
+        return axes
+
+    def _add_polygon_axes(row):
+        y_band0 = (
+            fig_h - top_margin - (row + polygon_row_span) * row_band_h - row * row_gap
+        )
+        content_width = fig_w - left_margin - right_margin
+        axis_gap = 1.25
+        axis_height = row_band_h - 0.5 * axis_gap
+        cbar_gap = 0.10
+        cbar_width = 0.14
+        axis_width = content_width - cbar_gap - cbar_width
+        axes = []
+        cb_axes = []
+        for row_offset in range(2):
+            y0 = y_band0 + (1 - row_offset) * (axis_height + axis_gap)
+            axes.append(
+                fig.add_axes(
+                    [
+                        left_margin / fig_w,
+                        y0 / fig_h,
+                        axis_width / fig_w,
+                        axis_height / fig_h,
+                    ]
+                )
+            )
+            cb_axes.append(
+                fig.add_axes(
+                    [
+                        (left_margin + axis_width + cbar_gap) / fig_w,
+                        y0 / fig_h,
+                        cbar_width / fig_w,
+                        axis_height / fig_h,
+                    ]
+                )
+            )
+        return axes, cb_axes
 
     def _imshow_phys(axis, data_2d, extent, **kwargs):
         im = axis.imshow(
@@ -1058,6 +1528,8 @@ def plot_eps_field(
             if not isinstance(m, (tuple, list)) or len(m) < 2:
                 continue
             obj, color = m[0], m[1]
+            if isinstance(obj, (tuple, list)) and len(obj) == 2:
+                obj = Slice(x=obj[0], y=obj[1])
             if isinstance(obj, Slice):
                 if isinstance(obj.x, int):
                     ys = _insert_nan_gaps(np.arange(obj.y.start, obj.y.stop))
@@ -1318,7 +1790,7 @@ def plot_eps_field(
                 draw_monitors=False,
             )
         )
-    if param_grad_arr is not None:
+    if param_grad_arr is not None and polygon_vertices is None:
         row_specs.append(
             dict(
                 title=r"$dL/d$" + param_name,
@@ -1337,9 +1809,63 @@ def plot_eps_field(
                 draw_monitors=False,
             )
         )
+    if polygon_vertices is not None:
+        polygon_grad_lim = np.max(np.abs(polygon_grad))
+        if not np.isfinite(polygon_grad_lim) or np.isclose(polygon_grad_lim, 0.0):
+            polygon_grad_lim = 1.0
+        row_specs.append(
+            dict(
+                title="polygon_vertex_grad",
+                kind="polygon_vertex_grad",
+                cmap="RdBu_r",
+                vmin=-polygon_grad_lim,
+                vmax=polygon_grad_lim,
+                extent=eps_extent,
+                overlay_eps=False,
+                draw_npml=False,
+                draw_monitors=False,
+            )
+        )
 
     axes = []
     for i, spec in enumerate(row_specs):
+        if spec["kind"] == "polygon_vertex_grad":
+            polygon_axes, polygon_caxes = _add_polygon_axes(i)
+            for axis, cax, component, panel_title in zip(
+                polygon_axes,
+                polygon_caxes,
+                (0, 1),
+                (r"$dL/dx$", r"$dL/dy$"),
+            ):
+                values = polygon_grad[:, component]
+                scatter = axis.scatter(
+                    polygon_vertices[:, 0],
+                    polygon_vertices[:, 1],
+                    c=values,
+                    cmap=spec["cmap"],
+                    vmin=spec["vmin"],
+                    vmax=spec["vmax"],
+                    s=2,
+                    edgecolors="black",
+                    linewidths=0.1,
+                    zorder=3,
+                )
+                axis.plot(
+                    polygon_vertices[:, 0],
+                    polygon_vertices[:, 1],
+                    color="0.45",
+                    linewidth=0.7,
+                    alpha=0.75,
+                    zorder=1,
+                )
+                axis.set_title(panel_title, fontsize=panel_title_fs)
+                axis.set_xlim(spec["extent"][0], spec["extent"][1])
+                axis.set_ylim(spec["extent"][2], spec["extent"][3])
+                axis.set_aspect("equal", adjustable="box")
+                _format_axis(axis, "x (um)", "y (um)")
+                _add_colorbar(scatter, cax)
+            axes.extend(polygon_axes)
+            continue
         ax_i, cax_i = _add_axes(i)
         if spec["kind"] == "abs":
             img_data = np.abs(field)
@@ -1394,6 +1920,41 @@ def plot_eps_field(
         _add_colorbar(im, cax_i)
         axes.append(ax_i)
 
+    for edge_row, edge in enumerate(edgebox_edges):
+        edge_axes = _add_edgebox_axes(len(row_specs) + polygon_row_span - 1 + edge_row)
+        knot_index = np.arange(len(edge["raw"]))
+        raw = np.asarray(edge["raw"])
+        physical = np.asarray(edge["physical"])
+        gradient = edge.get("grad")
+        gradient = None if gradient is None else np.asarray(gradient)
+        edge_title = edge.get("side", f"edge {edge_row}")
+
+        edge_axes[0].plot(knot_index, raw, "o-", color="tab:blue")
+        edge_axes[0].set_title(f"{edge_title}: raw knots", fontsize=panel_title_fs)
+        edge_axes[0].set_ylabel("raw control", fontsize=label_fs)
+        edge_axes[1].plot(knot_index, physical, "o-", color="tab:green")
+        edge_axes[1].set_title(
+            f"{edge_title}: physical offset", fontsize=panel_title_fs
+        )
+        edge_axes[1].set_ylabel("offset [um]", fontsize=label_fs)
+        if gradient is None:
+            edge_axes[2].text(
+                0.5,
+                0.5,
+                "gradient unavailable",
+                ha="center",
+                va="center",
+                transform=edge_axes[2].transAxes,
+            )
+        else:
+            edge_axes[2].bar(knot_index, gradient, color="tab:red")
+        edge_axes[2].set_title(f"{edge_title}: knot gradient", fontsize=panel_title_fs)
+        edge_axes[2].set_ylabel("d objective / d raw", fontsize=label_fs)
+        for axis in edge_axes:
+            axis.set_xlabel("knot index", fontsize=label_fs)
+            axis.tick_params(axis="both", labelsize=tick_fs)
+            axis.grid(True, alpha=0.25)
+
     if title is not None:
         fig.suptitle(title, fontsize=suptitle_fs, y=1.0 - 0.10 / fig_h)
 
@@ -1425,6 +1986,7 @@ def plot_eps_field_3d(
     param_x_width=None,
     param_y_height=None,
     param_name: str = "param",
+    edgebox_grad=None,
     monitors=[],
     filepath=None,
     center=None,
@@ -1439,6 +2001,8 @@ def plot_eps_field_3d(
     x_shift_coord: int = 0,
     x_shift_idx: int = 0,
     if_gif: bool = False,
+    precomputed_planes: list[dict] | None = None,
+    grid_shape: tuple[int, int, int] | None = None,
 ):
     """
     Plot 3D field and epsilon.
@@ -1468,6 +2032,16 @@ def plot_eps_field_3d(
         the three orthogonal slice planes. If omitted, the plot keeps the
         existing middle-plane behavior.
 
+    precomputed_planes:
+        Optional CPU/Torch plane dictionaries ordered as `xy`, `xz`, and `yz`.
+        Each dictionary contains `field`, `total_field_abs`, `eps`, and
+        `fixed_idx`, plus optional plot-map planes. When provided, full 3-D
+        `field` and `eps` inputs are not required.
+
+    grid_shape:
+        Full export-grid `(nx, ny, nz)` shape used for monitor coordinates when
+        `precomputed_planes` is provided.
+
     Layout:
         row 0: total vector field magnitude, e.g. |E| or |H|
         row 1: real(component), e.g. Re(Ez)
@@ -1495,89 +2069,87 @@ def plot_eps_field_3d(
     # ------------------------------------------------------------------
     # Input normalization
     # ------------------------------------------------------------------
-    fx, fy, fz = (
-        field[f"{component[0]}x"].data,
-        field[f"{component[0]}y"].data,
-        field[f"{component[0]}z"].data,
-    )
+    def _as_numpy(value):
+        if value is None:
+            return None
+        if torch is not None and isinstance(value, torch.Tensor):
+            return value.detach().cpu().numpy()
+        return np.asarray(value)
 
-    field = field[component].data
-    total_field_abs = (fx.abs() ** 2 + fy.abs() ** 2 + fz.abs() ** 2).sqrt()
-
-    if torch is not None and isinstance(field, torch.Tensor):
-        field = field.detach().cpu().numpy()
-        total_field_abs = total_field_abs.detach().cpu().numpy()
-    else:
-        field = np.asarray(field)
-        total_field_abs = np.asarray(total_field_abs)
-
-    eps_grad_arr = None
-    if isinstance(eps_grad, bool):
-        if (
-            eps_grad
-            and torch is not None
-            and isinstance(eps, torch.Tensor)
-            and eps.grad is not None
-        ):
-            eps_grad_arr = eps.grad.detach().cpu().numpy()
-    elif eps_grad is not None:
-        eps_grad_arr = (
-            eps_grad.detach().cpu().numpy()
-            if torch is not None and isinstance(eps_grad, torch.Tensor)
-            else np.asarray(eps_grad)
-        )
-
-    if torch is not None and isinstance(eps, torch.Tensor):
-        eps = eps.detach().cpu().numpy()
-    else:
-        eps = np.asarray(eps)
-    base_eps_arr = None
-    if base_eps is not None:
-        base_eps_arr = (
-            base_eps.detach().cpu().numpy()
-            if torch is not None and isinstance(base_eps, torch.Tensor)
-            else np.asarray(base_eps)
-        )
-    if thermal_map is not None:
-        thermal_map_arr = (
-            thermal_map.detach().cpu().numpy()
-            if torch is not None and isinstance(thermal_map, torch.Tensor)
-            else np.asarray(thermal_map)
-        )
-    else:
+    using_precomputed_planes = precomputed_planes is not None
+    if using_precomputed_planes:
+        if grid_shape is None or len(grid_shape) != 3:
+            raise ValueError(
+                "grid_shape with three entries is required for precomputed planes."
+            )
+        if len(precomputed_planes) != 3:
+            raise ValueError(
+                "precomputed_planes must contain the xy, xz, and yz planes."
+            )
+        nx, ny, nz = (int(size) for size in grid_shape)
+        field = None
+        total_field_abs = None
+        eps = None
+        base_eps_arr = None
+        eps_grad_arr = None
         thermal_map_arr = None
-    if heat_source_map is not None:
-        heat_source_map_arr = (
-            heat_source_map.detach().cpu().numpy()
-            if torch is not None and isinstance(heat_source_map, torch.Tensor)
-            else np.asarray(heat_source_map)
-        )
-    else:
         heat_source_map_arr = None
+    else:
+        fx, fy, fz = (
+            field[f"{component[0]}x"].data,
+            field[f"{component[0]}y"].data,
+            field[f"{component[0]}z"].data,
+        )
+        field = field[component].data
+        total_field_abs = (fx.abs() ** 2 + fy.abs() ** 2 + fz.abs() ** 2).sqrt()
+        field = _as_numpy(field)
+        total_field_abs = _as_numpy(total_field_abs)
 
-    if field.ndim != 3:
-        raise ValueError(
-            f"Expected field to be 3D [nx, ny, nz], got shape {field.shape}"
-        )
-    if eps.ndim != 3:
-        raise ValueError(f"Expected eps to be 3D [nx, ny, nz], got shape {eps.shape}")
-    if base_eps_arr is not None and base_eps_arr.shape != eps.shape:
-        raise ValueError(
-            f"base_eps must have the same shape as eps, got {base_eps_arr.shape} and {eps.shape}"
-        )
-    if field.shape != eps.shape:
-        raise ValueError(
-            f"field and eps must have the same shape, got {field.shape} and {eps.shape}"
-        )
-    if eps_grad_arr is not None and eps_grad_arr.shape != eps.shape:
-        raise ValueError(
-            f"eps_grad must have the same shape as eps, got {eps_grad_arr.shape} and {eps.shape}"
-        )
-    if total_field_abs.shape != field.shape:
-        raise ValueError(
-            f"total_field_abs and field must have the same shape, "
-            f"got {total_field_abs.shape} and {field.shape}"
-        )
+        eps_grad_arr = None
+        if isinstance(eps_grad, bool):
+            if (
+                eps_grad
+                and torch is not None
+                and isinstance(eps, torch.Tensor)
+                and eps.grad is not None
+            ):
+                eps_grad_arr = eps.grad.detach().cpu().numpy()
+        elif eps_grad is not None:
+            eps_grad_arr = _as_numpy(eps_grad)
+
+        eps = _as_numpy(eps)
+        base_eps_arr = _as_numpy(base_eps)
+        thermal_map_arr = _as_numpy(thermal_map)
+        heat_source_map_arr = _as_numpy(heat_source_map)
+
+        if field.ndim != 3:
+            raise ValueError(
+                f"Expected field to be 3D [nx, ny, nz], got shape {field.shape}"
+            )
+        if eps.ndim != 3:
+            raise ValueError(
+                f"Expected eps to be 3D [nx, ny, nz], got shape {eps.shape}"
+            )
+        if base_eps_arr is not None and base_eps_arr.shape != eps.shape:
+            raise ValueError(
+                "base_eps must have the same shape as eps, got "
+                f"{base_eps_arr.shape} and {eps.shape}"
+            )
+        if field.shape != eps.shape:
+            raise ValueError(
+                f"field and eps must have the same shape, got {field.shape} and {eps.shape}"
+            )
+        if eps_grad_arr is not None and eps_grad_arr.shape != eps.shape:
+            raise ValueError(
+                "eps_grad must have the same shape as eps, got "
+                f"{eps_grad_arr.shape} and {eps.shape}"
+            )
+        if total_field_abs.shape != field.shape:
+            raise ValueError(
+                f"total_field_abs and field must have the same shape, "
+                f"got {total_field_abs.shape} and {field.shape}"
+            )
+        nx, ny, nz = field.shape
     if len(NPML) != 3:
         raise ValueError("For 3D plotting, NPML must be [NPML_x, NPML_y, NPML_z]")
 
@@ -1596,7 +2168,6 @@ def plot_eps_field_3d(
         if outdir:
             os.makedirs(outdir, exist_ok=True)
 
-    nx, ny, nz = field.shape
     NPML_x, NPML_y, NPML_z = [int(v) for v in NPML]
 
     dim_sizes = {
@@ -1618,7 +2189,11 @@ def plot_eps_field_3d(
             return 0.0
         return (float(idx) / (n - 1) - 0.5) * L
 
-    if center is None:
+    if using_precomputed_planes:
+        x_mid = int(precomputed_planes[2]["fixed_idx"])
+        y_mid = int(precomputed_planes[1]["fixed_idx"])
+        z_mid = int(precomputed_planes[0]["fixed_idx"])
+    elif center is None:
         x_mid = nx // 2
         y_mid = ny // 2
         z_mid = nz // 2
@@ -1637,21 +2212,9 @@ def plot_eps_field_3d(
             (nx, ny, nz),
         ).tolist()
 
-    planes = [
+    plane_metadata = [
         {
             "name": f"x-y, z={_slice_coord_um(z_mid, 2):.3f}" + r"$\mu m$",
-            "field": field[:, :, z_mid],
-            "total_field_abs": total_field_abs[:, :, z_mid],
-            "eps": eps[:, :, z_mid],
-            "eps_grad": None if eps_grad_arr is None else eps_grad_arr[:, :, z_mid],
-            "thermal": (
-                None if thermal_map_arr is None else thermal_map_arr[:, :, z_mid]
-            ),
-            "heat_source": (
-                None
-                if heat_source_map_arr is None
-                else heat_source_map_arr[:, :, z_mid]
-            ),
             "xlabel": r"$x$ width ($\mu m$)",
             "ylabel": r"$y$ height ($\mu m$)",
             "x_phys": x_width,
@@ -1664,18 +2227,6 @@ def plot_eps_field_3d(
         },
         {
             "name": f"x-z, y={_slice_coord_um(y_mid, 1):.3f}" + r"$\mu m$",
-            "field": field[:, y_mid, :],
-            "total_field_abs": total_field_abs[:, y_mid, :],
-            "eps": eps[:, y_mid, :],
-            "eps_grad": None if eps_grad_arr is None else eps_grad_arr[:, y_mid, :],
-            "thermal": (
-                None if thermal_map_arr is None else thermal_map_arr[:, y_mid, :]
-            ),
-            "heat_source": (
-                None
-                if heat_source_map_arr is None
-                else heat_source_map_arr[:, y_mid, :]
-            ),
             "xlabel": r"$x$ width ($\mu m$)",
             "ylabel": r"$z$ depth ($\mu m$)",
             "x_phys": x_width,
@@ -1688,18 +2239,6 @@ def plot_eps_field_3d(
         },
         {
             "name": f"y-z, x={_slice_coord_um(x_mid, 0):.3f}" + r"$\mu m$",
-            "field": field[x_mid, :, :],
-            "total_field_abs": total_field_abs[x_mid, :, :],
-            "eps": eps[x_mid, :, :],
-            "eps_grad": None if eps_grad_arr is None else eps_grad_arr[x_mid, :, :],
-            "thermal": (
-                None if thermal_map_arr is None else thermal_map_arr[x_mid, :, :]
-            ),
-            "heat_source": (
-                None
-                if heat_source_map_arr is None
-                else heat_source_map_arr[x_mid, :, :]
-            ),
             "xlabel": r"$y$ height ($\mu m$)",
             "ylabel": r"$z$ depth ($\mu m$)",
             "x_phys": y_height,
@@ -1711,6 +2250,117 @@ def plot_eps_field_3d(
             "fixed_idx": x_mid,
         },
     ]
+
+    if using_precomputed_planes:
+        planes = []
+        required_keys = ("field", "total_field_abs", "eps", "fixed_idx")
+        for values, metadata in zip(precomputed_planes, plane_metadata):
+            missing = [key for key in required_keys if key not in values]
+            if missing:
+                raise ValueError(f"Precomputed plot plane is missing keys: {missing}")
+            plane = dict(metadata)
+            plane.update(
+                {
+                    key: _as_numpy(values.get(key))
+                    for key in (
+                        "field",
+                        "total_field_abs",
+                        "eps",
+                        "base_eps",
+                        "eps_grad",
+                        "thermal",
+                        "heat_source",
+                    )
+                }
+            )
+            plane["fixed_idx"] = int(values["fixed_idx"])
+            expected_shape = (dim_sizes[plane["h_dim"]], dim_sizes[plane["v_dim"]])
+            for key in ("field", "total_field_abs", "eps"):
+                if plane[key].shape != expected_shape:
+                    raise ValueError(
+                        f"Precomputed {key} plane has shape {plane[key].shape}; "
+                        f"expected {expected_shape}."
+                    )
+            planes.append(plane)
+        field_stat_values = np.concatenate(
+            [np.asarray(plane["field"]).reshape(-1) for plane in planes]
+        )
+        total_field_stat_values = np.concatenate(
+            [np.asarray(plane["total_field_abs"]).reshape(-1) for plane in planes]
+        )
+        eps_stat_values = np.concatenate(
+            [np.asarray(plane["eps"]).reshape(-1) for plane in planes]
+        )
+        base_eps_values = [plane["base_eps"] for plane in planes]
+        base_eps_stat_values = (
+            None
+            if any(value is None for value in base_eps_values)
+            else np.concatenate(
+                [np.asarray(value).reshape(-1) for value in base_eps_values]
+            )
+        )
+        eps_grad_values = [plane["eps_grad"] for plane in planes]
+        eps_grad_arr = (
+            None
+            if all(value is None for value in eps_grad_values)
+            else np.concatenate(
+                [
+                    np.asarray(value).reshape(-1)
+                    for value in eps_grad_values
+                    if value is not None
+                ]
+            )
+        )
+        thermal_values = [plane["thermal"] for plane in planes]
+        thermal_map_arr = (
+            None
+            if all(value is None for value in thermal_values)
+            else np.concatenate(
+                [
+                    np.asarray(value).reshape(-1)
+                    for value in thermal_values
+                    if value is not None
+                ]
+            )
+        )
+        heat_source_map_arr = (
+            None if all(plane["heat_source"] is None for plane in planes) else True
+        )
+    else:
+        planes = plane_metadata
+        dense_slices = (
+            (slice(None), slice(None), z_mid),
+            (slice(None), y_mid, slice(None)),
+            (x_mid, slice(None), slice(None)),
+        )
+        for plane, plane_slice in zip(planes, dense_slices):
+            plane.update(
+                {
+                    "field": field[plane_slice],
+                    "total_field_abs": total_field_abs[plane_slice],
+                    "eps": eps[plane_slice],
+                    "base_eps": (
+                        None if base_eps_arr is None else base_eps_arr[plane_slice]
+                    ),
+                    "eps_grad": (
+                        None if eps_grad_arr is None else eps_grad_arr[plane_slice]
+                    ),
+                    "thermal": (
+                        None
+                        if thermal_map_arr is None
+                        else thermal_map_arr[plane_slice]
+                    ),
+                    "heat_source": (
+                        None
+                        if heat_source_map_arr is None
+                        else heat_source_map_arr[plane_slice]
+                    ),
+                }
+            )
+        field_stat_values = field
+        total_field_stat_values = total_field_abs
+        eps_stat_values = eps
+        base_eps_stat_values = base_eps_arr
 
     # ------------------------------------------------------------------
     # Global color limits
@@ -1729,31 +2379,34 @@ def plot_eps_field_3d(
         return vmin, vmax
 
     # Since row 0 plots total_field_abs, its color scale should come from total_field_abs.
-    abs_vmin, abs_vmax = _finite_minmax(total_field_abs)
+    abs_vmin, abs_vmax = _finite_minmax(total_field_stat_values)
 
-    real_min, real_max = _finite_minmax(np.real(field))
+    real_min, real_max = _finite_minmax(np.real(field_stat_values))
     real_lim = max(abs(real_min), abs(real_max))
     if np.isclose(real_lim, 0.0):
         real_lim = 1.0
 
-    eps_vmin, eps_vmax = _finite_minmax(np.real(eps))
+    eps_vmin, eps_vmax = _finite_minmax(np.real(eps_stat_values))
     if show_delta_eps is None:
-        show_delta_eps = base_eps_arr is not None and not np.allclose(
-            np.real(eps),
-            np.real(base_eps_arr),
+        show_delta_eps = base_eps_stat_values is not None and not np.allclose(
+            np.real(eps_stat_values),
+            np.real(base_eps_stat_values),
             atol=1e-12,
             rtol=1e-9,
         )
     else:
-        show_delta_eps = bool(show_delta_eps) and base_eps_arr is not None
+        show_delta_eps = bool(show_delta_eps) and base_eps_stat_values is not None
     if show_delta_eps:
-        delta_eps_arr = np.real(eps) - np.real(base_eps_arr)
-        delta_min, delta_max = _finite_minmax(delta_eps_arr)
+        delta_eps_stat_values = np.real(eps_stat_values) - np.real(base_eps_stat_values)
+        delta_min, delta_max = _finite_minmax(delta_eps_stat_values)
         delta_lim = max(abs(delta_min), abs(delta_max))
         if np.isclose(delta_lim, 0.0):
             delta_lim = 1.0
+        for plane in planes:
+            plane["delta_eps"] = np.real(plane["eps"]) - np.real(plane["base_eps"])
     else:
-        delta_eps_arr = None
+        for plane in planes:
+            plane["delta_eps"] = None
     if thermal_map_arr is not None:
         thermal_vmin, thermal_vmax = _finite_minmax(np.real(thermal_map_arr))
         thermal_lim = max(abs(thermal_vmin), abs(thermal_vmax))
@@ -1761,10 +2414,7 @@ def plot_eps_field_3d(
             thermal_lim = 1.0
     # eps_vmin = 0.0
     if eps_grad_arr is not None:
-        grad_min, grad_max = _finite_minmax(np.real(eps_grad_arr))
-        grad_lim = max(abs(grad_min), abs(grad_max))
-        # if np.isclose(grad_lim, 0.0):
-        #     grad_lim = 1.0
+        grad_lim = _symmetric_percentile_limit(np.real(eps_grad_arr))
 
     param_grad_arr = None
     if param_grad is not None:
@@ -1785,6 +2435,10 @@ def plot_eps_field_3d(
         param_lim = max(abs(param_min), abs(param_max))
         if np.isclose(param_lim, 0.0):
             param_lim = 1.0
+
+    edgebox_edges = (
+        edgebox_grad.get("edge_knots", []) if isinstance(edgebox_grad, dict) else []
+    )
 
     # ------------------------------------------------------------------
     # Figure geometry with ONE GLOBAL SCALE
@@ -1817,6 +2471,7 @@ def plot_eps_field_3d(
         + int(thermal_map_arr is not None)
         + int(eps_grad_arr is not None)
         + int(param_grad_arr is not None)
+        + len(edgebox_edges)
     )
     fixed_h = bottom_margin + top_margin + (n_plot_rows - 1) * row_gap
 
@@ -1905,6 +2560,26 @@ def plot_eps_field_3d(
             row_band_h / fig_h,
         ]
         return fig.add_axes(ax_rect), fig.add_axes(cax_rect)
+
+    def _add_edgebox_axes(row):
+        total_content_w = fig_w - left_margin - right_margin
+        axis_gap = 0.55
+        axis_width = (total_content_w - 2 * axis_gap) / 3
+        y_band0 = fig_h - top_margin - (row + 1) * row_band_h - row * row_gap
+        axes = []
+        for col in range(3):
+            x0 = left_margin + col * (axis_width + axis_gap)
+            axes.append(
+                fig.add_axes(
+                    [
+                        x0 / fig_w,
+                        y_band0 / fig_h,
+                        axis_width / fig_w,
+                        row_band_h / fig_h,
+                    ]
+                )
+            )
+        return axes
 
     def _imshow_phys(axis, data_2d, x_phys, y_phys, **kwargs):
         """
@@ -2277,7 +2952,7 @@ def plot_eps_field_3d(
         fixed_idx = plane["fixed_idx"]
 
         if mask.ndim == 3:
-            if mask.shape != field.shape:
+            if mask.shape != (nx, ny, nz):
                 return None
 
             if fixed_dim == 2:
@@ -2401,14 +3076,7 @@ def plot_eps_field_3d(
         field_2d = plane["field"]
         total_field_abs_2d = plane["total_field_abs"]
         eps_2d = np.real(plane["eps"]).astype(np.float64)
-        if delta_eps_arr is None:
-            delta_eps_2d = None
-        elif plane["fixed_dim"] == 2:
-            delta_eps_2d = delta_eps_arr[:, :, plane["fixed_idx"]]
-        elif plane["fixed_dim"] == 1:
-            delta_eps_2d = delta_eps_arr[:, plane["fixed_idx"], :]
-        else:
-            delta_eps_2d = delta_eps_arr[plane["fixed_idx"], :, :]
+        delta_eps_2d = plane["delta_eps"]
         eps_grad_2d = (
             None
             if plane["eps_grad"] is None
@@ -2533,6 +3201,42 @@ def plot_eps_field_3d(
         )
         ax_p.set_title(r"$dL/d$" + param_name, fontsize=panel_title_fs, pad=4)
         _add_colorbar(im, cax_p)
+
+    edge_row = len(row_specs) + int(param_grad_arr is not None)
+    for edge_index, edge in enumerate(edgebox_edges):
+        edge_axes = _add_edgebox_axes(edge_row + edge_index)
+        knot_index = np.arange(len(edge["raw"]))
+        raw = np.asarray(edge["raw"])
+        physical = np.asarray(edge["physical"])
+        gradient = edge.get("grad")
+        gradient = None if gradient is None else np.asarray(gradient)
+        edge_title = edge.get("side", f"edge {edge_index}")
+
+        edge_axes[0].plot(knot_index, raw, "o-", color="tab:blue")
+        edge_axes[0].set_title(f"{edge_title}: raw knots", fontsize=panel_title_fs)
+        edge_axes[0].set_ylabel("raw control", fontsize=label_fs)
+        edge_axes[1].plot(knot_index, physical, "o-", color="tab:green")
+        edge_axes[1].set_title(
+            f"{edge_title}: physical offset", fontsize=panel_title_fs
+        )
+        edge_axes[1].set_ylabel("offset [um]", fontsize=label_fs)
+        if gradient is None:
+            edge_axes[2].text(
+                0.5,
+                0.5,
+                "gradient unavailable",
+                ha="center",
+                va="center",
+                transform=edge_axes[2].transAxes,
+            )
+        else:
+            edge_axes[2].bar(knot_index, gradient, color="tab:red")
+        edge_axes[2].set_title(f"{edge_title}: knot gradient", fontsize=panel_title_fs)
+        edge_axes[2].set_ylabel("d objective / d raw", fontsize=label_fs)
+        for axis in edge_axes:
+            axis.set_xlabel("knot index", fontsize=label_fs)
+            axis.tick_params(axis="both", labelsize=tick_fs)
+            axis.grid(True, alpha=0.25)
 
     if title is not None:
         fig.suptitle(title, fontsize=suptitle_fs, y=1.0 - 0.10 / fig_h)
@@ -2937,7 +3641,7 @@ def insert_mode(
 
     else:
         epsr_cross_xx = None
-        direction = "x" + direction[1:]
+        # direction = "x" + direction[1:]
 
     ## see page 89 in https://empossible.net/wp-content/uploads/2019/08/Lecture-4f-FDFD-Extras.pdf
     ## E mode: -(Dxf @ Dxb + MU_0 * eps_0 * eps_r) Ez = gamma^2 Ez
@@ -3012,7 +3716,6 @@ def insert_mode(
             -1j * 2 * np.pi / wl_cen * propagation_spacing - 1j * np.pi
         )
         offset = -1 if direction[1] == "+" else 1
-
         if direction[0] == "x":
             target[x + offset, y] = mode_profile
         elif direction[0] == "y":

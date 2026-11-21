@@ -1,5 +1,14 @@
-import argparse
+import os
+import sys
 
+# Add the project root to sys.path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
+sys.path.insert(0, project_root)
+
+import argparse
+import copy
+
+import numpy as np
 import torch
 import torch.amp as amp
 import torch.nn as nn
@@ -11,15 +20,10 @@ from pyutils.torch_train import (
 )
 
 from core.train import builder
+from core.train.models.utils import from_Ez_to_Hx_Hy
 from core.train.trainer import PredTrainer
 from core.utils import cal_total_field_adj_src_from_fwd_field
 from core.utils import train_configs as configs
-
-# Add the project root to sys.path
-# project_root = os.path.abspath(
-#     os.path.join(os.path.dirname(__file__), "../../../../MAPS")
-# )
-# sys.path.insert(0, project_root)
 
 
 class fwd_predictor(nn.Module):

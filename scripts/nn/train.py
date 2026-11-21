@@ -89,7 +89,7 @@ if __name__ == "__main__":
     tasks = [
         [
             0.0,
-            "metacoupler",
+            "bending",
             "NeurOLight2d",
             0,
             "test_training_flow",

@@ -57,7 +57,6 @@ class SpatialInterpolater(nn.Module):
         return x
 
 
-@MODELS.register_module()
 class LayerNorm(nn.Module):
     r"""LayerNorm implementation used in ConvNeXt
     LayerNorm that supports two data formats: channels_last (default) or channels_first.

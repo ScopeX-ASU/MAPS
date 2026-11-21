@@ -2,17 +2,28 @@ import copy
 import logging
 import math
 from copy import deepcopy
-from typing import Any, Tuple
+from typing import Any, Sequence, Tuple
 
 import numpy as np
 import torch
 from autograd import numpy as npa
-from torch import Tensor
+from torch import Tensor, nn
 
 from core.fdfd.near2far import get_farfields_GreenFunction
+from core.nearfield import (
+    angular_spectrum_torch,
+    concatenate_surfaces,
+    from_maps_fields,
+    project,
+)
+from core.nearfield.projector import C_0 as C_0_SI
+from core.nearfield.projector import EPSILON_0
+from core.nearfield.projector import MU_0 as MU_0_SI
 from core.utils import (
     RectilinearGridMetadata,
     energy_constraint_penalty,
+    erosion_dilation_penalty,
+    get_ed_kernel_radius_px,
     get_eigenmode_coefficients,
     get_eigenmode_coefficients_3d,
     get_flux,
@@ -30,6 +41,34 @@ from .thermal_control import currents_key_to_dict
 
 
 class SMatrixObjective(object):
+    """
+    Compute normalized S-parameter/eigenmode transmission objectives across wavelength, temperature, mode, and direction combinations.
+
+    Args:
+        sims: Simulation mapping keyed by wavelength/polarization/temperature or an FDTD-X broadband wavelength configuration.
+        s_params: Mutable dictionary receiving normalized modal coefficients.
+        port_profiles: Mapping ``slice_name -> (wavelength, mode) -> (source, H_mode, E_mode, normalization_power, requires_simulation)``.
+        port_slices: Mapping from slice name to monitor-slice metadata.
+        in_slice_names: Input slices.
+        out_slice_names: Output slices.
+        in_mode: Input mode identifier such as ``Ez1`` or ``Hz1`` in 2-D workflows.
+        out_modes: Output mode indices.
+        directions: Propagation directions such as ``x+`` or ``y-``; length must equal ``out_slice_names``.
+        name: Objective identifier.
+        target_wls: Target wavelengths in micrometers.
+        target_temps: Target temperatures/control states.
+        grid_step: Spatial step for 2-D modal overlap.
+        energy: Whether to return power-like or amplitude-like normalized coefficients.
+        grid_metadata: Optional 3-D rectilinear grid metadata.
+        cell_weights: Optional physical integration weights for nonuniform grids.
+
+    Returns:
+        Vector containing one normalized objective sample for each valid combination.
+
+    Scientific conventions:
+        2-D ``Ez`` uses ``(Hx, Hy, Ez)``; ``Hz`` uses ``(Ex, Ey, Hz)``. 3-D evaluation uses all six colocated components.
+    """
+
     def __init__(
         self,
         sims: dict,  # {wl: Simulation}
@@ -69,6 +108,18 @@ class SMatrixObjective(object):
         self.cell_weights = cell_weights
 
     def __call__(self, fields):
+        """
+        Evaluate all configured S-matrix objective combinations from simulated fields.
+
+        Args:
+            fields: Mapping keyed by ``(in_slice_name, wavelength, in_mode, temperature)``. 2-D values contain polarization-specific field components; 3-D values contain ``Ex``, ``Ey``, ``Ez``, ``Hx``, ``Hy``, and ``Hz``.
+
+        Returns:
+            Stacked Torch tensor for Torch fields, otherwise a NumPy/autograd array.
+
+        Side Effects:
+            Updates ``self.s_params`` with normalized forward/backward modal coefficients.
+        """
         s_list = []
         (
             target_wls,
@@ -225,7 +276,7 @@ class SMatrixObjective(object):
                                     et_m,
                                     monitor=monitor_slice,
                                     grid_step=grid_step,
-                                    energy=False,
+                                    energy=self.energy,
                                     direction=direction,
                                     grid_metadata=self.grid_metadata,
                                     cell_weights=self.cell_weights,
@@ -239,9 +290,9 @@ class SMatrixObjective(object):
                                 raise ValueError("Invalid direction")
                             # print(s, norm_power)
                             if self.energy:
-                                s_list.append(s / norm_power)
+                                s_list.append(s / abs(norm_power))
                             else:
-                                s_list.append(s / norm_power**0.5)
+                                s_list.append(s / abs(norm_power**0.5))
 
                             # only record the s parameters for eigenmode
                             # we don't need to record the s parameters if we calculate the phase
@@ -274,6 +325,30 @@ class SMatrixObjective(object):
 
 
 class EigenmodeObjective(object):
+    """
+    Compute an input-to-output eigenmode objective over configured wavelengths, temperatures, output modes, and propagation direction.
+
+    Args:
+        sims: Simulation mapping keyed by wavelength/polarization/temperature.
+        s_params: Mutable S-parameter bookkeeping dictionary.
+        port_profiles: Port source/reference profiles keyed by ``(wavelength, mode)``.
+        port_slices: Output monitor-slice mapping.
+        in_slice_name: Input slice name.
+        out_slice_name: Output slice name.
+        in_mode: Input mode identifier.
+        out_modes: Output mode indices.
+        direction: Propagation direction such as ``x+`` or ``y-``.
+        target_wls: Target wavelengths in micrometers.
+        target_temps: Target temperature/control states.
+        grid_step: 2-D modal-overlap grid spacing.
+        energy: Whether to return power-like or amplitude-like values.
+        grid_metadata: Optional 3-D rectilinear metadata.
+        cell_weights: Optional integration weights.
+
+    Returns:
+        Torch or NumPy vector of normalized eigenmode objective values.
+    """
+
     def __init__(
         self,
         sims: dict,  # {wl: Simulation}
@@ -313,6 +388,15 @@ class EigenmodeObjective(object):
         self.cell_weights = cell_weights
 
     def __call__(self, fields):
+        """
+        Evaluate the eigenmode objective from simulated field dictionaries.
+
+        Args:
+            fields: Mapping keyed by ``(in_slice_name, wavelength, in_mode, temperature)`` with polarization-specific 2-D fields or all six 3-D field components.
+
+        Returns:
+            Stacked tensor/array containing normalized eigenmode objective values.
+        """
         s_list = []
         (
             target_wls,
@@ -1113,7 +1197,274 @@ class ShapeSimilarityObjective(object):
             return npa.mean(npa.array(similarity_list))
 
 
+class TargetIntensityObjective:
+    """Score a sampled image-plane intensity against a target array.
+
+    Args:
+        sims: Simulation mapping retained for the standard objective interface.
+        port_slices: Monitor slices on the field grid.
+        in_slice_name: Source slice whose solved fields are selected.
+        out_slice_name: Image-plane monitor slice.
+        in_mode: Source mode label.
+        target_wls: Selected wavelengths in micrometers.
+        target_temps: Selected thermal/control states.
+        target_intensity: Nonnegative two-dimensional target intensity.
+        field_components: Electric-field components included in intensity.
+
+    Notes:
+        Measured intensity is scaled to the target mean, clipped to the unit
+        target range, and scored as one minus the normalized L2 mismatch.
+    """
+
+    def __init__(
+        self,
+        sims,
+        port_slices,
+        in_slice_name,
+        out_slice_name,
+        in_mode,
+        target_wls,
+        target_temps,
+        target_intensity,
+        field_components=("Ex", "Ey", "Ez"),
+    ):
+        self.sims = sims
+        self.port_slices = port_slices
+        self.in_slice_name = in_slice_name
+        self.out_slice_name = out_slice_name
+        self.in_mode = in_mode
+        self.target_wls = tuple(target_wls)
+        self.target_temps = set(target_temps)
+        self.target_intensity = torch.as_tensor(target_intensity, dtype=torch.float32)
+        if self.target_intensity.ndim != 2:
+            raise ValueError("target_intensity must be a two-dimensional array")
+        if not torch.any(self.target_intensity > 0):
+            raise ValueError("target_intensity must contain a positive value")
+        if isinstance(field_components, str):
+            field_components = (field_components,)
+        self.field_components = tuple(field_components)
+        if not self.field_components:
+            raise ValueError("field_components must contain at least one component")
+        self.last_intensity = None
+        self.last_target = None
+        self.last_error = None
+
+    def _score_intensity(self, plane: Tensor) -> Tensor:
+        """Score one real image-plane intensity and retain diagnostics."""
+        target = self.target_intensity.to(device=plane.device, dtype=plane.dtype)
+        if tuple(target.shape) != tuple(plane.shape):
+            target = torch.nn.functional.interpolate(
+                target[None, None],
+                size=tuple(plane.shape),
+                mode="bilinear",
+                align_corners=False,
+            )[0, 0]
+        target = target.clamp(0, 1)
+        measured = (
+            plane * target.mean() / plane.mean().clamp_min(torch.finfo(plane.dtype).eps)
+        )
+        measured = measured.clamp(0, 1)
+        mismatch = torch.linalg.vector_norm(measured - target) / target.numel() ** 0.5
+        self.last_intensity = measured.detach()
+        self.last_target = target.detach()
+        self.last_error = mismatch.detach()
+        return 1 - mismatch
+
+    def __call__(self, fields):
+        """Return a differentiable image similarity score in [0, 1]."""
+        values = []
+        for (source_name, wl, mode, temp), components in fields.items():
+            if source_name != self.in_slice_name or mode != self.in_mode:
+                continue
+            if temp not in self.target_temps:
+                continue
+            if not any(
+                math.isclose(wl, target, rel_tol=0, abs_tol=1e-4)
+                for target in self.target_wls
+            ):
+                continue
+            plane = None
+            for component in self.field_components:
+                if component in components:
+                    energy = components[component].abs().square()
+                    plane = energy if plane is None else plane + energy
+            if plane is None:
+                raise ValueError(
+                    "No requested electric-field components in "
+                    f"{(source_name, wl, mode, temp)}"
+                )
+            plane = plane[self.port_slices[self.out_slice_name]].squeeze()
+            if plane.ndim != 2:
+                raise ValueError(
+                    f"Image-plane field must reduce to 2-D, got {tuple(plane.shape)}"
+                )
+            values.append(self._score_intensity(plane))
+        if not values:
+            raise ValueError(
+                "No simulation fields matched the target-intensity objective"
+            )
+        return torch.stack(values).mean()
+
+
+class TargetIntensityAngularSpectrumObjective(TargetIntensityObjective):
+    """Score a periodic image plane propagated from a tangential near field.
+
+    Args:
+        projection_distance_um: Positive distance from the near-field plane to
+            the virtual image plane, in micrometers.
+        grid_step_um: Uniform transverse sampling pitch in micrometers.
+        eps_bg: Relative permittivity above the metasurface.
+        evanescent: Angular-spectrum evanescent-wave policy.
+        **kwargs: Arguments accepted by :class:`TargetIntensityObjective`.
+
+    Notes:
+        The FFT represents one periodically continued x/y supercell. The input
+        plane must be normal to +z and uses its colocated ``Ex`` and ``Ey``.
+        ``field_components`` independently selects which propagated electric
+        components form the supervised intensity and defaults to
+        ``("Ex", "Ey", "Ez")``. The returned magnetic field is retained for
+        diagnostics but is not part of the intensity objective.
+    """
+
+    def __init__(
+        self,
+        *,
+        projection_distance_um: float,
+        grid_step_um: float,
+        eps_bg: float = 1.0,
+        evanescent: str = "decay",
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        if projection_distance_um <= 0:
+            raise ValueError("projection_distance_um must be positive")
+        if grid_step_um <= 0:
+            raise ValueError("grid_step_um must be positive")
+        self.projection_distance_um = float(projection_distance_um)
+        self.grid_step_um = float(grid_step_um)
+        self.eps_bg = float(eps_bg)
+        self.evanescent = evanescent
+        unsupported_components = set(self.field_components) - {"Ex", "Ey", "Ez"}
+        if unsupported_components:
+            raise ValueError(
+                "Angular-spectrum intensity supports projected electric components "
+                f"Ex, Ey, and Ez; got {sorted(unsupported_components)}"
+            )
+        self.last_nearfield_intensity = None
+        self.last_projected_intensity = None
+        self.last_nearfield_fields = None
+        self.last_projected_fields = None
+
+    def __call__(self, fields):
+        """Propagate each selected near field and return its image score."""
+        values = []
+        for (source_name, wl, mode, temp), components in fields.items():
+            if source_name != self.in_slice_name or mode != self.in_mode:
+                continue
+            if temp not in self.target_temps:
+                continue
+            if not any(
+                math.isclose(wl, target, rel_tol=0, abs_tol=1e-4)
+                for target in self.target_wls
+            ):
+                continue
+            if not all(component in components for component in ("Ex", "Ey")):
+                raise ValueError("Angular-spectrum projection requires Ex and Ey")
+            monitor_slice = self.port_slices[self.out_slice_name]
+            ex = components["Ex"][monitor_slice].squeeze()
+            ey = components["Ey"][monitor_slice].squeeze()
+            if ex.ndim != 2 or ey.shape != ex.shape:
+                raise ValueError(
+                    "Near-field Ex and Ey must reduce to matching 2-D planes"
+                )
+            # MAPS arrays use (x, y); angular_spectrum_torch uses (v, u),
+            # where u is the first transverse Cartesian axis.
+            tangential = torch.stack((ex.mT, ey.mT), dim=-1)
+            electric, magnetic = angular_spectrum_torch(
+                tangential,
+                C_0_SI / (float(wl) * 1e-6),
+                self.grid_step_um * 1e-6,
+                self.grid_step_um * 1e-6,
+                self.projection_distance_um * 1e-6,
+                normal_axis=2,
+                normal_sign=1,
+                eps_r=self.eps_bg,
+                evanescent=self.evanescent,
+            )
+            electric = electric.movedim(0, 1)
+            magnetic = magnetic.movedim(0, 1)
+            component_indices = [
+                ("Ex", "Ey", "Ez").index(component)
+                for component in self.field_components
+            ]
+            intensity = electric[..., component_indices].abs().square().sum(dim=-1)
+            self.last_projected_intensity = intensity.detach()
+            self.last_nearfield_intensity = (
+                ex.abs().square() + ey.abs().square()
+            ).detach()
+            self.last_nearfield_fields = {
+                "Ex": ex.detach(),
+                "Ey": ey.detach(),
+                "spacing_um": (self.grid_step_um, self.grid_step_um),
+                "plane_axes": ("x", "y"),
+            }
+            self.last_projected_fields = {
+                component: values.detach()
+                for component, values in zip(
+                    ("Ex", "Ey", "Ez", "Hx", "Hy", "Hz"),
+                    (*electric.unbind(-1), *magnetic.unbind(-1)),
+                )
+            }
+            self.last_projected_fields["spacing_um"] = (
+                self.grid_step_um,
+                self.grid_step_um,
+            )
+            self.last_projected_fields["plane_axes"] = ("x", "y")
+            values.append(self._score_intensity(intensity))
+        if not values:
+            raise ValueError(
+                "No simulation fields matched the target-intensity objective"
+            )
+        return torch.stack(values).mean()
+
+
 class ShapeSimilarityNear2FarObjective(object):
+    """Project near fields and optionally reduce one component to similarity.
+
+    Args:
+        sims: Simulation mapping. FDTD-X simulations use broadband wavelength
+            tuples as their first key element.
+        port_slices: Monitor slices on the field grid.
+        port_slices_info: Physical monitor metadata in micrometers.
+        in_slice_name: Source slice whose solved fields are selected.
+        out_slice_name: Cartesian observation region.
+        in_mode: Source mode label.
+        out_modes: Retained for compatibility with the legacy 2-D objective.
+        name: Objective name.
+        target_wls: Selected wavelengths in micrometers.
+        target_temps: Selected thermal/control states.
+        shape_type: Target shape type used when ``return_field`` is unset.
+        shape_cfg: Shape parameters used by ``get_shape_similarity``.
+        grid_step: Legacy 2-D grid spacing in micrometers.
+        eps_bg: Homogeneous projection-medium relative permittivity.
+        intensity: Whether similarity compares intensity.
+        similarity: Similarity metric name.
+        obj_type: Objective type identifier.
+        total_farfield_region_solutions: Legacy far-field result store.
+        grid_metadata: Native 3-D rectilinear metadata in micrometers.
+        cell_weights: Optional objective quadrature weights.
+        return_field: ``None`` for shape similarity, ``"nearfield"`` for raw
+            equivalent-surface samples, or ``"farfield"`` for raw projected
+            fields.
+        projection_backend: Backend passed to ``core.nearfield.project`` in 3-D.
+
+    Notes:
+        Three-dimensional MAPS magnetic phasors use the solver's impedance
+        normalization and are divided by the vacuum impedance before entering
+        the SI near-field projector. Raw results are dictionaries keyed by
+        ``(in_slice_name, wavelength_um, in_mode, control_state)``.
+    """
+
     def __init__(
         self,
         sims: dict,  # {wl: Simulation}
@@ -1136,6 +1487,8 @@ class ShapeSimilarityNear2FarObjective(object):
         total_farfield_region_solutions: dict = None,
         grid_metadata: RectilinearGridMetadata | dict[str, Any] | None = None,
         cell_weights: Tensor | np.ndarray | None = None,
+        return_field: str | None = None,
+        projection_backend: str = "direct_torch",
     ):
         self.sims = sims
         self.port_slices = port_slices
@@ -1157,105 +1510,322 @@ class ShapeSimilarityNear2FarObjective(object):
         self.total_farfield_region_solutions = total_farfield_region_solutions
         self.grid_metadata = grid_metadata
         self.cell_weights = cell_weights
+        if return_field not in (None, "nearfield", "farfield"):
+            raise ValueError("return_field must be None, 'nearfield', or 'farfield'")
+        self.return_field = return_field
+        self.projection_backend = projection_backend
+        self.last_nearfield_fields = None
+        self.last_projected_fields = None
+
+    def _is_fdtdx3d(self) -> bool:
+        """Return whether the simulation keys use the FDTD-X broadband form."""
+        wavelength_key = next(iter(self.sims))[0]
+        return isinstance(wavelength_key, tuple) and len(wavelength_key) == 3
+
+    def _selected_keys(self):
+        """Yield selected scalar-wavelength keys for 2-D or broadband 3-D sims."""
+        target_temps = set(self.target_temps)
+        for simulation_key in self.sims:
+            wavelength_key, polarization, temperature = simulation_key
+            wavelengths = (
+                np.linspace(
+                    wavelength_key[0] - wavelength_key[1] / 2,
+                    wavelength_key[0] + wavelength_key[1] / 2,
+                    wavelength_key[2],
+                )
+                if isinstance(wavelength_key, tuple) and len(wavelength_key) == 3
+                else (wavelength_key,)
+            )
+            for wavelength in wavelengths:
+                if (
+                    polarization == self.in_mode[:2]
+                    and temperature in target_temps
+                    and any(
+                        math.isclose(wavelength, target, rel_tol=0, abs_tol=1e-4)
+                        for target in self.target_wls
+                    )
+                ):
+                    yield float(wavelength), polarization, temperature
+
+    def _native_grid(self) -> dict[str, Any]:
+        """Return validated 3-D coordinate metadata for solved fields."""
+        metadata = self.grid_metadata
+        if isinstance(metadata, RectilinearGridMetadata):
+            metadata = metadata.to_dict()
+        if isinstance(metadata, dict) and "coords" not in metadata:
+            metadata = metadata.get("native")
+        if not isinstance(metadata, dict) or not all(
+            key in metadata for key in ("coords", "boundaries")
+        ):
+            raise ValueError(
+                "3-D near-to-far projection requires native grid coordinates and boundaries"
+            )
+        if len(metadata["coords"]) != 3 or len(metadata["boundaries"]) != 3:
+            raise ValueError("3-D near-to-far grid metadata must contain x/y/z axes")
+        return metadata
+
+    @staticmethod
+    def _monitor_bounds(monitor_slice, shape: tuple[int, int, int]):
+        """Return validated half-open bounds for a rectangular monitor plane."""
+        bounds = []
+        for axis, size in zip("xyz", shape):
+            indexer = getattr(monitor_slice, axis)
+            if isinstance(indexer, slice):
+                start, stop, step = indexer.indices(size)
+                if step != 1:
+                    raise ValueError("near-field monitor slices must be contiguous")
+            else:
+                index = int(indexer)
+                if index < 0:
+                    index += size
+                start, stop = index, index + 1
+            if start < 0 or stop > size or stop <= start:
+                raise ValueError(
+                    f"near-field monitor has invalid {axis}-axis bounds {(start, stop)}"
+                )
+            bounds.append((start, stop))
+        return tuple(bounds)
+
+    def _surface_3d(self, field: dict[str, Tensor], wavelength_um: float):
+        """Adapt registered 3-D near-field planes to one SI Huygens surface."""
+        grid = self._native_grid()
+        reference = field["Ex"]
+        real_dtype = reference.real.dtype
+        device = reference.device
+        coordinates_m = tuple(
+            torch.as_tensor(axis, dtype=real_dtype, device=device) * 1e-6
+            for axis in grid["coords"]
+        )
+        boundaries_m = tuple(
+            torch.as_tensor(axis, dtype=real_dtype, device=device) * 1e-6
+            for axis in grid["boundaries"]
+        )
+        impedance_0 = math.sqrt(MU_0_SI / EPSILON_0)
+        fields = torch.stack(
+            (
+                field["Ex"],
+                field["Ey"],
+                field["Ez"],
+                field["Hx"] / impedance_0,
+                field["Hy"] / impedance_0,
+                field["Hz"] / impedance_0,
+            ),
+            dim=0,
+        ).unsqueeze(0)
+        frequency = torch.as_tensor(
+            [C_0_SI / (wavelength_um * 1e-6)], dtype=real_dtype, device=device
+        )
+        surfaces = []
+        for slice_name, info in self.port_slices_info.items():
+            if not slice_name.startswith("nearfield"):
+                continue
+            direction = info["direction"]
+            normal_axis = "xyz".index(direction[0])
+            normal_sign = -1 if direction.endswith("-") else 1
+            bounds = self._monitor_bounds(
+                self.port_slices[slice_name], tuple(fields.shape[-3:])
+            )
+            if bounds[normal_axis][1] - bounds[normal_axis][0] != 1:
+                raise ValueError("near-field monitor must occupy one normal-axis cell")
+            selection = tuple(slice(start, stop) for start, stop in bounds)
+            patch_fields = fields[(slice(None), slice(None), *selection)]
+            patch_coordinates = tuple(
+                axis[start:stop] for axis, (start, stop) in zip(coordinates_m, bounds)
+            )
+            patch_boundaries = tuple(
+                axis[start : stop + 1]
+                for axis, (start, stop) in zip(boundaries_m, bounds)
+            )
+            surfaces.append(
+                from_maps_fields(
+                    patch_fields,
+                    frequencies_hz=frequency,
+                    coordinates_m=patch_coordinates,
+                    boundaries_m=patch_boundaries,
+                    normal_axis=normal_axis,
+                    normal_sign=normal_sign,
+                    index=0,
+                    colocated=True,
+                    temporally_aligned=True,
+                    unfolded=True,
+                )
+            )
+        if not surfaces:
+            raise ValueError(
+                "No monitor whose name starts with 'nearfield' is registered"
+            )
+        return concatenate_surfaces(surfaces)
+
+    def _observation_points_3d(
+        self, reference: Tensor
+    ) -> tuple[Tensor, tuple[int, int, int], int]:
+        """Return flattened SI observation points and their planar layout."""
+        info = self.port_slices_info[self.out_slice_name]
+        axes = []
+        for axis in "xyz":
+            values = np.atleast_1d(np.asarray(info[f"{axis}s"], dtype=np.float64))
+            axes.append(
+                torch.as_tensor(
+                    values, dtype=reference.real.dtype, device=reference.device
+                )
+                * 1e-6
+            )
+        grids = torch.meshgrid(*axes, indexing="ij")
+        points = torch.stack(grids, dim=-1).reshape(-1, 3)
+        normal_axis = "xyz".index(info["direction"][0])
+        if axes[normal_axis].numel() != 1:
+            raise ValueError("3-D near-to-far observations must form a plane")
+        shape = tuple(int(axis.numel()) for axis in axes)
+        return points, shape, normal_axis
+
+    @staticmethod
+    def _surface_fields(surface) -> dict[str, Tensor]:
+        """Return all SI surface components with geometry and quadrature."""
+        return {
+            "positions_m": surface.positions_m,
+            "normals": surface.normals,
+            "weights_m2": surface.weights_m2,
+            "Ex": surface.electric_fields[0, :, 0],
+            "Ey": surface.electric_fields[0, :, 1],
+            "Ez": surface.electric_fields[0, :, 2],
+            "Hx": surface.magnetic_fields[0, :, 0],
+            "Hy": surface.magnetic_fields[0, :, 1],
+            "Hz": surface.magnetic_fields[0, :, 2],
+        }
+
+    @staticmethod
+    def _projected_fields(
+        positions_m: Tensor,
+        electric: Tensor,
+        magnetic: Tensor,
+        grid_shape: tuple[int, int, int],
+        normal_axis: int,
+    ) -> dict[str, Tensor]:
+        """Return projected components on the transverse observation grid."""
+        positions = positions_m.reshape(*grid_shape, 3).select(normal_axis, 0)
+        electric = electric[0].reshape(*grid_shape, 3).select(normal_axis, 0)
+        magnetic = magnetic[0].reshape(*grid_shape, 3).select(normal_axis, 0)
+        return {
+            "positions_m": positions,
+            "Ex": electric[..., 0],
+            "Ey": electric[..., 1],
+            "Ez": electric[..., 2],
+            "Hx": magnetic[..., 0],
+            "Hy": magnetic[..., 1],
+            "Hz": magnetic[..., 2],
+        }
 
     def __call__(self, fields):
-        (
-            target_wls,
-            target_temps,
-            in_slice_name,
-            out_slice_name,
-            in_mode,
-            out_modes,
-            shape_type,
-            shape_cfg,
-        ) = (
-            self.target_wls,
-            self.target_temps,
-            self.in_slice_name,
-            self.out_slice_name,
-            self.in_mode,
-            self.out_modes,
-            self.shape_type,
-            self.shape_cfg,
-        )
-
         similarity_list = []
-        target_temps = set(target_temps)
-        ## for each wavelength, we evaluate the objective
-        for (wl, pol, temp), sim in self.sims.items():
-            ## we calculate the average eigen energy for all output modes
-            if not any(
-                math.isclose(wl, target_wl, rel_tol=0, abs_tol=1e-4)
-                for target_wl in target_wls
-            ):
-                continue
-            if pol != in_mode[:2]:
-                continue
-            for out_mode in out_modes:
-                if temp in target_temps:
-                    monitor_slice = self.port_slices[out_slice_name]
-                    monitor_direction = self.port_slices_info[out_slice_name][
-                        "direction"
-                    ]
-                    field = fields[(in_slice_name, wl, in_mode, temp)]
-                    if pol == "Ez":
-                        fx_near, fy_near, fz_near = (
-                            field["Hx"],
-                            field["Hy"],
-                            field["Ez"],
-                        )
-                    elif pol == "Hz":
-                        fx_near, fy_near, fz_near = (
-                            field["Ex"],
-                            field["Ey"],
-                            field["Hz"],
-                        )
-
-                    farfield = get_farfields_GreenFunction(
-                        nearfield_slices=[
-                            self.port_slices[nearfield_slice_name]
-                            for nearfield_slice_name in list(self.port_slices.keys())
-                            if nearfield_slice_name.startswith("nearfield")
-                        ],
-                        nearfield_slices_info=[
-                            self.port_slices_info[nearfield_slice_name]
-                            for nearfield_slice_name in list(
-                                self.port_slices_info.keys()
-                            )
-                            if nearfield_slice_name.startswith("nearfield")
-                        ],
-                        Fz=fz_near[None, ..., None],
-                        Fx=fx_near[None, ..., None],
-                        Fy=fy_near[None, ..., None],
-                        farfield_x=None,
-                        farfield_slice_info=self.port_slices_info[out_slice_name],
-                        freqs=torch.tensor([1 / wl], device=fz_near.device),
-                        eps=self.eps_bg,
-                        mu=MU_0,
-                        dL=self.grid_step,
-                        component=pol,
-                        decimation_factor=4,
+        raw_results = {}
+        self.last_nearfield_fields = None
+        self.last_projected_fields = None
+        is_3d = self._is_fdtdx3d()
+        for wavelength, polarization, temperature in self._selected_keys():
+            result_key = (
+                self.in_slice_name,
+                wavelength,
+                self.in_mode,
+                temperature,
+            )
+            field = fields[result_key]
+            if is_3d:
+                surface = self._surface_3d(field, wavelength)
+                surface_fields = self._surface_fields(surface)
+                self.last_nearfield_fields = {
+                    name: value.detach() if isinstance(value, Tensor) else value
+                    for name, value in surface_fields.items()
+                }
+                if self.return_field == "nearfield":
+                    raw_results[result_key] = surface_fields
+                    continue
+                points, grid_shape, normal_axis = self._observation_points_3d(
+                    field["Ex"]
+                )
+                electric, magnetic = project(
+                    surface,
+                    points,
+                    backend=self.projection_backend,
+                    eps_r=self.eps_bg,
+                )
+                projected = self._projected_fields(
+                    points, electric, magnetic, grid_shape, normal_axis
+                )
+                self.last_projected_fields = {
+                    name: value.detach() if isinstance(value, Tensor) else value
+                    for name, value in projected.items()
+                }
+                if self.return_field == "farfield":
+                    raw_results[result_key] = projected
+                    continue
+                fz = projected[polarization]
+            else:
+                if self.return_field == "nearfield":
+                    raw_results[result_key] = dict(field)
+                    continue
+                if polarization == "Ez":
+                    fx_near, fy_near, fz_near = (
+                        field["Hx"],
+                        field["Hy"],
+                        field["Ez"],
                     )
-
-                    fz = farfield[pol][0, ..., 0]
-                    # ez = ez[monitor_slice]
-                    if (
-                        len(monitor_slice.x.shape) <= 1
-                        or len(monitor_slice.y.shape) <= 1
-                    ):  # 1d slice
-                        fz = fz.reshape(1, -1)
-                    else:  # 2d slice
-                        if monitor_direction[0] == "y":
-                            fz = fz.t()
-                    shape_similarity = get_shape_similarity(
-                        fz,
-                        grid_step=self.grid_step,
-                        shape_type=shape_type,
-                        shape_cfg=shape_cfg,
-                        intensity=self.intensity,
-                        similarity=self.similarity,
+                elif polarization == "Hz":
+                    fx_near, fy_near, fz_near = (
+                        field["Ex"],
+                        field["Ey"],
+                        field["Hz"],
                     )
-                    similarity_list.append(shape_similarity)
+                else:
+                    raise ValueError(f"Unsupported 2-D polarization {polarization!r}")
+                farfield = get_farfields_GreenFunction(
+                    nearfield_slices=[
+                        self.port_slices[name]
+                        for name in self.port_slices
+                        if name.startswith("nearfield")
+                    ],
+                    nearfield_slices_info=[
+                        self.port_slices_info[name]
+                        for name in self.port_slices_info
+                        if name.startswith("nearfield")
+                    ],
+                    Fz=fz_near[None, ..., None],
+                    Fx=fx_near[None, ..., None],
+                    Fy=fy_near[None, ..., None],
+                    farfield_x=None,
+                    farfield_slice_info=self.port_slices_info[self.out_slice_name],
+                    freqs=torch.tensor([1 / wavelength], device=fz_near.device),
+                    eps=self.eps_bg,
+                    mu=MU_0,
+                    dL=self.grid_step,
+                    component=polarization,
+                    decimation_factor=4,
+                )
+                if self.return_field == "farfield":
+                    raw_results[result_key] = farfield
+                    continue
+                fz = farfield[polarization][0, ..., 0]
+                monitor_slice = self.port_slices[self.out_slice_name]
+                monitor_direction = self.port_slices_info[self.out_slice_name][
+                    "direction"
+                ]
+                if len(monitor_slice.x.shape) <= 1 or len(monitor_slice.y.shape) <= 1:
+                    fz = fz.reshape(1, -1)
+                elif monitor_direction[0] == "y":
+                    fz = fz.t()
+            similarity_list.append(
+                get_shape_similarity(
+                    fz,
+                    grid_step=self.grid_step,
+                    shape_type=self.shape_type,
+                    shape_cfg=self.shape_cfg,
+                    intensity=self.intensity,
+                    similarity=self.similarity,
+                )
+            )
+        if self.return_field is not None:
+            return raw_results
+        if not similarity_list:
+            raise ValueError("No fields matched the near-to-far objective selection")
         if isinstance(similarity_list[0], Tensor):
             return torch.mean(torch.stack(similarity_list))
         else:
@@ -1466,7 +2036,7 @@ class EnergyConstraintObjective(object):
                     for region_name, region_mask in self.design_region_masks.items():
                         region_cfg = self.design_region_cfgs[region_name]
                         eps_bg = region_cfg.get("eps_bg", 1.0)
-                        eps_r = region_cfg.get("eps_r", 12.0)
+                        eps_r = region_cfg.get("eps_r", region_cfg.get("eps", 12.0))
 
                         ## the gradient flow back to both fz and epsilon
                         penalty = penalty + energy_constraint_penalty(
@@ -1484,7 +2054,7 @@ class EnergyConstraintObjective(object):
                     for region_name, region_mask in self.design_region_masks.items():
                         region_cfg = self.design_region_cfgs[region_name]
                         eps_bg = region_cfg.get("eps_bg", 1.0)
-                        eps_r = region_cfg.get("eps_r", 12.0)
+                        eps_r = region_cfg.get("eps_r", region_cfg.get("eps", 12.0))
 
                         ## the gradient flow back to both fz and epsilon
                         penalty = penalty + energy_constraint_penalty(
@@ -1601,7 +2171,7 @@ class StructureSimplifyObjective(object):
                     for region_name, region_mask in self.design_region_masks.items():
                         region_cfg = self.design_region_cfgs[region_name]
                         eps_bg = region_cfg.get("eps_bg", 1.0)
-                        eps_r = region_cfg.get("eps_r", 12.0)
+                        eps_r = region_cfg.get("eps_r", region_cfg.get("eps", 12.0))
 
                         penalty = penalty + structure_simplify_penalty(
                             fz=fz,  # [X, Y]
@@ -1621,7 +2191,7 @@ class StructureSimplifyObjective(object):
                     for region_name, region_mask in self.design_region_masks.items():
                         region_cfg = self.design_region_cfgs[region_name]
                         eps_bg = region_cfg.get("eps_bg", 1.0)
-                        eps_r = region_cfg.get("eps_r", 12.0)
+                        eps_r = region_cfg.get("eps_r", region_cfg.get("eps", 12.0))
 
                         ## the gradient flow back to both fz and epsilon
                         penalty = penalty + structure_simplify_penalty(
@@ -1643,6 +2213,300 @@ class StructureSimplifyObjective(object):
             return npa.array(total_penalty)
 
 
+class ErosionDilationPenalty(nn.Module):
+    """Differentiable erosion-dilation manufacturing penalty module.
+
+    Enforces minimum feature size and minimum curvature radius constraints
+    on photonic topology design regions by penalizing the RMS difference
+    between morphological closing (dilated-eroded) and opening (eroded-dilated)
+    occupancy fields.
+    """
+
+    def __init__(
+        self,
+        length_scale: float = 0.15,
+        planes: str | Sequence[str] = ("middle",),
+        plane_weights: dict[str, float] | Sequence[float] | None = None,
+        aggregation: str = "mean",
+        beta: float = 100.0,
+        eta: float = 0.5,
+        delta_eta: float = 0.01,
+        evaluation_band: float = 0.0,
+        evaluation_band_px: int = 0,
+        extra_halo_px: int = 0,
+        operator_mode: str = "tidy3d",
+        sims: dict | None = None,
+        device: Any | None = None,
+        design_region_masks: dict | None = None,
+        design_region_cfgs: dict | None = None,
+        design_region_param_cfgs: dict | None = None,
+        design_region_axis_weights: dict | None = None,
+        grid_metadata: RectilinearGridMetadata | dict[str, Any] | None = None,
+        grid_step: float | None = None,
+        pixel_size: float | Sequence[float] | None = None,
+        region_names: str | Sequence[str] | None = None,
+        weight: float = 1.0,
+        eta0: float | None = None,
+        eps_core: complex | float | None = None,
+        eps_clad: complex | float | None = None,
+        objective_func: Any | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__()
+        self.objective_func = objective_func
+        self.length_scale = float(length_scale)
+        if isinstance(planes, str):
+            self.planes = (planes,)
+        else:
+            self.planes = tuple(planes)
+        self.plane_weights = plane_weights
+        self.aggregation = str(aggregation)
+        self.beta = float(beta)
+        self.eta = float(eta0 if eta0 is not None else eta)
+        self.delta_eta = float(delta_eta)
+        self.evaluation_band = float(evaluation_band)
+        self.evaluation_band_px = int(evaluation_band_px)
+        self.extra_halo_px = int(extra_halo_px)
+        self.operator_mode = str(operator_mode)
+
+        self.sims = sims or {}
+        self.device = device
+        self.design_region_masks = design_region_masks
+        self.design_region_cfgs = design_region_cfgs or (
+            getattr(device, "design_region_cfgs", None) or {}
+        )
+        self.design_region_param_cfgs = design_region_param_cfgs or (
+            getattr(device, "design_region_param_cfgs", None) or {}
+        )
+        self.design_region_axis_weights = design_region_axis_weights or (
+            getattr(device, "design_region_axis_weights", None) or {}
+        )
+        self.grid_metadata = grid_metadata
+        self.grid_step = grid_step
+        self._explicit_pixel_size = pixel_size is not None
+        self.pixel_size = pixel_size if pixel_size is not None else grid_step
+        if region_names is not None:
+            self.region_names = (
+                (region_names,)
+                if isinstance(region_names, str)
+                else tuple(region_names)
+            )
+        else:
+            self.region_names = None
+        self.weight = float(weight)
+        self.eps_core = eps_core
+        self.eps_clad = eps_clad
+
+        self._context_cache: dict[tuple, dict[str, Any]] = {}
+        self.cache_hits: int = 0
+        self.cache_misses: int = 0
+        self.last_plane_penalties: dict[str, Any] = {}
+        self.last_diagnostics: dict[str, Any] = {}
+
+    def clear_cache(self) -> None:
+        """Clear cached simulation context tensors and reset hit/miss counters."""
+        self._context_cache.clear()
+        self.cache_hits = 0
+        self.cache_misses = 0
+
+    def _resolve_context_key(
+        self,
+        region_name: str | None,
+        plane_name: str,
+        sim_shape: tuple[int, ...],
+        rx: int,
+        ry: int,
+        eval_bounds: tuple[int, int, int, int],
+        extra_halo_px: int,
+        device: torch.device | str,
+        dtype: torch.dtype,
+    ) -> tuple:
+        return (
+            str(region_name),
+            str(plane_name),
+            tuple(sim_shape[-2:]),
+            int(rx),
+            int(ry),
+            tuple(eval_bounds),
+            int(extra_halo_px),
+            str(device),
+            str(dtype),
+        )
+
+    def evaluate(
+        self,
+        x: Tensor,
+        pixel_size: float | Sequence[float] | None = None,
+        **kwargs: Any,
+    ) -> Tensor:
+        """Evaluate penalty on input tensor x (e.g. parameter or permittivity map)."""
+        px = pixel_size if pixel_size is not None else self.pixel_size
+        return self(epsilon_map=x, pixel_size=px, **kwargs)
+
+    def forward(
+        self,
+        epsilon_map: Tensor | None = None,
+        fields: dict | None = None,
+        rho: Tensor | None = None,
+        **kwargs: Any,
+    ) -> Tensor:
+        """Evaluate erosion-dilation penalty across configured regions and planes."""
+        target_eps = epsilon_map
+        if target_eps is None and rho is None:
+            if hasattr(self, "eps") and self.eps is not None:
+                target_eps = self.eps
+            elif (
+                hasattr(self, "objective_func")
+                and self.objective_func is not None
+                and getattr(self.objective_func, "eps", None) is not None
+            ):
+                target_eps = self.objective_func.eps
+            elif (
+                self.device is not None
+                and getattr(self.device, "epsilon_map", None) is not None
+            ):
+                target_eps = self.device.epsilon_map
+            elif len(self.sims) > 0:
+                first_sim = next(iter(self.sims.values()))
+                target_eps = getattr(first_sim, "eps_r", None)
+
+        masks = self.design_region_masks
+        if masks is None and self.device is not None:
+            masks = getattr(self.device, "design_region_masks", None)
+
+        if self.region_names is not None:
+            eval_regions = list(self.region_names)
+        elif masks is not None and len(masks) > 0:
+            eval_regions = list(masks.keys())
+        else:
+            eval_regions = [None]
+
+        px = kwargs.get("pixel_size", self.pixel_size)
+        if px is None and self.device is not None:
+            px = getattr(self.device, "grid_step", 0.02)
+        if px is None:
+            px = 0.02
+        dl_x = float(px if isinstance(px, (int, float)) else px[0])
+        dl_y = float(px if isinstance(px, (int, float)) else px[1])
+        rx, ry = get_ed_kernel_radius_px(self.length_scale, (dl_x, dl_y))
+
+        region_penalties = []
+        diag_by_region = {}
+
+        for r_name in eval_regions:
+            mask = (
+                masks.get(r_name)
+                if (masks is not None and r_name is not None)
+                else kwargs.get("design_region_mask", None)
+            )
+            cfg = self.design_region_cfgs.get(r_name, {}) if r_name is not None else {}
+            param_cfg = (
+                self.design_region_param_cfgs.get(r_name, {})
+                if r_name is not None
+                else {}
+            )
+
+            eps_core = kwargs.get("eps_core", self.eps_core)
+            if eps_core is None:
+                eps_core = cfg.get("eps")
+            eps_clad = kwargs.get("eps_clad", self.eps_clad)
+            if eps_clad is None:
+                eps_clad = cfg.get("eps_bg")
+            if eps_clad is None and self.device is not None:
+                eps_clad = getattr(self.device, "eps_bg", None)
+
+            fixed_map = kwargs.get("fixed_epsilon_map", None)
+            if fixed_map is None and self.device is not None:
+                fixed_map = getattr(self.device, "epsilon_map", None)
+
+            axis_weights = self.design_region_axis_weights.get(r_name, None)
+            grid_meta = kwargs.get("grid_metadata", self.grid_metadata)
+            if grid_meta is None and self.device is not None:
+                grid_meta = getattr(self.device, "optical_grid_metadata", None)
+                if grid_meta is None and hasattr(self.device, "grid_info_dict"):
+                    grid_meta = self.device.grid_info_dict.get("epsilon_map", None)
+
+            eval_band = kwargs.get("evaluation_band", self.evaluation_band)
+            eval_band_px = kwargs.get("evaluation_band_px", self.evaluation_band_px)
+            extra_halo = kwargs.get("extra_halo_px", self.extra_halo_px)
+            op_mode = kwargs.get("operator_mode", self.operator_mode)
+            use_cache = kwargs.get("use_cache", True)
+            planes_arg = kwargs.get("planes", self.planes)
+            plane_weights_arg = kwargs.get("plane_weights", self.plane_weights)
+            agg_arg = kwargs.get("aggregation", self.aggregation)
+            length_scale_arg = kwargs.get("length_scale", self.length_scale)
+            beta_arg = kwargs.get("beta", self.beta)
+            eta_arg = kwargs.get("eta", self.eta)
+            delta_eta_arg = kwargs.get("delta_eta", self.delta_eta)
+            rho_coords_arg = kwargs.get("rho_coords", None)
+
+            cache_stats = {"hits": 0, "misses": 0}
+            cache_prefix = (
+                str(r_name),
+                id(fixed_map) if fixed_map is not None else 0,
+            )
+
+            pen, details = erosion_dilation_penalty(
+                epsilon_map=target_eps,
+                rho=rho,
+                fixed_epsilon_map=fixed_map,
+                design_region_mask=mask,
+                eps_core=eps_core,
+                eps_clad=eps_clad,
+                length_scale=length_scale_arg,
+                pixel_size=px,
+                planes=planes_arg,
+                plane_weights=plane_weights_arg,
+                aggregation=agg_arg,
+                beta=beta_arg,
+                eta=eta_arg,
+                delta_eta=delta_eta_arg,
+                axis_weights=axis_weights,
+                evaluation_band=eval_band,
+                evaluation_band_px=eval_band_px,
+                extra_halo_px=extra_halo,
+                operator_mode=op_mode,
+                grid_metadata=grid_meta,
+                design_region_cfg=cfg if cfg else kwargs.get("design_region_cfg", None),
+                design_region_param_cfg=(
+                    param_cfg
+                    if (
+                        param_cfg
+                        and not self._explicit_pixel_size
+                        and "pixel_size" not in kwargs
+                    )
+                    else kwargs.get("design_region_param_cfg", None)
+                ),
+                rho_coords=rho_coords_arg,
+                return_details=True,
+                _context_cache=self._context_cache if use_cache else None,
+                _cache_key_prefix=cache_prefix if use_cache else None,
+                _cache_stats=cache_stats if use_cache else None,
+            )
+
+            self.cache_hits += cache_stats["hits"]
+            self.cache_misses += cache_stats["misses"]
+
+            region_penalties.append(pen)
+            diag_by_region[r_name or "default"] = details
+
+        if len(region_penalties) == 1:
+            total_penalty = region_penalties[0]
+            self.last_plane_penalties = next(iter(diag_by_region.values()))[
+                "plane_penalties"
+            ]
+        else:
+            total_penalty = torch.stack(region_penalties).mean()
+            self.last_plane_penalties = {
+                f"{r}_{p}": d["plane_penalties"][p]
+                for r, d in diag_by_region.items()
+                for p in d["plane_penalties"]
+            }
+
+        self.last_diagnostics = diag_by_region
+        return total_penalty
+
+
 class ObjectiveFunc(object):
     def __init__(
         self,
@@ -1661,6 +2525,8 @@ class ObjectiveFunc(object):
         cell_weights: Tuple[Tensor | np.ndarray] | None = None,
         design_region_masks: dict = None,
         design_region_cfgs: dict = None,
+        design_region_param_cfgs: dict = None,
+        design_region_axis_weights: dict = None,
     ):
         """_summary_
 
@@ -1687,6 +2553,16 @@ class ObjectiveFunc(object):
         self.port_slices_native_symmetry = port_slices_native_symmetry
         self.design_region_masks = design_region_masks
         self.design_region_cfgs = design_region_cfgs
+        self.design_region_param_cfgs = (
+            design_region_param_cfgs
+            if design_region_param_cfgs is not None
+            else getattr(device, "design_region_param_cfgs", None)
+        )
+        self.design_region_axis_weights = (
+            design_region_axis_weights
+            if design_region_axis_weights is not None
+            else getattr(device, "design_region_axis_weights", None)
+        )
 
         if self.grid_metadata is not None or self.cell_weights is None:
             logging.warning(
@@ -1849,7 +2725,7 @@ class ObjectiveFunc(object):
             out_modes = cfg.get("out_modes", None)
             direction = cfg.get("direction", None)
             target_wls = cfg.get("wl", None)
-            target_temps = cfg["control_keys"] if "control_keys" in cfg else cfg["temp"]
+            target_temps = cfg.get("control_keys", cfg.get("temp", (300,)))
             shape_type = cfg.get("shape_type", None)
             shape_cfg = cfg.get("shape_cfg", None)
 
@@ -1888,7 +2764,7 @@ class ObjectiveFunc(object):
                     target_wls=target_wls,
                     target_temps=target_temps,
                     grid_step=self.grid_step,
-                    energy=False,
+                    energy=cfg.get("energy", False),
                     obj_type=obj_type,
                     grid_metadata=self.grid_metadata,
                     cell_weights=self.cell_weights,
@@ -1991,6 +2867,36 @@ class ObjectiveFunc(object):
                     cell_weights=self.cell_weights,
                 )
 
+            elif obj_type == "target_intensity":
+                objfn = TargetIntensityObjective(
+                    sims=self.sims,
+                    port_slices=self.port_slices,
+                    in_slice_name=in_slice_name,
+                    out_slice_name=out_slice_name,
+                    in_mode=in_mode,
+                    target_wls=target_wls,
+                    target_temps=target_temps,
+                    target_intensity=cfg["target_intensity"],
+                    field_components=cfg.get("field_components", ("Ex", "Ey", "Ez")),
+                )
+
+            elif obj_type == "target_intensity_angular_spectrum":
+                objfn = TargetIntensityAngularSpectrumObjective(
+                    sims=self.sims,
+                    port_slices=self.port_slices,
+                    in_slice_name=in_slice_name,
+                    out_slice_name=out_slice_name,
+                    in_mode=in_mode,
+                    target_wls=target_wls,
+                    target_temps=target_temps,
+                    target_intensity=cfg["target_intensity"],
+                    field_components=cfg.get("field_components", ("Ex", "Ey", "Ez")),
+                    projection_distance_um=cfg["projection_distance_um"],
+                    grid_step_um=self.grid_step,
+                    eps_bg=self.eps_bg,
+                    evanescent=cfg.get("evanescent", "decay"),
+                )
+
             elif obj_type == "intensity_shape_near2far":
                 objfn = ShapeSimilarityNear2FarObjective(
                     sims=self.sims,
@@ -2013,6 +2919,8 @@ class ObjectiveFunc(object):
                     total_farfield_region_solutions=self.total_farfield_region_solutions,
                     grid_metadata=self.grid_metadata,
                     cell_weights=self.cell_weights,
+                    return_field=cfg.get("return_field"),
+                    projection_backend=cfg.get("projection_backend", "direct_torch"),
                 )
             elif obj_type == "interface_penalty":
                 objfn = InterfacePenaltyObjective(
@@ -2054,6 +2962,32 @@ class ObjectiveFunc(object):
                     soft=cfg.get("soft", True),
                     temperature=cfg.get("temperature", 0.05),
                 )
+            elif obj_type == "erosion_dilation_penalty":
+                objfn = ErosionDilationPenalty(
+                    sims=self.sims,
+                    device=self.device,
+                    grid_step=self.grid_step,
+                    pixel_size=cfg.get("pixel_size", None),
+                    grid_metadata=cfg.get("grid_metadata", self.grid_metadata),
+                    design_region_masks=self.design_region_masks,
+                    design_region_cfgs=self.design_region_cfgs,
+                    design_region_param_cfgs=self.design_region_param_cfgs,
+                    design_region_axis_weights=self.design_region_axis_weights,
+                    length_scale=cfg.get("length_scale", 0.15),
+                    planes=cfg.get("planes", ("middle",)),
+                    plane_weights=cfg.get("plane_weights", None),
+                    aggregation=cfg.get("aggregation", "mean"),
+                    beta=cfg.get("beta", 100.0),
+                    eta=cfg.get("eta", cfg.get("eta0", 0.5)),
+                    delta_eta=cfg.get("delta_eta", 0.01),
+                    evaluation_band=cfg.get("evaluation_band", 0.0),
+                    evaluation_band_px=cfg.get("evaluation_band_px", 0),
+                    operator_mode=cfg.get("operator_mode", "tidy3d"),
+                    extra_halo_px=cfg.get("extra_halo_px", 0),
+                    region_names=cfg.get("region_names", None),
+                    weight=cfg.get("weight", 1.0),
+                    objective_func=self,
+                )
             else:
                 raise ValueError("Invalid type")
 
@@ -2063,6 +2997,13 @@ class ObjectiveFunc(object):
                 "weight": cfg["weight"],
                 "fn": objfn,
                 "requires_grad": cfg.get("requires_grad", True),
+                "include_in_fusion": cfg.get(
+                    "include_in_fusion",
+                    not (
+                        obj_type == "intensity_shape_near2far"
+                        and cfg.get("return_field") is not None
+                    ),
+                ),
             }
 
     def build_jacobian(self):
@@ -2205,6 +3146,17 @@ class ObjectiveFunc(object):
             sim.field_grid_metadata = state["field_grid_metadata"]
             sim.optical_grid_metadata = state["field_grid_metadata"]
         electrical_conductivity = state.get("electrical_conductivity")
+        field_grid_metadata = getattr(sim, "optical_grid_metadata", None)
+        if (
+            electrical_conductivity is not None
+            and isinstance(field_grid_metadata, dict)
+            and "native" in field_grid_metadata
+        ):
+            electrical_conductivity = self.device._resample_map_to_fdtdx_native(
+                electrical_conductivity,
+                map_name="electrical_conductivity_map",
+                native_grid=field_grid_metadata["native"],
+            )
         if (
             electrical_conductivity is not None
             or getattr(sim, "electrical_conductivity_map", None) is None
@@ -2214,6 +3166,7 @@ class ObjectiveFunc(object):
     def obtain_objective(
         self, permittivity: np.ndarray | Tensor, custom_source: dict = None
     ) -> Tuple[dict, Tensor]:
+        self.eps = permittivity
         self.solutions = {}
         self.As = {}
         self._runtime_state_cache = {}
@@ -2221,9 +3174,10 @@ class ObjectiveFunc(object):
         temperatures = []
         torch.cuda.empty_cache()
         for _, cfg in self.obj_cfgs.items():
-            temperatures = temperatures + (
-                cfg["control_keys"] if "control_keys" in cfg else cfg["temp"]
-            )
+            temps = cfg.get("control_keys", cfg.get("temp", [300]))
+            if isinstance(temps, (int, float)):
+                temps = [temps]
+            temperatures = temperatures + list(temps)
         temperatures = set(temperatures)
         if custom_source is None:
             ### we only refactor the A matrix if A changes, i.e., different wl, eps, pol.
@@ -2232,6 +3186,8 @@ class ObjectiveFunc(object):
             _simulation_queues = {}
 
             for slice_name, port_profile in self.port_profiles.items():
+                if slice_name.endswith("_field_monitor"):
+                    continue
                 ## for 2D FDFD, wl here is one number; for 3D fdtdx, wl is a tuple of (wl_cen, wl_width, n_wl)
                 for (wl, mode), (
                     source,
@@ -2420,7 +3376,12 @@ class ObjectiveFunc(object):
                 "value": value,
             }
         ## here we accept customized fusion function, e.g., weighted sum by default.
-        fusion_results = self._obj_fusion_func(self.breakdown)
+        fusion_breakdown = {
+            name: value
+            for name, value in self.breakdown.items()
+            if self.Js[name].get("include_in_fusion", True)
+        }
+        fusion_results = self._obj_fusion_func(fusion_breakdown)
         if isinstance(fusion_results, tuple):
             total_loss, extra_breakdown = fusion_results
         else:

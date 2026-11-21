@@ -13,11 +13,13 @@ sys.path.insert(
 import numpy as np
 import torch
 from pyutils.config import Config
+from pyutils.general import logger
 
 from core.invdes.invdesign import InvDesign
 from core.invdes.models import WDMOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import WDM
+from core.invdes.run_management import OptimizationRunManager
 from core.utils import set_torch_deterministic
 
 sys.path.pop(0)
@@ -42,6 +44,17 @@ if __name__ == "__main__":
     n_wl = 4
     mode = "Hz1"
     exp_name = f"wdm_opt-port-{num_outports}_SiN_neff1.7_{mdm_region_size[0]}x{mdm_region_size[1]}"
+    work_root = "./runs"
+    resume_checkpoint = os.environ.get("MAPS_RESUME_CHECKPOINT")
+
+    run_manager = OptimizationRunManager(
+        root=work_root,
+        experiment="wdm_SiN",
+        tag=f"{exp_name}_lbfgs",
+        resume=resume_checkpoint is not None,
+        resume_from=resume_checkpoint,
+    )
+    run_manager.attach_logger(logger)
 
     sim_cfg.update(
         dict(
@@ -49,7 +62,6 @@ if __name__ == "__main__":
             # border_width=[port_len, port_len, 2, 2],
             border_width=[0, 0, 2, 2],
             resolution=resolution,
-            plot_root=f"./figs/{exp_name}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -59,6 +71,7 @@ if __name__ == "__main__":
             n_wl=n_wl,
         )
     )
+    run_manager.bind_simulation_config(sim_cfg)
 
     def fom_func(breakdown):
         ## maximization fom
@@ -253,6 +266,7 @@ if __name__ == "__main__":
     # first use lbfgs with fixed sharpness to get a good initial design.
     invdesign = InvDesign(
         devOptimization=opt,
+        run_manager=run_manager,
         optimizer=dict(
             name="lbfgs",
             lr=0.2,
@@ -295,14 +309,24 @@ if __name__ == "__main__":
             ckpt_name=f"{exp_name}",
             dump_gds=True,
             gds_name=f"{exp_name}",
+            load_ckpt=resume_checkpoint,
+            resume=resume_checkpoint is not None,
         ),
     )
 
     invdesign.optimize()
 
     ## then switch to Adam for further optimization and better convergence
+    adam_run_manager = OptimizationRunManager(
+        root=work_root,
+        experiment="wdm_SiN",
+        tag=f"{exp_name}_adam",
+    )
+    adam_run_manager.attach_logger(logger)
+    adam_run_manager.bind_simulation_config(sim_cfg)
     invdesign = InvDesign(
         devOptimization=opt,
+        run_manager=adam_run_manager,
         optimizer=dict(
             name="Adam",
             lr=0.1,

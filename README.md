@@ -9,6 +9,14 @@ This repo is the official implementation of ["MAPS: Multi-Fidelity AI-Augmented 
 </p>
 
 ## News
+[2026/11/20] Released v0.0.5
+- **Public `fdtdx` 3D Adjoint Support**: Added `thirdparty/fdtdx` compatibility and adjoint source extensions on top of public [`fdtdx`](https://github.com/ymahlau/fdtdx) (pinned commit [`77b4bc52`](https://github.com/ymahlau/fdtdx/commit/77b4bc523a8e98cb7dd388e99481a0000f71dd4d)) *(Note: do not install the PyPI `fdtdx==0.6.2` release; see [Installation](#installation).)*
+- **Broadband & Sparse 3D FDTD**: Added Chebyshev broadband mode sources, factored Chebyshev broadband adjoints, Tidy3D-style tilted/defocused Gaussian beam sources (`GaussianPlaneSourceTidy3d`), and memory-efficient sparse phasor recording (`MAPS_SPARSE_PHASOR=1`).
+- **Physical Power & Observable Normalization**: Unified SI surface-area quadrature and discrete pulse-spectrum normalization across 2D FDFD and 3D FDTD-X (`FluxObjective`, `EigenmodeObjective`, `SMatrixObjective`, cross-axis monitors, and PEC/PMC symmetry unfolding).
+- **Metasurface & Near-to-Far Workflows**: Added `Metasurface` inverse design and exact/accelerated Stratton-Chu & angular-spectrum near-to-far projection (`core/nearfield/`, `examples/nearfield/`).
+- **Manufacturing & Variation Robustness**: Added Tidy3D-style differentiable `ErosionDilationPenalty` with simulation-context halo padding, stochastic fabrication/source variation optimization (`core/invdes/variation/`), and CUDA `gpu_subpixel` rasterization (`box`, `circle`, `digital_y_branch*`).
+- **Run Management, Visualization, Docs & CI**: Added `OptimizationRunManager`, Tidy3D 3D field visualization exports (`core/visualization/`), MkDocs technical documentation (`docs/`), and structured `pytest` regression suites (`tests/`).
+
 [2026/07/05] Released v0.0.4
 - Integrate fdtdx(https://github.com/ymahlau/fdtdx) solver to enable GPU-accelerated 3D FDTD and (broadband) adjoint optimization. *Currently depend on private internal fdtdx-adjoint library to support adjoint 3D FDTD inverse design*
 - Support reduced-degree-of-freedom FEM-based differentiable/adjoint HEAT solver to enable thermo-optical co-simulation and inverse design.
@@ -48,9 +56,9 @@ This repo is the official implementation of ["MAPS: Multi-Fidelity AI-Augmented 
 ## Table of Contents
 
 - [Introduction](#introduction)
-- [Features](#features)
+- [Interactive Runtime Architecture](#interactive-runtime-architecture)
 - [Folder Structure](#folder-structure)
-- [Prerequisites](#Prerequisites)
+- [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Usage](#usage)
 
@@ -80,27 +88,71 @@ flexible neural network model definition, and diverse datadriven/physics-driven 
   <img src="assets/MAPSInvDes.png" width="450" height="360"/>
 </p>
 
+## Interactive Runtime Architecture
+
+Explore the code-backed runtime architecture of MAPS (generated with [Archify](https://github.com/tt-a1i/archify)):
+
+- **[Interactive MAPS Runtime Architecture (`docs/architecture/maps-runtime.architecture.html`)](docs/architecture/maps-runtime.architecture.html)** — standalone interactive HTML diagram (download or open directly in a browser; no extra install needed). Includes **4 guided views** (*MAPS-InvDes Loop*, *2D/3D Multi-Physics Solvers*, *MAPS-Data & MAPS-Train*, *Fabrication & Variation*), upstream/downstream reach tracing, source file/line inspection, light/dark themes, and PNG/SVG/WebM export.
+- **[Architecture Overview (`docs/architecture/overview.md`)](docs/architecture/overview.md)** · **[Typed Archify Spec (`docs/architecture/maps-runtime.architecture.json`)](docs/architecture/maps-runtime.architecture.json)**
+
 ## Folder Structure
-- **configs/**: Configuration files for various simulation aspects.
-  - **fdfd/**: Hierarchical YAML configuration files.
-- **core/**: Contains the core codebase of MAPS.
-  - **fdfd/**: Differentiable FDFD solver.
-  - **invdes/**: MAPS-InvDes framework: optimization plan, device definition, and examples.
-  - **train/**: MAPS-Train framework: datasets, examples, model definition, builder, etc.
-  - **data/**: MAPS-Data framework: generate device simulation datasets.
+- **configs/**: Configuration files for simulation, neural surrogate training, and variation workflows.
+- **core/**: Core codebase of MAPS.
+  - **fdfd/**: Differentiable 2D uniform & rectilinear FDFD solver.
+  - **fdtd/**: Differentiable 3D FDTD-X wrapper and broadband adjoint solver.
+  - **heat/**: Differentiable FEM thermo-optic heat solver.
+  - **nearfield/**: 2D/3D near-to-far projection (Stratton-Chu & angular spectrum).
+  - **invdes/**: MAPS-InvDes framework: parametrization, objectives, variation, devices, and examples.
+  - **inv_litho/**: Differentiable inverse lithography models.
+  - **train/**: MAPS-Train framework: neural operator models, datasets, losses, and trainers.
+  - **visualization/**: Tidy3D and cross-section field visualization utilities.
+- **data/**: MAPS-Data dataset generation scripts (`data/fdfd/`, `data/fdtd/`).
+- **docs/**: Technical documentation, scientific conventions, and API references.
+- **examples/**: Interactive near-field / metasurface walkthrough notebooks.
+- **gpu_subpixel/**: CUDA-accelerated exact geometric subpixel rasterizer.
 - **scripts/**: Experiment launching scripts.
-- **thirdparty/**: Thirdparty libraries.
-  - **ceviche/**: Thirdparty ceviche for FDFD inverse design.
-- **unitest/**: Example scripts demonstrating module usage.
+- **tests/**: Structured `pytest` unit, integration, gradient, numerical, and FDTD-X test suites.
+- **thirdparty/**: Bundled extensions (`thirdparty/ceviche/`, `thirdparty/fdtdx/`).
 
 ## Prerequisites
 
-- Python 3.11 or higher
-- Required Python packages (listed in requirements.txt)
-- pyutils[https://github.com/JeremieMelo/pyutility]
+- Linux with NVIDIA GPU driver and CUDA 12.8 runtime
+- Python 3.11 (`3.11.10` validated)
+- Conda / Miniforge (bootstrapped automatically by `install.sh` if absent)
+- [`pyutility`](https://github.com/JeremieMelo/pyutility) (`pyutils`, installed automatically by `install.sh`)
+- For 3D FDTD workflows: upstream [`fdtdx`](https://github.com/ymahlau/fdtdx) at **exact commit `77b4bc523a8e98cb7dd388e99481a0000f71dd4d`** (see warning below)
 
 ## Installation
-```git clone https://github.com/ScopeX-ASU/MAPS```
+
+Clone the repository:
+```bash
+git clone https://github.com/ScopeX-ASU/MAPS.git
+cd MAPS
+```
+
+1. **Default installation (2D FDFD, dataset generation, neural surrogate training, and GDS layout tools)**:
+```bash
+bash install.sh
+python verify_install.py
+```
+
+2. **Full 3D installation (adds JAX, pinned `fdtdx`, and thermo-optic `jax-fem` heat solver)**:
+```bash
+INSTALL_OPTIONAL_3D=1 bash install.sh
+python verify_install.py --require-optional-3d
+```
+
+> [!IMPORTANT]
+> **`fdtdx` Commit Requirement (Do NOT install PyPI `fdtdx==0.6.2`)**
+>
+> MAPS v0.0.5 requires a specific post-`0.6.2` commit of [`ymahlau/fdtdx`](https://github.com/ymahlau/fdtdx) (`77b4bc523a8e98cb7dd388e99481a0000f71dd4d`, 68 commits ahead of tag `v0.6.2`) for rectilinear grids, generalized mode-overlap detectors, and symmetry fixes. Because upstream `pyproject.toml` at that commit still reports version `0.6.2`, `pip list` will display `0.6.2`, **but installing `pip install fdtdx==0.6.2` from PyPI will fail**.
+>
+> Always install `fdtdx` via `INSTALL_OPTIONAL_3D=1 bash install.sh` or directly from the pinned commit:
+> ```bash
+> python -m pip install --force-reinstall --no-deps \
+>   "fdtdx @ git+https://github.com/ymahlau/fdtdx.git@77b4bc523a8e98cb7dd388e99481a0000f71dd4d"
+> ```
+> Run `python verify_install.py --require-optional-3d` to verify the installed Git commit provenance. See [README_install.md](README_install.md) for full dependency details.
 
 ## Usage
 1. run examples of inverse design, e.g., waveguide bending

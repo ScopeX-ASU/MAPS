@@ -31,16 +31,19 @@ def _zeropower_via_newtonschulz(
     grad: Tensor, ns_coefficients: tuple[float, float, float], ns_steps: int, eps: float
 ) -> Tensor:
     """
-    Newton-Schulz iteration to compute the zeroth power / orthogonalization of G. We opt to use a
-    quintic iteration whose coefficients are selected to maximize the slope at zero. For the purpose
-    of minimizing steps, it turns out to be empirically effective to keep increasing the slope at
-    zero even beyond the point where the iteration no longer converges all the way to one everywhere
-    on the interval. This iteration therefore does not produce UV^T but rather something like US'V^T
-    where S' is diagonal with S_{ii}' ~ Uniform(0.5, 1.5), which turns out not to hurt model
-    performance at all relative to UV^T, where USV^T = G is the SVD.
+    Compute a Newton-Schulz approximate zeroth power (orthogonalized update) of a 2-D gradient matrix.
 
-    Implementation reference: https://github.com/KellerJordan/Muon/blob/master/muon.py
-    with suggestions by @jxbz, @leloykun, and @YouJiacheng.
+    Args:
+        grad (torch.Tensor): Two-dimensional real gradient matrix. The implementation computes in ``bfloat16`` and restores the original orientation for tall matrices.
+        ns_coefficients (tuple[float, float, float]): Quintic Newton-Schulz polynomial coefficients ``(a, b, c)``.
+        ns_steps (int): Number of Newton-Schulz iterations. Must be less than 100.
+        eps (float): Lower bound used when normalizing the gradient spectral norm.
+
+    Returns:
+        torch.Tensor: Approximately orthogonalized matrix with the same 2-D orientation as ``grad``.
+
+    Raises:
+        ValueError: If ``ns_steps`` is at least 100, ``grad`` is not 2-D, or the coefficient tuple does not contain exactly three values.
     """
     if ns_steps >= 100:
         raise ValueError(
@@ -72,7 +75,17 @@ def _zeropower_via_newtonschulz(
 def _adjust_lr(
     lr: float, adjust_lr_fn: Optional[str], param_shape: torch.Size
 ) -> float:
-    """Default learning rate adjustment used by Muon."""
+    """
+    Adjust Muon's base learning rate according to the parameter matrix shape.
+
+    Args:
+        lr (float): Base learning rate.
+        adjust_lr_fn (str | None): Adjustment rule. Supported values are ``None``, ``"original"``, and ``"match_rms_adamw"``. Defaults to None.
+        param_shape (torch.Size): Shape of the 2-D parameter matrix; the first two dimensions determine the adjustment.
+
+    Returns:
+        float: Shape-adjusted learning rate.
+    """
     A, B = param_shape[:2]
 
     if adjust_lr_fn is None or adjust_lr_fn == "original":
@@ -98,6 +111,23 @@ class Muon(Optimizer):
         ns_steps: int = DEFAULT_NS_STEPS,
         adjust_lr_fn: Optional[str] = None,
     ) -> None:
+        """
+        Initialize Muon optimizer state and validate its matrix-parameter contract.
+
+        Args:
+            params (iterable): Iterable of parameters or parameter-group dictionaries.
+            lr (float | torch.Tensor): Base learning rate. Defaults to 1e-3.
+            weight_decay (float): Decoupled weight-decay coefficient. Defaults to 0.1.
+            momentum (float): Momentum interpolation factor. Defaults to 0.95.
+            nesterov (bool): Whether to use the Nesterov update form. Defaults to True.
+            ns_coefficients (tuple[float, float, float]): Newton-Schulz polynomial coefficients. Defaults to ``(3.4445, -4.7750, 2.0315)``.
+            eps (float): Numerical stabilizer for Newton-Schulz normalization. Defaults to 1e-7.
+            ns_steps (int): Number of Newton-Schulz iterations. Defaults to 5.
+            adjust_lr_fn (str | None): Learning-rate adjustment rule. Defaults to None.
+
+        Raises:
+            ValueError: If learning rate, momentum, or weight decay is negative; if the adjustment rule is unsupported; or if any parameter is not 2-D.
+        """
         if isinstance(lr, Tensor) and lr.numel() != 1:
             raise ValueError("Tensor lr must be 1-element")
         if not 0.0 <= lr:
@@ -140,6 +170,21 @@ class Muon(Optimizer):
         grads: list[Tensor],
         muon_momentum_bufs: list[Tensor],
     ):
+        """
+        Collect trainable parameters, gradients, and Muon momentum buffers for one parameter group.
+
+        Args:
+            group (MutableMapping): Optimizer parameter-group state.
+            params_with_grad (list[torch.Tensor]): Output list receiving parameters that currently have gradients.
+            grads (list[torch.Tensor]): Output list receiving corresponding dense gradients.
+            muon_momentum_bufs (list[torch.Tensor]): Output list receiving persistent momentum buffers.
+
+        Returns:
+            bool: Complex-parameter flag expected by the generic optimizer kernel; this implementation always returns False.
+
+        Raises:
+            RuntimeError: If a parameter is complex or its gradient is sparse.
+        """
         for p in group["params"]:
             if p.grad is None:
                 continue
@@ -164,7 +209,15 @@ class Muon(Optimizer):
 
     @torch.no_grad()
     def step(self, closure=None):
-        """Performs a single optimization step."""
+        """
+        Perform one Muon optimization step using the configured momentum, Newton-Schulz, learning-rate adjustment, and decoupled weight-decay rules.
+
+        Args:
+            closure (Callable[[], torch.Tensor] | None): Optional closure that reevaluates the objective and gradients with gradient tracking enabled. Defaults to None.
+
+        Returns:
+            torch.Tensor | None: Closure loss when a closure is supplied; otherwise None.
+        """
         loss = None
         if closure is not None:
             with torch.enable_grad():

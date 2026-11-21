@@ -14,9 +14,21 @@ __all__ = ["NesterovAcceleratedGradientOptimizer"]
 
 class NesterovAcceleratedGradientOptimizer(Optimizer):
     """
-    Follow the Nesterov implementation of the e-place algorithm, but keep
-    optimizer state as one flattened tensor per parameter group so groups may
-    contain multiple parameter tensors.
+    Implement the e-place-inspired Nesterov accelerated-gradient optimizer with flattened per-group state, optional constraints, and Barzilai-Borwein step-size variants.
+
+    The optimizer supports full-group updates as well as tiled 2-D blockwise step-size estimation and optional smoothing of the resulting step-size map.
+
+    Args:
+        params (iterable): Parameters grouped by the optimizer.
+        lr (float): Initial learning-rate scale. Required by this optimizer.
+        constraint_fn (Callable | None): Constraint callback applied to candidate flattened parameter states. Defaults to None, which uses a no-op constraint.
+        alg (str): Step-size/update variant: ``"bb"``, ``"bb_static"``, ``"bb_static_blockwise"``, or ``"nobb"``. Defaults to ``"bb"``.
+        block_tile_size (int | Sequence[int] | None): Optional tile size for blockwise 2-D parameter step sizes. Defaults to None.
+        block_blur_kernel_size (int): Average-pooling kernel used to smooth blockwise step-size maps; even values are increased to the next odd value. Defaults to 3.
+
+    Raises:
+        ValueError: If ``lr`` is negative.
+        AssertionError: If ``alg`` is unsupported.
     """
 
     def __init__(
@@ -28,6 +40,21 @@ class NesterovAcceleratedGradientOptimizer(Optimizer):
         block_tile_size=None,
         block_blur_kernel_size: int = 3,
     ):
+        """
+        Initialize optimizer groups, constraint handling, algorithm selection, and blockwise configuration.
+
+        Args:
+            params (iterable): Parameters grouped by the optimizer.
+            lr (float): Initial learning-rate scale. Required; no default is supplied by the signature.
+            constraint_fn (Callable | None): Constraint callback applied to candidate parameter states. Defaults to None.
+            alg (str): Algorithm variant. Defaults to ``"bb"``.
+            block_tile_size (int | Sequence[int] | None): Optional 2-D tile dimensions used by the blockwise variant. Defaults to None.
+            block_blur_kernel_size (int): Smoothing kernel size for blockwise step maps. Defaults to 3.
+
+        Raises:
+            ValueError: If ``lr`` is supplied as a negative value.
+            AssertionError: If ``alg`` is outside the supported set.
+        """
         if lr is not required and lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
 
@@ -121,6 +148,16 @@ class NesterovAcceleratedGradientOptimizer(Optimizer):
         assert offset == self._numel(group)
 
     def _apply_constraint(self, group, flat_param):
+        """
+        Apply the configured parameter constraint to a flattened parameter vector.
+
+        Args:
+            group (dict): Optimizer parameter group containing one or more parameter tensors.
+            flat_param (torch.Tensor): Flattened candidate parameter vector.
+
+        Returns:
+            torch.Tensor: Flattened constrained parameter vector. The original group state is restored after multi-parameter constraint evaluation.
+        """
         params = self._params_of_group(group)
         if len(params) == 1:
             constrained = flat_param.view_as(params[0].data)
@@ -140,6 +177,17 @@ class NesterovAcceleratedGradientOptimizer(Optimizer):
         return constrained
 
     def _obj_and_grad_fn(self, group, flat_param, closure):
+        """
+        Evaluate the objective closure and collect a flattened detached gradient at a temporary parameter state.
+
+        Args:
+            group (dict): Optimizer parameter group whose tensors are temporarily replaced.
+            flat_param (torch.Tensor): Flattened parameter vector at which to evaluate the closure.
+            closure (Callable[[], torch.Tensor]): Objective closure that evaluates the objective and populates parameter gradients.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: Detached scalar objective and flattened detached gradient. The group's original parameter values are restored before return.
+        """
         old_params = self._clone_param_group(group)
         try:
             self._set_flat_param_group(group, flat_param)
@@ -152,6 +200,15 @@ class NesterovAcceleratedGradientOptimizer(Optimizer):
         return obj.detach().clone(), grad
 
     def step(self, closure):
+        """
+        Perform one Nesterov optimizer step using the configured algorithm variant.
+
+        Args:
+            closure (Callable[[], torch.Tensor]): Objective closure used to evaluate objective values and gradients.
+
+        Returns:
+            torch.Tensor | None: The loss/state value returned by the selected step implementation, typically None because the step variants return None.
+        """
         closure = torch.enable_grad()(closure)
         if self.alg == "bb_static":
             return self.step_bb_static(closure)
@@ -165,6 +222,12 @@ class NesterovAcceleratedGradientOptimizer(Optimizer):
             raise ValueError(f"Unsupported alg: {self.alg}")
 
     def _normalize_tile_size(self):
+        """
+        Normalize the configured block tile size into a two-element ``(height, width)`` tuple.
+
+        Returns:
+            tuple[int, int] | None: Normalized tile dimensions, or None when blockwise tiling is disabled.
+        """
         tile_size = self.block_tile_size
         if tile_size is None:
             return None
@@ -177,6 +240,15 @@ class NesterovAcceleratedGradientOptimizer(Optimizer):
         return None
 
     def _build_group_blocks(self, group):
+        """
+        Build and cache flattened index blocks for each parameter tensor, optionally partitioning 2-D tensors into rectangular tiles.
+
+        Args:
+            group (dict): Optimizer parameter group whose tensors determine the block layout.
+
+        Returns:
+            list[dict]: Cached block specifications containing indices, parameter shape, offsets, and block layout metadata.
+        """
         if "block_specs" in group:
             return group["block_specs"]
 
@@ -254,6 +326,18 @@ class NesterovAcceleratedGradientOptimizer(Optimizer):
         return block_specs
 
     def _smooth_alpha_map(self, alpha_map):
+        """
+        Smooth a blockwise step-size map with 2-D average pooling.
+
+        Args:
+            alpha_map (torch.Tensor): Two-dimensional step-size field.
+
+        Returns:
+            torch.Tensor: Smoothed step-size field. Kernel sizes less than or equal to one leave the input unchanged.
+
+        Defaults:
+            ``block_blur_kernel_size`` defaults to 3.
+        """
         kernel_size = int(self.block_blur_kernel_size or 0)
         if kernel_size <= 1:
             return alpha_map
@@ -268,6 +352,17 @@ class NesterovAcceleratedGradientOptimizer(Optimizer):
         )[0, 0]
 
     def _compute_block_step_size(self, s_b, y_b, prev_alpha):
+        """
+        Compute a robust Barzilai-Borwein/Lipschitz step size for one parameter block.
+
+        Args:
+            s_b (torch.Tensor): Parameter displacement for the block.
+            y_b (torch.Tensor): Gradient displacement for the block.
+            prev_alpha (torch.Tensor): Previous block step size used as a fallback.
+
+        Returns:
+            torch.Tensor: Positive finite block step size.
+        """
         y_dot_y = y_b.dot(y_b)
         if torch.isclose(y_dot_y, torch.zeros_like(y_dot_y)):
             step_size = prev_alpha
@@ -289,9 +384,31 @@ class NesterovAcceleratedGradientOptimizer(Optimizer):
         return step_size
 
     def _scaled_step_size(self, group, step_size):
+        """
+        Scale a scalar or tensor step size by the optimizer group's learning-rate factor.
+
+        Args:
+            group (dict): Optimizer parameter group containing ``lr``.
+            step_size (torch.Tensor | float): Base step-size value.
+
+        Returns:
+            torch.Tensor | float: Learning-rate-scaled step size.
+        """
         return group["lr"] * step_size
 
     def _compute_blockwise_step(self, group, s_k, y_k, alpha_k):
+        """
+        Compute per-parameter blockwise step sizes and interpolate tiled 2-D sizes into a dense update field.
+
+        Args:
+            group (dict): Optimizer parameter group defining block layout and learning-rate scale.
+            s_k (torch.Tensor): Flattened parameter displacement vector.
+            y_k (torch.Tensor): Flattened gradient displacement vector.
+            alpha_k (torch.Tensor): Previous block step-size values.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: Dense flattened step vector and updated block step-size vector.
+        """
         block_specs = self._build_group_blocks(group)
         next_alpha = torch.empty_like(alpha_k)
         step_vec = torch.empty_like(s_k)
@@ -336,6 +453,16 @@ class NesterovAcceleratedGradientOptimizer(Optimizer):
         return step_vec, next_alpha
 
     def _init_group_state(self, group, closure):
+        """
+        Initialize cached flattened parameter, objective, gradient, momentum-like, and step-size state for a parameter group.
+
+        Args:
+            group (dict): Optimizer parameter group to initialize.
+            closure (Callable[[], torch.Tensor]): Objective closure used for the initial evaluations.
+
+        Returns:
+            None. State is stored in ``group`` only when it has not already been initialized.
+        """
         if group["v_k"] is not None:
             return
 
@@ -378,6 +505,15 @@ class NesterovAcceleratedGradientOptimizer(Optimizer):
         self._set_flat_param_group(group, v_k)
 
     def step_nobb(self, closure=None):
+        """
+        Perform the Nesterov variant without Barzilai-Borwein acceleration, using cached objective/gradient state and adaptive backtracking.
+
+        Args:
+            closure (Callable[[], torch.Tensor] | None): Objective closure. Defaults to None.
+
+        Returns:
+            None: Updates optimizer state and parameter groups in place.
+        """
         loss = None
 
         for group in self.param_groups:
@@ -439,6 +575,15 @@ class NesterovAcceleratedGradientOptimizer(Optimizer):
         return loss
 
     def step_bb(self, closure=None):
+        """
+        Perform the standard Barzilai-Borwein Nesterov update with fresh current and previous-point objective/gradient evaluations.
+
+        Args:
+            closure (Callable[[], torch.Tensor] | None): Objective closure. Defaults to None.
+
+        Returns:
+            None: Updates optimizer state and parameters in place.
+        """
         loss = None
 
         for group in self.param_groups:
@@ -497,14 +642,13 @@ class NesterovAcceleratedGradientOptimizer(Optimizer):
 
     def step_bb_static(self, closure=None):
         """
-        BB-style step for objectives whose closure has no hidden state drift.
+        Perform the static Barzilai-Borwein variant that reuses the previous step's cached evaluation to reduce closure calls.
 
-        Reuses the previous step's cached evaluation at ``v_k_1``:
-            v_k_1 <- previous v_k
-            g_k_1 <- previous g_k
-            obj_k_1 <- previous obj_k
+        Args:
+            closure (Callable[[], torch.Tensor] | None): Objective closure. Defaults to None.
 
-        Therefore each new step only evaluates the current ``v_k`` once.
+        Returns:
+            None: Updates optimizer state and parameters in place.
         """
         loss = None
 
@@ -565,12 +709,16 @@ class NesterovAcceleratedGradientOptimizer(Optimizer):
 
     def step_bb_static_blockwise(self, closure=None):
         """
-        Blockwise BB step for static objectives.
+        Perform the blockwise static Barzilai-Borwein variant using per-block step sizes and optional 2-D spatial smoothing.
 
-        Each optimizer group is expected to correspond to one design region.
-        Within a group, every 2D parameter tensor is partitioned into fixed tiles.
-        Edge tiles use their natural smaller size; no padding is introduced.
-        Non-2D tensors fall back to one block per tensor.
+        Args:
+            closure (Callable[[], torch.Tensor] | None): Objective closure. Defaults to None.
+
+        Returns:
+            None: Updates optimizer state and parameters in place.
+
+        Notes:
+            Two-dimensional parameter tensors can receive spatially varying step sizes generated from tiled block estimates.
         """
         loss = None
 

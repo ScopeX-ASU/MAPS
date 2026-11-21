@@ -99,18 +99,9 @@ if __name__ == "__main__":
     mlflow.set_experiment(configs.run.experiment)  # set experiments first
 
     tasks = [
-        # [0.0, "metacoupler", "NeurOLight2d", 72, 4, 2, "norm_input_src", 2, 50, 0.002, "nmse", 1, "none", 2],
-        # [0.0, "metacoupler", "NeurOLight2d", 72, 4, 3, "norm_input_src", 3, 50, 0.0005, "nmse", 1, "none", 2],
-        # [0.0, "metacoupler", "NeurOLight2d", 72, 4, 4, "no_adj", 0, 50, 0.002, "nmse", 1, "none", 2],
-        # [0.0, "metacoupler", "NeurOLight2d", 72, 4, 5, "no_adj", 0, 50, 0.002, "nmse", 1, 0.1, "none", 2],
-        # [0.0, "metacoupler", "NeurOLight2d", 72, 4, 6, "no_adj", 1, 50, 0.005, "nmse", 1, 0, "none", 2],
-        # [0.0, "metacoupler", "NeurOLight2d", 72, 4, 7, "no_adj", 2, 50, 0.002, "nmse", 1, 0, "none", 2],
-        # [0.0, "metacoupler", "NeurOLight2d", 72, 4, 8, "only_fwd_Ez", 0, 50, 0.002, "nmse", 1, 0, "none", 2],
-        # [0.0, "metacoupler", "NeurOLight2d", 72, 4, 9, "only_fwd_Ez_more_mode", 1, 50, 0.002, "nmse", 1, 0, "none", 2],
-        # [0.0, "metacoupler", "NeurOLight2d", 72, 8, 10, "only_fwd_Ez_max_mode_deeper", 2, 50, 0.002, "nmse", 1, 0, "none", 2],
         [
             0.0,
-            "metacoupler",
+            "bending",
             "NeurOLight2d",
             72,
             8,

@@ -13,6 +13,35 @@ __all__ = ["Grating_waveguide"]
 
 
 class Grating_waveguide(N_Ports):
+    """Define a two-port grating/waveguide inverse-design device.
+
+    Args:
+        material_r1 (str | Any): Primary waveguide material key or direct permittivity
+            value. String keys are resolved through ``material_fn_dict``. Defaults to ``"Si_eff"``.
+        material_r2 (str | Any): Secondary/design-background material key or direct value.
+            Defaults to ``"SiO2"``.
+        thickness_r1 (float): Effective thickness passed to material models whose names
+            contain ``"_eff"``. Defaults to 0.22.
+        thickness_r2 (float): Effective thickness for the secondary material. Defaults to 0.0.
+        material_bg (str): Background material key. Defaults to ``"SiO2"``.
+        sim_cfg (dict): Optical simulation configuration containing border/PML widths,
+            cell size, resolution, center wavelength, wavelength span, and wavelength count.
+            Defaults to the built-in two-dimensional configuration.
+        box_size (tuple[float, float]): Design-region ``(Lx, Ly)`` size in micrometers.
+            Defaults to ``(4.0, 4.0)``.
+        port_len (tuple[float, float]): Port lengths in the x-directed input/output geometry
+            in micrometers. Defaults to ``(1.8, 1.8)``.
+        port_width (tuple[float, float]): Port widths in micrometers. Defaults to ``(0.48, 0.48)``.
+        port_box_margin (float): Margin retained as a constructor parameter for port placement.
+            Defaults to 0.2.
+        device (torch.device): Device for the underlying ``N_Ports`` state.
+            Defaults to ``torch.device("cuda:0")``.
+
+    Attributes:
+        port_cfgs (dict): Input/output x-directed port definitions.
+        design_region_cfgs (dict): ``fourport_region`` design-region definition.
+    """
+
     def __init__(
         self,
         material_r1: str = "Si_eff",  # waveguide material
@@ -46,6 +75,26 @@ class Grating_waveguide(N_Ports):
         port_box_margin: float = 0.2,
         device: torch.device = torch.device("cuda:0"),
     ):
+        """Initialize grating materials, ports, and the design region.
+
+        Args:
+            material_r1 (str | Any): Primary material key or direct material value.
+                Defaults to ``"Si_eff"``.
+            material_r2 (str | Any): Secondary material key or direct material value.
+                Defaults to ``"SiO2"``.
+            thickness_r1 (float): Effective primary-material thickness. Defaults to 0.22.
+            thickness_r2 (float): Effective secondary-material thickness. Defaults to 0.0.
+            material_bg (str): Background material key. Defaults to ``"SiO2"``.
+            sim_cfg (dict): Optical simulation configuration. Defaults to the built-in
+                grating configuration in the signature.
+            box_size (tuple[float, float]): Design-region size in micrometers. Defaults to ``(4.0, 4.0)``.
+            port_len (tuple[float, float]): Port lengths in micrometers. Defaults to ``(1.8, 1.8)``.
+            port_width (tuple[float, float]): Port widths in micrometers. Defaults to ``(0.48, 0.48)``.
+            port_box_margin (float): Port-placement margin parameter retained by the API.
+                Defaults to 0.2.
+            device (torch.device): Device for the underlying ``N_Ports`` state.
+                Defaults to ``torch.device("cuda:0")``.
+        """
         # print(box_size)
         # print(port_width)
         # print(port_box_margin)
@@ -114,6 +163,16 @@ class Grating_waveguide(N_Ports):
         )
 
     def init_monitors(self, verbose: bool = True):
+        """Build source, reflection, output, port-region, and radiation monitors.
+
+        Args:
+            verbose (bool): Whether to log monitor/source construction. Defaults to True.
+
+        Returns:
+            tuple[list[Any], list[Any], list[Any], Any]: ``(src_slices, out_slices,
+            refl_slices, radiation_monitor)``. Each of the first three entries is a list
+            of port-monitor slices; the final entry is the radiation-monitor object.
+        """
         rel_width = 2
         if verbose:
             lg.info("Start generating sources and monitors...")
@@ -152,6 +211,17 @@ class Grating_waveguide(N_Ports):
         return src_slices, out_slices, refl_slices, radiation_monitor
 
     def norm_run(self, verbose: bool = True):
+        """Build normalization source profiles for input, reflection, and output monitor slices.
+
+        Args:
+            verbose (bool): Whether to log the normalization run. Defaults to True.
+
+        Returns:
+            tuple[list[dict], list[dict], list[dict]]: Forward/input, reflection, and
+            output normalization profile collections, respectively. Each collection
+            contains one ``build_norm_sources`` result for the ``Ez1`` mode; the first
+            call requires simulation while the latter two do not.
+        """
         if verbose:
             lg.info("Start normalization run...")
 

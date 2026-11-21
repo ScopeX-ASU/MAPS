@@ -4,7 +4,10 @@ from .base_optimization import BaseOptimization, DefaultOptimizationConfig
 
 
 class DefaultConfig(DefaultOptimizationConfig):
+    """Default FDFD and S-matrix configuration for MMI optimization."""
+
     def __init__(self):
+        """Initialize the default MMI configuration tree."""
         super().__init__()
         self.update(
             dict(
@@ -158,6 +161,26 @@ class DefaultConfig(DefaultOptimizationConfig):
 
 
 class MMIOptimization(BaseOptimization):
+    """Inverse-design optimization model for a multi-mode-interference device.
+
+    Args:
+        device: Simulation-resolution MMI device with ports and design regions.
+        hr_device: Higher-resolution device used for parameterization transforms.
+        design_region_param_cfgs: Optional mapping. Empty input creates a
+            level-set parameterization for every design region.
+        sim_cfg: Overrides for the default Ceviche/FDFD simulation settings.
+        obj_cfgs: Objective overrides; ``override=True`` clears the default
+            objective mapping before applying supplied terms.
+        operation_device: PyTorch device used for optimization tensors.
+
+    Notes:
+        The active default design pipeline uses ``rho_resolution=[25,25]``,
+        mirror symmetry along dimension 1, an FFT transform with ``mfs=0.1``
+        in ``xy``, binarization, random initialization, Gaussian-linear
+        interpolation, and binary projection thresholds of 100. The active
+        S-matrix objective uses one input slice and two outputs at 1.55 um.
+    """
+
     def __init__(
         self,
         device,

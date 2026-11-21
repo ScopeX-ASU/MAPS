@@ -7,6 +7,21 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spl
 
 from .bc import normalize_dirichlet_bc, normalize_neumann_bc
+from .matrix_free import (
+    apply_line_preconditioner_compatible,
+    build_rectilinear_operator_data,
+    diagonal_full,
+    jax_fem_cell_data,
+    jax_fem_neumann_load,
+    line_offdiagonal_full,
+    matvec_free_direct,
+    matvec_free_direct_compatible,
+    matvec_free_full_grid,
+    matvec_free_full_grid_compatible,
+    matvec_full,
+    select_line_axis,
+    source_load_full,
+)
 from .mesh import StructuredMesh
 from .utils import ensure_heat_dependencies
 
@@ -18,6 +33,8 @@ except Exception:
     PydisoSolver = None
     HAS_PYDISO = False
 
+import contextlib
+
 try:
     import logging
 
@@ -26,7 +43,7 @@ try:
     logger.setLevel(logging.WARNING)
     import jax
 
-    jax.config.update("jax_enable_x64", True)
+    jax.config.update("jax_enable_x64", False)
     import jax.numpy as jnp
     from jax.experimental.sparse import BCOO
     from jax.scipy.sparse.linalg import bicgstab as jax_bicgstab
@@ -42,6 +59,40 @@ except Exception as exc:  # pragma: no cover - exercised by import guards in tes
     _HEAT_IMPORT_ERROR = exc
 else:
     _HEAT_IMPORT_ERROR = None
+
+
+try:
+    import pyamg
+    from amjax import MultilevelSolver
+
+    HAS_AMJAX = True
+except Exception:
+    pyamg = None
+    MultilevelSolver = None
+    HAS_AMJAX = False
+
+
+@contextlib.contextmanager
+def temp_jax_x64(enabled: bool):
+    prev = bool(jax.config.read("jax_enable_x64"))
+    jax.config.update("jax_enable_x64", enabled)
+    try:
+        yield
+    finally:
+        jax.config.update("jax_enable_x64", prev)
+
+
+def _pyamg_factory(name):
+    if not HAS_AMJAX:
+        raise ImportError("amjax backend requested, but pyamg/amjax are not available.")
+    factories = {
+        "smoothed_aggregation": pyamg.smoothed_aggregation_solver,
+        "rootnode": pyamg.rootnode_solver,
+        "ruge_stuben": pyamg.ruge_stuben_solver,
+    }
+    if name not in factories:
+        raise ValueError(f"Unsupported pyamg factory: {name!r}")
+    return factories[name]
 
 
 class _CSRMatrixWrapper(object):
@@ -560,6 +611,339 @@ def _linear_jax_solve(
     return x
 
 
+def _linear_jax_matrix_free_solve(
+    operator_data,
+    conductivity,
+    rhs,
+    x0=None,
+    *,
+    precond="jacobi",
+    line_axis="auto",
+    free_dof_strategy="direct",
+    method="cg",
+    tol=1e-10,
+    atol=1e-10,
+    maxiter=1000,
+    solve_dtype="float64",
+    jit=True,
+    check_residual=True,
+    residual_rtol=1e-7,
+    residual_atol=1e-9,
+    cache=None,
+):
+    """Solve a reduced heat system with a structured matrix-free operator.
+
+    Args:
+        operator_data: Static rectilinear geometry and free-DOF mappings.
+        conductivity: Cell-wise conductivity with shape ``[num_cells]``.
+        rhs: Reduced right-hand side with shape ``[num_free_dofs]``.
+        x0: Optional reduced initial guess.
+        precond: ``"jacobi"``, ``"line"``, or ``"none"``.
+        line_axis: Structured line direction, or ``"auto"``.
+        free_dof_strategy: ``"full_grid"`` or ``"direct"``.
+        method: Iterative method; matrix-free production solves require ``"cg"``.
+        tol: Relative convergence tolerance passed to JAX CG.
+        atol: Absolute convergence tolerance passed to JAX CG.
+        maxiter: Maximum CG iterations.
+        solve_dtype: ``float32`` or ``float64`` arithmetic.
+        jit: Whether to JIT-compile the solve.
+        check_residual: Whether to verify the final explicit residual.
+        residual_rtol: Relative residual acceptance tolerance.
+        residual_atol: Absolute residual acceptance tolerance.
+        cache: Optional persistent runtime cache for compiled solver reuse.
+
+    Returns:
+        Reduced solution with shape ``[num_free_dofs]``.
+    """
+    solve_dtype = str(solve_dtype).lower()
+    if solve_dtype in {"float64", "fp64", "double"}:
+        jax_dtype = jnp.float64
+    elif solve_dtype in {"float32", "fp32", "single"}:
+        jax_dtype = jnp.float32
+    else:
+        raise ValueError(f"Unsupported JAX heat solve dtype: {solve_dtype!r}")
+    if str(method).lower() != "cg":
+        raise ValueError("jax_matrix_free_solver currently supports only method='cg'.")
+
+    strategy = str(free_dof_strategy).lower().replace("-", "_")
+    if strategy == "full_grid":
+        apply_operator = matvec_free_full_grid
+    elif strategy == "direct":
+        apply_operator = matvec_free_direct
+    else:
+        raise ValueError(
+            "free_dof_strategy must be 'full_grid' or 'direct', got "
+            f"{free_dof_strategy!r}."
+        )
+
+    conductivity = jnp.asarray(conductivity, dtype=jax_dtype).reshape(-1)
+    rhs = jnp.asarray(rhs, dtype=jax_dtype).reshape(-1)
+    x0 = jnp.zeros_like(rhs) if x0 is None else jnp.asarray(x0, dtype=jax_dtype)
+    diagonal_full_values = diagonal_full(conductivity, operator_data, dtype=jax_dtype)
+    diagonal = diagonal_full_values[jnp.asarray(operator_data.free_rows)]
+    preconditioner_name = str(precond).lower()
+    selected_line_axis = None
+    line_offdiagonal = jnp.zeros_like(diagonal_full_values)
+    if preconditioner_name == "line":
+        selected_line_axis = select_line_axis(operator_data, line_axis)
+        line_offdiagonal = line_offdiagonal_full(
+            conductivity, operator_data, selected_line_axis, dtype=jax_dtype
+        )
+    cells = jnp.asarray(operator_data.cells)
+    unit_stiffness = jnp.asarray(operator_data.cell_unit_stiffness, dtype=jax_dtype)
+    free_rows = jnp.asarray(operator_data.free_rows)
+    cell_free_ids = jnp.asarray(operator_data.cell_free_ids)
+    output_positions = jnp.asarray(operator_data.output_positions)
+    output_free_ids = jnp.asarray(operator_data.output_free_ids)
+
+    def solve_impl(
+        k_arg,
+        rhs_arg,
+        x0_arg,
+        diagonal_arg,
+        diagonal_full_arg,
+        line_offdiagonal_arg,
+        cells_arg,
+        unit_stiffness_arg,
+        free_rows_arg,
+        cell_free_ids_arg,
+        output_positions_arg,
+        output_free_ids_arg,
+        constrained_rows_arg,
+    ):
+        def matvec(vec):
+            if strategy == "full_grid":
+                return matvec_free_full_grid_compatible(
+                    vec,
+                    k_arg,
+                    cells_arg,
+                    unit_stiffness_arg,
+                    free_rows_arg,
+                    operator_data.num_nodes,
+                )
+            return matvec_free_direct_compatible(
+                vec,
+                k_arg,
+                unit_stiffness_arg,
+                cell_free_ids_arg,
+                output_positions_arg,
+                output_free_ids_arg,
+            )
+
+        def jacobi(vec):
+            safe_diagonal = jnp.where(
+                jnp.abs(diagonal_arg) > 0, diagonal_arg, jnp.ones_like(diagonal_arg)
+            )
+            return vec / safe_diagonal
+
+        def line(vec):
+            return apply_line_preconditioner_compatible(
+                vec,
+                diagonal_full_arg,
+                line_offdiagonal_arg,
+                free_rows_arg,
+                constrained_rows_arg,
+                operator_data.node_shape,
+                selected_line_axis,
+                operator_data.num_nodes,
+            )
+
+        if preconditioner_name in {"jacobi", "diagonal"}:
+            preconditioner_fn = jacobi
+        elif preconditioner_name == "line":
+            preconditioner_fn = line
+        elif preconditioner_name in {"none", "false", "off"}:
+            preconditioner_fn = None
+        else:
+            raise ValueError(
+                "jax_matrix_free_solver precond must be 'jacobi', 'line', or 'none'."
+            )
+        return jax_cg(
+            matvec,
+            rhs_arg,
+            x0=x0_arg,
+            M=preconditioner_fn,
+            tol=tol,
+            atol=atol,
+            maxiter=maxiter,
+        )
+
+    compile_signature = (
+        "matrix_free",
+        tuple(operator_data.node_shape),
+        int(len(operator_data.free_rows)),
+        strategy,
+        preconditioner_name,
+        selected_line_axis,
+        str(solve_dtype),
+        float(tol),
+        float(atol),
+        int(maxiter),
+        bool(jit),
+    )
+    compiled_solvers = (
+        {} if cache is None else cache.setdefault("matrix_free_compiled_solvers", {})
+    )
+    compiled_solve = compiled_solvers.get(compile_signature)
+    if compiled_solve is None:
+        compiled_solve = jax.jit(solve_impl) if jit else solve_impl
+        compiled_solvers[compile_signature] = compiled_solve
+    x, info = compiled_solve(
+        conductivity,
+        rhs,
+        x0,
+        diagonal,
+        diagonal_full_values,
+        line_offdiagonal,
+        cells,
+        unit_stiffness,
+        free_rows,
+        cell_free_ids,
+        output_positions,
+        output_free_ids,
+        jnp.asarray(operator_data.constrained_rows),
+    )
+    if info is not None and np.any(np.asarray(info) != 0):
+        raise RuntimeError("JAX matrix-free CG did not converge for the heat solve.")
+
+    if check_residual:
+        residual = apply_operator(x, conductivity, operator_data) - rhs
+        residual_norm = jnp.linalg.norm(residual)
+        rhs_norm = jnp.linalg.norm(rhs)
+        allowed = jnp.maximum(
+            jnp.asarray(float(residual_atol), dtype=jax_dtype),
+            jnp.asarray(float(residual_rtol), dtype=jax_dtype)
+            * jnp.maximum(rhs_norm, jnp.asarray(1.0, dtype=jax_dtype)),
+        )
+        residual_value = float(np.asarray(residual_norm))
+        allowed_value = float(np.asarray(allowed))
+        if not np.isfinite(residual_value) or residual_value > allowed_value:
+            raise RuntimeError(
+                "JAX matrix-free heat solve residual check failed: "
+                f"||Ax-b||={residual_value:.3e}, allowed<={allowed_value:.3e}."
+            )
+    return x
+
+
+def _linear_amjax_solve(
+    matrix,
+    rhs,
+    x0=None,
+    method="cg",
+    tol=1e-8,
+    atol=1e-8,
+    maxiter=200,
+    cycle="V",
+    pyamg_solver="smoothed_aggregation",
+    pyamg_kwargs=None,
+    solve_dtype="float64",
+    check_residual=True,
+    residual_rtol=1e-6,
+    residual_atol=1e-8,
+    reuse_hierarchy=True,
+    cache=None,
+    cache_key="linear_fwd",
+):
+    if not HAS_AMJAX:
+        raise ImportError("amjax backend requested, but pyamg/amjax are not available.")
+
+    solve_dtype = str(solve_dtype).lower()
+    if solve_dtype in {"float64", "fp64", "double"}:
+        np_dtype, jax_dtype = np.float64, jnp.float64
+    elif solve_dtype in {"float32", "fp32", "single"}:
+        np_dtype, jax_dtype = np.float32, jnp.float32
+    else:
+        raise ValueError(f"Unsupported amjax solve dtype: {solve_dtype!r}")
+
+    scipy_matrix = _csr_to_scipy(matrix).astype(np_dtype)
+    setup_signature = (
+        str(pyamg_solver).lower(),
+        repr(sorted((pyamg_kwargs or {}).items())),
+        str(cycle).lower(),
+    )
+
+    # ---- hierarchy / preconditioner cache (mirrors pydiso logic) ----
+    cached_entry = None
+    reuse_M = None
+    exact_match = False
+    structure_match = False
+    if cache is not None:
+        for candidate_key in _iter_candidate_cache_keys(cache_key):
+            entry = cache.get(candidate_key)
+            if entry is None or entry.get("backend") != "amjax":
+                continue
+            if entry.get("setup_signature") != setup_signature:
+                continue
+            cached_matrix = entry.get("matrix")
+            if cached_matrix is None or not _csr_matrix_structure_equal(
+                cached_matrix, scipy_matrix
+            ):
+                continue
+            structure_match = True
+            cached_entry = entry
+            reuse_M = entry.get("preconditioner")
+            exact_match = _csr_matrices_equal(cached_matrix, scipy_matrix)
+            if exact_match:
+                break
+
+    if exact_match and reuse_M is not None:
+        M = reuse_M
+    elif reuse_hierarchy and structure_match and reuse_M is not None:
+        # Stale-hierarchy preconditioner: skip pyamg setup, let CG correct.
+        M = reuse_M
+    else:
+        factory = _pyamg_factory(pyamg_solver)
+        ml_pyamg = factory(scipy_matrix, **(pyamg_kwargs or {}))
+        ml = MultilevelSolver.from_pyamg(ml_pyamg)
+        M = ml.aspreconditioner(cycle=cycle)
+
+    if cache is not None and cache_key is not None:
+        cache[cache_key] = {
+            "backend": "amjax",
+            "matrix": scipy_matrix.copy(),
+            "preconditioner": M,
+            "setup_signature": setup_signature,
+        }
+
+    # ---- solve in JAX ----
+    A_jax = BCOO.from_scipy_sparse(scipy_matrix).sort_indices()
+    rhs_jax = jnp.asarray(rhs, dtype=jax_dtype)
+    x0_jax = jnp.zeros_like(rhs_jax) if x0 is None else jnp.asarray(x0, dtype=jax_dtype)
+
+    method = str(method).lower()
+    if method == "cg":
+        solve_fn = jax_cg
+    elif method == "bicgstab":
+        solve_fn = jax_bicgstab
+    else:
+        raise ValueError(f"Unsupported amjax Krylov method: {method!r}")
+
+    x, info = solve_fn(
+        A_jax, rhs_jax, x0=x0_jax, M=M, tol=tol, atol=atol, maxiter=maxiter
+    )
+
+    if info is not None:
+        info_value = np.asarray(info)
+        if info_value.shape == ():
+            info_value = info_value.item()
+        if np.any(np.asarray(info_value) != 0):
+            raise RuntimeError(f"amjax {method} did not converge for the heat solve.")
+
+    if check_residual:
+        residual_norm = float(np.asarray(jnp.linalg.norm(A_jax @ x - rhs_jax)))
+        rhs_norm = float(np.asarray(jnp.linalg.norm(rhs_jax)))
+        allowed = max(
+            float(residual_atol),
+            float(residual_rtol) * max(rhs_norm, 1.0),
+        )
+        if not np.isfinite(residual_norm) or residual_norm > allowed:
+            raise RuntimeError(
+                "amjax heat solve residual check failed: "
+                f"||Ax-b||={residual_norm:.3e}, allowed<={allowed:.3e}."
+            )
+    return x
+
+
 def _linear_petsc_solve(matrix, rhs, ksp_type="bcgsl", pc_type="ilu"):
     from petsc4py import PETSc
 
@@ -710,6 +1094,28 @@ def _linear_solve(matrix, rhs, x0, solver_options, cache=None, cache_key=None):
     if "spsolve_solver" in solver_options:
         return _linear_spsolve(matrix, rhs)
 
+    if "amjax_solver" in solver_options:
+        amjax_options = solver_options["amjax_solver"]
+        return _linear_amjax_solve(
+            matrix,
+            rhs,
+            x0=x0,
+            method=amjax_options.get("method", "cg"),
+            tol=amjax_options.get("tol", 1e-8),
+            atol=amjax_options.get("atol", 1e-8),
+            maxiter=amjax_options.get("maxiter", 200),
+            cycle=amjax_options.get("cycle", "V"),
+            pyamg_solver=amjax_options.get("pyamg_solver", "smoothed_aggregation"),
+            pyamg_kwargs=amjax_options.get("pyamg_kwargs", None),
+            solve_dtype=amjax_options.get("solve_dtype", "float64"),
+            check_residual=amjax_options.get("check_residual", True),
+            residual_rtol=amjax_options.get("residual_rtol", 1e-6),
+            residual_atol=amjax_options.get("residual_atol", 1e-8),
+            reuse_hierarchy=amjax_options.get("reuse_hierarchy", True),
+            cache=cache,
+            cache_key=cache_key or "linear_fwd",
+        )
+
     jax_options = solver_options.get("jax_solver", {})
     return _linear_jax_solve(
         matrix,
@@ -746,8 +1152,138 @@ def _prepare_forward_solver_options(solver_options):
             jax_options.setdefault("method", "cg")
             jax_options.setdefault("jit", True)
             effective_options["jax_solver"] = jax_options
+        if "amjax_solver" in effective_options:
+            amjax_options = dict(effective_options["amjax_solver"])
+            amjax_options.setdefault("method", "cg")
+            effective_options["amjax_solver"] = amjax_options
+        if "jax_matrix_free_solver" in effective_options:
+            matrix_free_options = dict(effective_options["jax_matrix_free_solver"])
+            matrix_free_options.setdefault("method", "cg")
+            matrix_free_options.setdefault("jit", True)
+            effective_options["jax_matrix_free_solver"] = matrix_free_options
 
     return effective_options, dirichlet_mode
+
+
+def _matrix_free_options(solver_options):
+    """Return matrix-free options after enforcing the supported BC reduction.
+
+    Args:
+        solver_options: Heat solver dispatch configuration.
+
+    Returns:
+        Normalized matrix-free option dictionary, or ``None`` when this backend
+        was not requested.
+
+    Raises:
+        ValueError: If matrix-free solving is combined with a Dirichlet mode
+            other than ``reduced_free_dof``.
+    """
+    effective_options, dirichlet_mode = _prepare_forward_solver_options(solver_options)
+    options = effective_options.get("jax_matrix_free_solver")
+    if options is None:
+        return None
+    if dirichlet_mode != "reduced_free_dof":
+        raise ValueError(
+            "jax_matrix_free_solver currently requires "
+            "dirichlet_mode='reduced_free_dof'."
+        )
+    return options
+
+
+def _solve_matrix_free_reduced(
+    problem, conductivity, rhs, x0, solver_options, linear_cache=None
+):
+    """Dispatch a reduced matrix-free solve using data attached to ``problem``.
+
+    Args:
+        problem: Initialized scalar heat problem with structured operator data.
+        conductivity: Cell-wise conductivity with shape ``[num_cells]``.
+        rhs: Reduced right-hand side with shape ``[num_free_dofs]``.
+        x0: Optional reduced initial guess.
+        solver_options: Heat solver dispatch configuration.
+        linear_cache: Optional shared forward/adjoint compilation and warm-start
+            cache.
+
+    Returns:
+        Free nodal temperature or adjoint vector in reduced ordering.
+    """
+    options = _matrix_free_options(solver_options)
+    if options is None:
+        raise ValueError("Missing jax_matrix_free_solver configuration.")
+    return _linear_jax_matrix_free_solve(
+        problem._matrix_free_operator_data,
+        conductivity,
+        rhs,
+        x0,
+        precond=options.get("precond", "jacobi"),
+        line_axis=options.get("line_axis", "auto"),
+        free_dof_strategy=options.get("free_dof_strategy", "direct"),
+        method=options.get("method", "cg"),
+        tol=options.get("tol", 1e-10),
+        atol=options.get("atol", 1e-10),
+        maxiter=options.get("maxiter", 1000),
+        solve_dtype=options.get("solve_dtype", "float64"),
+        jit=options.get("jit", True),
+        check_residual=options.get("check_residual", True),
+        residual_rtol=options.get("residual_rtol", 1e-7),
+        residual_atol=options.get("residual_atol", 1e-9),
+        cache=linear_cache,
+    )
+
+
+def _local_matrix_free_solver(problem, params, solver_options, linear_cache=None):
+    """Solve the linear heat problem without assembling a global matrix.
+
+    Args:
+        problem: Initialized scalar heat problem with structured operator data.
+        params: Quadrature-broadcast conductivity and source arrays.
+        solver_options: Heat solver dispatch configuration.
+        linear_cache: Optional shared compilation and warm-start cache.
+
+    Returns:
+        One-item JAX-FEM solution list containing the full nodal field. Dirichlet
+        values are reconstructed exactly after solving only free DOFs.
+    """
+    conductivity_quads, source_quads = params
+    options = _matrix_free_options(solver_options)
+    solve_dtype = str(options.get("solve_dtype", "float64")).lower()
+    if solve_dtype in {"float64", "fp64", "double"}:
+        parameter_dtype = jnp.float64
+    elif solve_dtype in {"float32", "fp32", "single"}:
+        parameter_dtype = jnp.float32
+    else:
+        raise ValueError(f"Unsupported JAX heat solve dtype: {solve_dtype!r}")
+    conductivity = jnp.asarray(conductivity_quads[:, 0, 0], dtype=parameter_dtype)
+    source = jnp.asarray(source_quads[:, 0, 0], dtype=parameter_dtype)
+    data = problem._matrix_free_operator_data
+    free_rows = jnp.asarray(data.free_rows)
+    constrained_rows = jnp.asarray(data.constrained_rows)
+
+    boundary_temperature = (
+        jnp.zeros((data.num_nodes,), dtype=conductivity.dtype)
+        .at[constrained_rows]
+        .set(jnp.asarray(data.constrained_values, dtype=conductivity.dtype))
+    )
+    full_load = source_load_full(source, data, dtype=conductivity.dtype)
+    full_load = full_load + jnp.asarray(
+        problem._matrix_free_neumann_load, dtype=conductivity.dtype
+    )
+    rhs = (full_load - matvec_full(boundary_temperature, conductivity, data))[free_rows]
+
+    cached = _get_cached_warm_start(linear_cache, "warm_start_fwd", data.num_nodes)
+    x0 = None if cached is None else cached[data.free_rows]
+    free_temperature = _solve_matrix_free_reduced(
+        problem,
+        conductivity,
+        rhs,
+        x0,
+        solver_options,
+        linear_cache=linear_cache,
+    )
+    full_temperature = boundary_temperature.at[free_rows].set(free_temperature)
+    _set_cached_warm_start(linear_cache, "warm_start_fwd", full_temperature)
+    return problem.unflatten_fn_sol_list(full_temperature)
 
 
 def _linear_incremental_solver(
@@ -807,6 +1343,14 @@ def _linear_incremental_solver(
 
 
 def _local_solver(problem, solver_options=None, linear_cache=None):
+    if _matrix_free_options(solver_options) is not None:
+        return _local_matrix_free_solver(
+            problem,
+            tuple(problem.internal_vars),
+            solver_options,
+            linear_cache=linear_cache,
+        )
+
     cached_dofs = _get_cached_warm_start(
         linear_cache,
         "warm_start_fwd",
@@ -886,7 +1430,6 @@ def _implicit_vjp(
         return vjp_linear_fn
 
     problem.set_params(params)
-    problem.newton_update(sol_list)
     v_vec = jax.flatten_util.ravel_pytree(v_list)[0]
     effective_solver_options, dirichlet_mode = _prepare_forward_solver_options(
         adjoint_solver_options
@@ -896,7 +1439,35 @@ def _implicit_vjp(
         "warm_start_adj",
         problem.num_total_dofs_all_vars,
     )
-    if dirichlet_mode in {"row_column_elimination", "reduced_free_dof"}:
+    matrix_free_options = effective_solver_options.get("jax_matrix_free_solver")
+    if matrix_free_options is not None:
+        if dirichlet_mode != "reduced_free_dof":
+            raise ValueError(
+                "jax_matrix_free_solver adjoints require "
+                "dirichlet_mode='reduced_free_dof'."
+            )
+        data = problem._matrix_free_operator_data
+        free_rows = np.asarray(data.free_rows)
+        reduced_v_vec = v_vec[jnp.asarray(free_rows)]
+        reduced_x0 = None
+        if cached_adjoint is not None:
+            reduced_x0 = cached_adjoint[free_rows]
+        conductivity = jnp.asarray(params[0][:, 0, 0])
+        free_adjoint_vec = _solve_matrix_free_reduced(
+            problem,
+            conductivity,
+            reduced_v_vec,
+            reduced_x0,
+            effective_solver_options,
+            linear_cache=linear_cache,
+        )
+        adjoint_vec = (
+            jnp.zeros((problem.num_total_dofs_all_vars,), dtype=free_adjoint_vec.dtype)
+            .at[jnp.asarray(free_rows)]
+            .set(free_adjoint_vec)
+        )
+    elif dirichlet_mode in {"row_column_elimination", "reduced_free_dof"}:
+        problem.newton_update(sol_list)
         A, reduced_v_vec, free_rows = _prepare_reduced_adjoint_system(problem, v_vec)
         reduced_x0 = None
         if cached_adjoint is not None:
@@ -915,6 +1486,7 @@ def _implicit_vjp(
         adjoint_full[free_rows] = np.asarray(free_adjoint_vec)
         adjoint_vec = jnp.asarray(adjoint_full)
     else:
+        problem.newton_update(sol_list)
         A = _build_scipy_matrix(problem, dirichlet_mode="row_elimination")
         adjoint_vec = _linear_solve(
             A.transpose(),
@@ -925,6 +1497,11 @@ def _implicit_vjp(
             cache_key="linear_adj",
         )
     _set_cached_warm_start(linear_cache, "warm_start_adj", adjoint_vec)
+    if matrix_free_options is not None:
+        # The residual VJP requires a cotangent matching the primal residual
+        # dtype, which follows the saved nodal solution rather than a possibly
+        # down-cast Torch/JAX bridge cotangent.
+        adjoint_vec = jnp.asarray(adjoint_vec, dtype=sol_list[0].dtype)
     vjp_linear_fn = get_vjp_constraint_fn_params(params, sol_list)
     vjp_result = vjp_linear_fn(problem.unflatten_fn_sol_list(adjoint_vec))
     vjp_result = jax.tree_util.tree_map(lambda x: -x, vjp_result)
@@ -1023,6 +1600,22 @@ class SteadyStateHeatJaxRuntime:
             location_fns=location_fns or None,
             additional_info=(neumann_values,),
         )
+        if (
+            "jax_matrix_free_solver" in self.solver_options
+            or "jax_matrix_free_solver" in self.adjoint_solver_options
+        ):
+            partition = _get_reduced_dof_partition(self.problem)
+            constrained_rows, constrained_values = _collect_dirichlet_data(self.problem)
+            cell_unit_stiffness, cell_unit_load = jax_fem_cell_data(self.problem)
+            self.problem._matrix_free_operator_data = build_rectilinear_operator_data(
+                self.mesh,
+                partition["free_rows"],
+                constrained_rows,
+                constrained_values,
+                cell_unit_stiffness=cell_unit_stiffness,
+                cell_unit_load=cell_unit_load,
+            )
+            self.problem._matrix_free_neumann_load = jax_fem_neumann_load(self.problem)
         self._solve = _local_ad_wrapper(
             self.problem,
             dict(self.solver_options),
@@ -1036,17 +1629,38 @@ class SteadyStateHeatJaxRuntime:
         def wrapped(k_values, q_values):
             return self.solve(k_values, q_values)
 
-        return jax.vjp(wrapped, k_map, q_map)
+        if "jax_matrix_free_solver" not in self.adjoint_solver_options:
+            return jax.vjp(wrapped, k_map, q_map)
+
+        forward_matrix_free = self.solver_options.get("jax_matrix_free_solver", {})
+        adjoint_matrix_free = self.adjoint_solver_options["jax_matrix_free_solver"]
+        requested_dtypes = {
+            str(options.get("solve_dtype", "float64")).lower()
+            for options in (forward_matrix_free, adjoint_matrix_free)
+        }
+        use_x64 = bool(requested_dtypes & {"float64", "fp64", "double"})
+        with temp_jax_x64(use_x64):
+            temperature, pullback = jax.vjp(wrapped, k_map, q_map)
+
+        def pullback_with_x64(cotangent):
+            # PyTorch invokes the saved pullback after ``solve`` has returned.
+            # Re-enter the precision context so float64 forward and adjoint
+            # configurations use the same arithmetic.
+            with temp_jax_x64(use_x64):
+                return pullback(jnp.asarray(cotangent, dtype=temperature.dtype))
+
+        return temperature, pullback_with_x64
 
     def solve(self, k_map, q_map):
-        conductivity = self._cellwise_param(k_map)
-        source = self._cellwise_param(q_map)
-        solution = self._solve((conductivity, source))[0]
-        nodal_temperature = solution[:, 0]
-        cell_temperature = jnp.mean(nodal_temperature[self._cells], axis=1)
-        if getattr(self.mesh, "shape", ()):
-            return cell_temperature.reshape(self.mesh.shape)
-        return cell_temperature
+        with temp_jax_x64(True):
+            conductivity = self._cellwise_param(k_map)
+            source = self._cellwise_param(q_map)
+            solution = self._solve((conductivity, source))[0]
+            nodal_temperature = solution[:, 0]
+            cell_temperature = jnp.mean(nodal_temperature[self._cells], axis=1)
+            if getattr(self.mesh, "shape", ()):
+                return cell_temperature.reshape(self.mesh.shape)
+            return cell_temperature
 
     def metadata(self):
         metadata = {

@@ -30,8 +30,11 @@ from core.invdes.models.base_optimization import (
     BaseOptimization,
     DefaultSimulationConfig,
 )
+from pyutils.general import logger
+
 from core.invdes.models.layers import ThermoOpticMRR
 from core.invdes.models.layers.thermal_control import canonicalize_currents
+from core.invdes.run_management import OptimizationRunManager
 from core.utils import set_torch_deterministic
 
 sys.path.pop(0)
@@ -335,11 +338,27 @@ def run_example(gpu_id: int = 0):
     heater_current = 15e-3
     mode = "Hz1"
     exp_name = "mrr_3d_nonuniform"
+    work_root = "./runs"
+
+    run_manager = OptimizationRunManager(
+        root=work_root,
+        experiment="mrr_3d",
+        tag=exp_name,
+    )
+    run_manager.attach_logger(logger)
 
     sim_cfg = _build_sim_cfg(
         n_wl=n_wl,
         resolution=resolution,
-        plot_root=f"./figs/{exp_name}",
+        plot_root=run_manager.path("plots", ""),
+    )
+    run_manager.bind_simulation_config(sim_cfg)
+    run_manager.write_resolved_config(
+        {
+            "sim_cfg": dict(sim_cfg),
+            "heater_current": heater_current,
+            "mode": mode,
+        }
     )
     wavelengths = np.linspace(
         sim_cfg["wl_cen"] - sim_cfg["wl_width"] / 2.0,
@@ -383,7 +402,7 @@ def run_example(gpu_id: int = 0):
         verbose=True,
     ).to(operation_device)
 
-    plot_device_maps(
+    device_maps_path = plot_device_maps(
         device,
         sim_cfg["plot_root"],
         map_names=[
@@ -392,6 +411,7 @@ def run_example(gpu_id: int = 0):
             "thermo_optic_coeff",
         ],
     )
+    run_manager.register_artifact("device_maps", device_maps_path, checksum=True)
 
     # fig, axes = plt.subplots(1, 2, figsize=(20, 10))
     # device.plot_eps(
@@ -458,6 +478,11 @@ def run_example(gpu_id: int = 0):
         param_grad=False,
     )
     opt.plot(**plot_kwargs)
+    run_manager.finish(
+        "completed",
+        through_off=results["breakdown"]["through_off"]["value"],
+        through_on=results["breakdown"]["through_on"]["value"],
+    )
 
     # del results
 

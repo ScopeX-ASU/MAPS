@@ -5,6 +5,13 @@ LastEditTime: 2024-11-24 19:34:45
 FilePath: /MAPS/core/train/models/utils.py
 """
 
+"""
+Date: 2024-08-24 21:37:48
+LastEditors: Jiaqi Gu && jiaqigu@asu.edu
+LastEditTime: 2024-08-24 21:40:35
+FilePath: /Metasurface-Opt/core/models/utils.py
+"""
+
 import math
 import os
 
@@ -25,7 +32,43 @@ __all__ = [
     "from_Ez_to_Hx_Hy",
     "get_grid",
     "poynting_vector",
+    "EightWaySymmetry",
+    "register_parameterization",
 ]
+
+
+class EightWaySymmetry(torch.nn.Module):
+    def forward(self, conv_kernel: torch.Tensor) -> torch.Tensor:
+        conv_kernel = conv_kernel + conv_kernel.flip(-1)
+        conv_kernel = conv_kernel + conv_kernel.flip(-2)
+        conv_kernel = conv_kernel + conv_kernel.transpose(-2, -1)
+        conv_kernel = conv_kernel / 8
+        return conv_kernel
+
+
+class FourWaySymmetry(torch.nn.Module):
+    def forward(self, conv_kernel: torch.Tensor) -> torch.Tensor:
+        k = conv_kernel
+        k_h = k.flip(-1)
+        k_v = k.flip(-2)
+        k_hv = k.flip((-2, -1))
+        conv_kernel = (k + k_h + k_v + k_hv) / 4
+        return conv_kernel
+
+
+def register_parameterization(module, param_class, layer_types=(torch.nn.Conv2d,)):
+    ## https://docs.pytorch.org/tutorials/intermediate/parametrizations.html
+    count = 0
+    for name, layer in module.named_modules():
+        if isinstance(layer, layer_types):
+            torch.nn.utils.parametrize.register_parametrization(
+                layer, "weight", param_class()
+            )
+            count += 1
+
+    print(
+        f"Registering parameterization {param_class} to layers of types {layer_types}, total {count} layers"
+    )
 
 
 def conv_output_size(in_size, kernel_size, padding=0, stride=1, dilation=1):

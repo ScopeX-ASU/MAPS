@@ -19,12 +19,14 @@ sys.path.insert(
 )
 import torch
 from pyutils.config import Config
+from pyutils.general import logger
 from pyutils.torch_train import load_model
 
 from core.invdes.invdesign import InvDesign
 from core.invdes.models import BendingOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import Bending
+from core.invdes.run_management import OptimizationRunManager
 from core.utils import interface_field_penalty, set_torch_deterministic
 
 sys.path.pop(0)
@@ -45,12 +47,30 @@ if __name__ == "__main__":
     input_port_width = 0.5
     output_port_width = 0.5
 
-    exp_name = "bending_3d_nonuniform"
+    # exp_name = "bending_3d_uniform_15angle"
+    exp_name = "bending_3d_vis3d"
+    work_root = "./runs"
+    # Point this environment variable at ``*_latest.pt`` to resume without
+    # editing the example. The checkpoint controls the next optimization step.
+    resume_checkpoint = os.environ.get("MAPS_RESUME_CHECKPOINT")
     mode = "Hz1"
     resolution = 50
     wl_cen = 1.55
     wl_width = 0.00
     n_wl = 1
+    sidewall_angle = 0
+
+    # Create the managed run before constructing the device. Bending performs
+    # normalization during initialization, so this ensures its diagnostic
+    # mode/norm plots and log messages use this run's plots/ and logs/ folders.
+    run_manager = OptimizationRunManager(
+        root=work_root,
+        experiment="bending_3d",
+        tag=exp_name,
+        resume=resume_checkpoint is not None,
+        resume_from=resume_checkpoint,
+    )
+    run_manager.attach_logger(logger)
 
     # wl_width = 0.00
     # n_wl = 1
@@ -69,7 +89,7 @@ if __name__ == "__main__":
                 1.4,
             ],
             max_time=2e-13,
-            subpixel=False,
+            subpixel=True,
             resolution=resolution,
             optical_grid={
                 "mode": "fdtdx_rectilinear_nonuniform",
@@ -78,7 +98,6 @@ if __name__ == "__main__":
                 "grid_y": {"type": "auto", "min_steps_per_wvl": 20},
                 "grid_z": {"type": "auto", "min_steps_per_wvl": 20},
             },
-            plot_root=f"./figs/{exp_name}",
             PML=[wl_cen / 2, wl_cen / 2, wl_cen / 2],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -88,6 +107,9 @@ if __name__ == "__main__":
             n_wl=n_wl,
         )
     )
+    # Apply this after all simulation configuration updates so normalization
+    # and later optimization plots share the managed run directory.
+    run_manager.bind_simulation_config(sim_cfg)
 
     device = Bending(
         material_r1="Si",
@@ -96,13 +118,16 @@ if __name__ == "__main__":
         port_len=(port_len, port_len),
         port_width=(input_port_width, output_port_width),
         port_height=(thickness, thickness),
+        LER_A=0.00,
+        LER_Lc=0.0,
         device=operation_device,
         is_3d=True,
+        sidewall_angle=sidewall_angle,
         mode=mode,
     )
 
     # hr_device = device.copy(resolution=310)
-    hr_device = device.copy(resolution=50)
+    hr_device = device.copy(resolution=50, LER_A=0.0, LER_Lc=0.0)
     print(device)
 
     design_region_param_cfgs = dict()
@@ -113,17 +138,17 @@ if __name__ == "__main__":
             sigma=2 / 50,  # 2 * levelset knot grid step
             transform=[
                 dict(type="transpose_symmetry", rot_k=3),
-                # dict(
-                #     type="blur",
-                #     mfs=0.05,
-                #     resolutions=[hr_device.resolution, hr_device.resolution],
-                #     dim="xy",
-                # ),
+                dict(
+                    type="blur",
+                    mfs=0.05,
+                    resolutions=[hr_device.resolution, hr_device.resolution],
+                    dim="xy",
+                ),
                 dict(type="binarize"),
             ],
             # init_method="bending_0.5",
             init_method="constant_0",
-            # init_method="constant_0.5",
+            # init_method="constant_0.4",
             # denorm_mode="linear_eps",
             denorm_mode="inverse_eps",
             interpolation="gaussian_linear",
@@ -133,8 +158,8 @@ if __name__ == "__main__":
                 mode="regular",
             ),
             dims=(0, 1),
-            extrude_direction="-",
-            extrude_angle=80.0,
+            reference_plane="middle",
+            extrude_angle=sidewall_angle,
         )
 
     obj_cfgs = dict(
@@ -172,8 +197,34 @@ if __name__ == "__main__":
             direction="x+",
             requires_grad=False,  # only used for normalization, no adjoint run is needed.
         ),
+        # interface_penalty=dict(
+        #     weight=-0.000,
+        #     #### objective is evaluated at this port
+        #     in_slice_name="in_slice_1",
+        #     #### objective is evaluated at all points by sweeping the wavelength and modes
+        #     in_mode=mode,  # only one source mode is supported, cannot input multiple modes at the same time
+        #     wl=wls,
+        #     temp=[300],
+        #     type="interface_penalty",
+        #     interface_weights=(1, 1, 0),
+        #     requires_grad=True,  # grad is needed, to avoid it from being detached.
+        #     requires_adjoint=False,  # grad is not related to fields, thus no adjoint run is needed.
+        # ),
+        # interface_penalty=dict(
+        #     weight=-2,
+        #     #### objective is evaluated at this port
+        #     in_slice_name="in_slice_1",
+        #     #### objective is evaluated at all points by sweeping the wavelength and modes
+        #     in_mode=mode,  # only one source mode is supported, cannot input multiple modes at the same time
+        #     wl=wls,
+        #     temp=[300],
+        #     type="structure_simplify",
+        #     energy_threshold=0.1,
+        #     requires_grad=True,  # grad is needed, to avoid it from being detached.
+        #     requires_adjoint=False,  # grad is not related to fields, thus no adjoint run is needed.
+        # ),
         energy_penalty=dict(
-            weight=-100,  # in 3D, grad is only through epsilon, so weights need to be large.
+            weight=-400,  # in 3D, grad is only through epsilon, so weights need to be large.
             #### objective is evaluated at this port
             in_slice_name="in_slice_1",
             #### objective is evaluated at all points by sweeping the wavelength and modes
@@ -231,6 +282,7 @@ if __name__ == "__main__":
 
     invdesign = InvDesign(
         devOptimization=opt,
+        run_manager=run_manager,
         optimizer=dict(
             name="Adam",
             lr=0.2,
@@ -248,7 +300,8 @@ if __name__ == "__main__":
             mode="linear",
             name="sharpness",
             init_sharp=4,
-            final_sharp=20,
+            # final_sharp=20,
+            final_sharp=40,
         ),
         plot_cfgs=Config(
             plot=True,
@@ -263,8 +316,14 @@ if __name__ == "__main__":
             param_grad=True,
         ),
         checkpoint_cfgs=Config(
-            save_model=False,
+            save_model=True,
             ckpt_name=f"{exp_name}",
+            interval=1,
+            save_latest=True,
+            load_ckpt=resume_checkpoint,
+            resume=resume_checkpoint is not None,
+            dump_tidy3d=True,
+            tidy3d_name=f"{exp_name}_tidy3d_geometry",
             dump_gds=True,
             gds_name=f"{exp_name}",
             upsample_eps_to_1nm=True,

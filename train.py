@@ -22,9 +22,7 @@ from pyutils.torch_train import (
 from pyutils.typing import Criterion, Optimizer, Scheduler
 
 from core import builder
-from core.invdes.invdesign import InvDesign
-from core.invdes.models.base_optimization import DefaultSimulationConfig
-from core.train.models.layers import *
+from core.invdes.models.layers import *
 
 
 def train(
@@ -62,7 +60,7 @@ def train(
             model.plot(
                 eps_map=model._eps_map,
                 obj=results["breakdown"]["fwd_trans"]["value"],
-                plot_filename=f"metacoupler_opt_step_{epoch-1}_fwd.png",
+                plot_filename=f"opt_step_{epoch-1}_fwd.png",
                 field_key=("in_port_1", 1.55, 1),
                 field_component="Ez",
                 in_port_name="in_port_1",
@@ -72,7 +70,7 @@ def train(
                 model.plot(
                     eps_map=model._eps_map,
                     obj=results["breakdown"]["bwd_trans"]["value"],
-                    plot_filename=f"metacoupler_opt_step_{epoch-1}_bwd.png",
+                    plot_filename=f"opt_step_{epoch-1}_bwd.png",
                     field_key=("out_port_1", 1.55, 1),
                     field_component="Ez",
                     in_port_name="out_port_1",
@@ -135,7 +133,7 @@ def train(
         model.plot(
             eps_map=model._eps_map,
             obj=results["breakdown"]["fwd_trans"]["value"],
-            plot_filename=f"metacoupler_opt_step_{epoch}_fwd.png",
+            plot_filename=f"opt_step_{epoch}_fwd.png",
             field_key=("in_port_1", 1.55, 1),
             field_component="Ez",
             in_port_name="in_port_1",
@@ -145,7 +143,7 @@ def train(
             model.plot(
                 eps_map=model._eps_map,
                 obj=results["breakdown"]["bwd_trans"]["value"],
-                plot_filename=f"metacoupler_opt_step_{epoch}_bwd.png",
+                plot_filename=f"opt_step_{epoch}_bwd.png",
                 field_key=("out_port_1", 1.55, 1),
                 field_component="Ez",
                 in_port_name="out_port_1",
@@ -290,46 +288,19 @@ def main() -> None:
     if int(configs.run.deterministic) == True:
         set_torch_deterministic(int(configs.run.random_state))
 
-    lg.info(configs)
-
-    ### prepare simulation config
-    sim_cfg = DefaultSimulationConfig()
-    sim_cfg.update(configs.model.sim_cfg)
-    sim_cfg.update(
-        dict(plot_root=os.path.join(configs.plot.root, configs.plot.dir_name))
-    )
-
-    ## prepare device and high-resolution device
     device = builder.make_device(
         device=operation_device,
-        sim_cfg=sim_cfg,
     )
-    hr_device = device.copy(resolution=configs.model.get("hr_resolution", 310))
 
-    lg.info(device)
-    ## create optimization plan
     model = builder.make_model(
         device=operation_device,
         random_state=(
             int(configs.run.random_state) if int(configs.run.deterministic) else None
         ),
         optDevice=device,
-        hr_optDevice=hr_device,
-        sim_cfg=sim_cfg,
     )
     lg.info(model)
 
-    invdesign = InvDesign(
-        devOptimization=model,
-        run=configs.run,
-        plot_cfgs=configs.plot,
-        checkpoint_cfgs=configs.checkpoint,
-        optimizer=configs.optimizer,
-        lr_scheduler=configs.lr_scheduler,
-        sharp_scheduler=configs.sharp_scheduler,
-    )
-    invdesign.optimize()
-    exit(0)
     # ---------- these two criterion are not needed here ------------
     # criterion = builder.make_criterion(configs.criterion.name, configs.criterion).to(
     #     device

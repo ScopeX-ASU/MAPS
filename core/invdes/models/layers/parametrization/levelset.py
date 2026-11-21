@@ -6,7 +6,7 @@ FilePath: /MAPS/core/invdes/models/layers/parametrization/levelset.py
 """
 
 from functools import lru_cache
-from typing import Tuple
+from typing import Callable, Tuple
 
 import h5py
 import torch
@@ -14,7 +14,9 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.types import Device
 
-from .base_parametrization import BaseParametrization
+from core.invdes.models.materialization.coverage import average_uniform_cells
+
+from .base_parametrization import BaseParametrization, _convert_resolution
 from .utils import HeavisideProjection, SubpixelSmoothedProjection
 
 __all__ = ["LevelSetParameterization"]
@@ -22,6 +24,17 @@ __all__ = ["LevelSetParameterization"]
 
 @torch.no_grad()
 def _reinit_sdf(phi: torch.Tensor, iters: int = 40, dt: float = 0.3) -> torch.Tensor:
+    """
+    Reinitialize a scalar level-set field toward signed-distance-function form with a Godunov-style update.
+
+    Args:
+        phi (torch.Tensor): Two-dimensional level-set field.
+        iters (int): Number of reinitialization iterations. Defaults to 40.
+        dt (float): Pseudo-time step for each reinitialization update. Defaults to 0.3.
+
+    Returns:
+        torch.Tensor: Detached reinitialized level-set field.
+    """
     eps = 1e-6
     phi = phi.clone()
     S = phi / torch.sqrt(phi * phi + eps)
@@ -63,6 +76,15 @@ def _reinit_sdf(phi: torch.Tensor, iters: int = 40, dt: float = 0.3) -> torch.Te
 
 
 def _grad_mag(phi: torch.Tensor):
+    """
+    Compute a forward finite-difference gradient magnitude with replicated boundary padding.
+
+    Args:
+        phi (torch.Tensor): Two-dimensional scalar field.
+
+    Returns:
+        torch.Tensor: Gradient-magnitude field with the same shape as ``phi``.
+    """
     dx = phi[:, 1:] - phi[:, :-1]
     dy = phi[1:, :] - phi[:-1, :]
     dx = F.pad(dx[None, None, ...], (0, 1, 0, 0), mode="replicate")[0, 0]
@@ -79,13 +101,20 @@ def _bilinear_from_knots(
     y1: torch.Tensor,
 ) -> torch.Tensor:
     """
-    z: [len(x0), len(y0)]
-    returns phi: [len(x1), len(y1)]
-    Assumes x0,y0 sorted ascending. Handles degenerate 1D cases.
+    Interpolate a knot-grid field onto an evaluation grid using bilinear interpolation, including degenerate one-dimensional cases.
+
+    Args:
+        z (torch.Tensor): Knot-grid values with shape ``[len(x0), len(y0)]``.
+        x0 (torch.Tensor): Sorted source x coordinates.
+        y0 (torch.Tensor): Sorted source y coordinates.
+        x1 (torch.Tensor): Evaluation x coordinates.
+        y1 (torch.Tensor): Evaluation y coordinates.
+
+    Returns:
+        torch.Tensor: Interpolated field with shape ``[len(x1), len(y1)]``.
     """
     H0, W0 = z.shape
     H1, W1 = len(x1), len(y1)
-    device, dtype = z.device, z.dtype
 
     # 1D cases
     if H0 == 1 and W0 >= 1:
@@ -158,9 +187,24 @@ def project_ls_knots_to_sdf_linear(
     clip_knots: float | None = 0.2,
 ) -> torch.Tensor:
     """
-    Linear-only (bilinear) projection: adjusts ls_knots so that the bilinearly
-    interpolated φ becomes an SDF.
-    Returns updated ls_knots.
+    Adjust level-set knots so their bilinear interpolation approximates a signed-distance function.
+
+    Args:
+        ls_knots (torch.Tensor): Knot-grid level-set parameters.
+        x0 (torch.Tensor): Knot-grid x coordinates.
+        y0 (torch.Tensor): Knot-grid y coordinates.
+        x1 (torch.Tensor): Fine-grid x coordinates used to construct the SDF target.
+        y1 (torch.Tensor): Fine-grid y coordinates used to construct the SDF target.
+        reinit_iters (int): SDF reinitialization iterations. Defaults to 40.
+        fit_steps (int): Inner Adam fitting iterations for the knot values. Defaults to 80.
+        fit_lr (float): Inner Adam learning rate. Defaults to 5e-2.
+        band_half_width (float): Half-width of the band around the zero level set used in the fitting losses. Defaults to 2.0.
+        w_fit (float): Weight of the SDF-value fitting loss. Defaults to 1.0.
+        w_sdf (float): Weight of the gradient-magnitude regularization loss. Defaults to 1e-3.
+        clip_knots (float | None): Optional absolute clipping bound for fitted knots. Defaults to 0.2.
+
+    Returns:
+        torch.Tensor: Updated detached level-set knot tensor.
     """
     # 1) Build φ from current knots and reinitialize to SDF (target)
     with torch.no_grad():
@@ -200,6 +244,17 @@ class LevelSetInterp(object):
     ):
         ## z0 is a tensor: first dimension is x-axis, second dimension is y-axis
         # Input data.
+        """
+        Initialize a level-set interpolator from a knot grid and select the interpolation backend.
+
+        Args:
+            x0 (torch.Tensor | None): One-dimensional source x coordinates. Defaults to None.
+            y0 (torch.Tensor | None): One-dimensional source y coordinates. Defaults to None.
+            z0 (torch.Tensor | None): Two-dimensional source level-set values. Defaults to None.
+            sigma (float): Gaussian width used by Gaussian interpolation. Defaults to 0.02.
+            interpolation (str): Interpolation backend: ``"gaussian"``, ``"linear"``, ``"bilinear"``, or ``"gaussian_linear"``. Defaults to ``"gaussian"``.
+            device (torch.device): Device holding interpolation coordinates and kernels. Defaults to ``torch.device("cuda:0")``.
+        """
         x0 = x0.to(device)
         y0 = y0.to(device)
         z0 = z0.to(device)
@@ -223,10 +278,26 @@ class LevelSetInterp(object):
             self.build_gaussian_linear_model(x0, y0, sigma)
 
     def build_gaussian_model(self):
+        """
+        Build and cache the linear-system coefficients for Gaussian radial-basis interpolation.
+
+        Returns:
+            None: Stores the interpolation model in ``self.model``.
+        """
         gauss_kernel = self.gaussian(self.xy0, self.xy0)
         self.model = torch.matmul(torch.linalg.inv(gauss_kernel), self.z0.flatten())
 
     def gaussian(self, xyi, xyj):
+        """
+        Evaluate the Gaussian radial-basis kernel between two coordinate sets.
+
+        Args:
+            xyi (torch.Tensor): First coordinate set with columns ``(x, y)``.
+            xyj (torch.Tensor): Second coordinate set with columns ``(x, y)``.
+
+        Returns:
+            torch.Tensor: Pairwise Gaussian kernel matrix using ``self.sig``.
+        """
         dist_sq = (xyi[:, 1].reshape(-1, 1) - xyj[:, 1].reshape(1, -1)).square_() + (
             xyi[:, 0].reshape(-1, 1) - xyj[:, 0].reshape(1, -1)
         ).square_()
@@ -234,15 +305,38 @@ class LevelSetInterp(object):
 
     def build_linear_model(self):
         # For linear interpolation, no precomputed model is required.
+        """
+        Select the linear interpolation backend without precomputing coefficients.
+
+        Returns:
+            None: No persistent model state is required.
+        """
         pass
 
     def build_bilinear_model(self):
         # For bilinear interpolation, no precomputed model is required.
+        """
+        Select the bilinear interpolation backend without precomputing coefficients.
+
+        Returns:
+            None: No persistent model state is required.
+        """
         pass
 
     def build_gaussian_linear_model(self, x0, y0, sigma):
         ### we use 3 sigma rule to build the convolution kernel
         ## sigma: typically the rho_size in um unit
+        """
+        Build and normalize a finite Gaussian convolution kernel used before linear interpolation.
+
+        Args:
+            x0 (torch.Tensor): Source x coordinates used to determine grid spacing.
+            y0 (torch.Tensor): Source y coordinates used to determine grid spacing.
+            sigma (float): Gaussian standard deviation in the same physical units as the coordinate grid.
+
+        Returns:
+            None: Stores the normalized kernel in ``self.gauss_kernel``.
+        """
         grid_x, grid_y = x0[1] - x0[0], y0[1] - y0[0]
         ## then the kernel size in number of points
         kernel_size_x = int((3 * sigma) / grid_x) * 2 + 1
@@ -269,7 +363,16 @@ class LevelSetInterp(object):
         self.gauss_kernel = self.gauss_kernel / self.gauss_kernel.sum()
 
     def handle_constant_dimension(self, x1, y1):
-        """Handle cases where one dimension of z0 has only one knot."""
+        """
+        Handle level-set grids with only one knot along one axis by linearly interpolating along the varying axis and repeating along the constant axis.
+
+        Args:
+            x1 (torch.Tensor): Target x coordinates.
+            y1 (torch.Tensor): Target y coordinates.
+
+        Returns:
+            torch.Tensor | None: Interpolated constant-dimension field, or None when both source dimensions vary.
+        """
         if self.n_phi[0] == 1:  # Single knot along the x-axis
             # Interpolate along the y-axis
             z_values = self.z0[0, :].unsqueeze(0).unsqueeze(0)  # Shape: [1, 1, 134]
@@ -297,6 +400,17 @@ class LevelSetInterp(object):
 
     def linear_interpolate(self, x1, y1, z0=None):
         # Perform 1D linear interpolation for each axis independently.
+        """
+        Evaluate piecewise bilinear interpolation from the source knot grid using independent coordinate searches.
+
+        Args:
+            x1 (torch.Tensor): Target x coordinates.
+            y1 (torch.Tensor): Target y coordinates.
+            z0 (torch.Tensor | None): Optional source field overriding ``self.z0``. Defaults to None.
+
+        Returns:
+            torch.Tensor: Interpolated target field.
+        """
         x0 = self.xy0[:, 0].unique(sorted=True)
         y0 = self.xy0[:, 1].unique(sorted=True)
         if z0 is None:
@@ -329,12 +443,32 @@ class LevelSetInterp(object):
 
     def bilinear_interpolate(self, x1, y1):
         # Use bilinear interpolation, equivalent to linear in 2D.
+        """
+        Evaluate the class bilinear interpolation path, which delegates to ``linear_interpolate``.
+
+        Args:
+            x1 (torch.Tensor): Target x coordinates.
+            y1 (torch.Tensor): Target y coordinates.
+
+        Returns:
+            torch.Tensor: Interpolated target field.
+        """
         return self.linear_interpolate(x1, y1)
 
     def gaussian_linear_interpolate(self, x1, y1):
         ## first use the gaussian kernel to convolve the z0
         # z0: [len(x0), len(y0)]
         # gauss_kernel: [1, 1, kx, ky]
+        """
+        Smooth the source level-set grid with the cached Gaussian kernel and then perform linear interpolation.
+
+        Args:
+            x1 (torch.Tensor): Target x coordinates.
+            y1 (torch.Tensor): Target y coordinates.
+
+        Returns:
+            torch.Tensor: Smoothed and linearly interpolated level-set field.
+        """
         pad_x = self.gauss_kernel.shape[2] // 2
         pad_y = self.gauss_kernel.shape[3] // 2
         z0_padded = F.pad(
@@ -351,6 +485,17 @@ class LevelSetInterp(object):
         return self.linear_interpolate(x1, y1, z0=z0)
 
     def get_ls(self, x1, y1, shape):
+        """
+        Evaluate the configured level-set interpolator on a target coordinate grid.
+
+        Args:
+            x1 (torch.Tensor): Target x coordinates.
+            y1 (torch.Tensor): Target y coordinates.
+            shape (tuple[int, int]): Output field shape.
+
+        Returns:
+            torch.Tensor: Level-set surface evaluated at the target coordinates.
+        """
         xx, yy = torch.meshgrid(x1, y1, indexing="ij")
         xx = xx.to(self.device)
         yy = yy.to(self.device)
@@ -381,6 +526,15 @@ class LevelSetInterp(object):
 
 class GetLevelSetDensity(nn.Module):
     def __init__(self, fw_threshold, bw_threshold, mode, device):
+        """
+        Initialize the level-set density projection wrapper.
+
+        Args:
+            fw_threshold (float): Forward projection threshold.
+            bw_threshold (float): Backward projection threshold.
+            mode (str): Heaviside projection mode.
+            device (torch.device): Device for projection state.
+        """
         super().__init__()
         self.fw_threshold = fw_threshold
         self.bw_threshold = bw_threshold
@@ -405,6 +559,23 @@ class GetLevelSetDensity(nn.Module):
         ny_phi,
         sharpness,
     ):
+        """
+        Generate a normalized level-set density and its corresponding level-set field on the requested evaluation grid.
+
+        Args:
+            design_param (torch.Tensor): Level-set knot parameters.
+            x_rho (torch.Tensor): Knot-grid x coordinates.
+            y_rho (torch.Tensor): Knot-grid y coordinates.
+            x_phi (torch.Tensor): Level-set evaluation-grid x coordinates.
+            y_phi (torch.Tensor): Level-set evaluation-grid y coordinates.
+            rho_size (float): Gaussian smoothing width passed to ``LevelSetInterp``.
+            nx_phi (int): Output x dimension.
+            ny_phi (int): Output y dimension.
+            sharpness (float): Projection sharpness parameter.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: Density field and reshaped level-set field.
+        """
         phi_model = LevelSetInterp(
             x0=x_rho,
             y0=y_rho,
@@ -431,6 +602,7 @@ class LevelSetParameterization(BaseParametrization):
         cfgs: dict = dict(
             method="levelset",
             rho_resolution=[50, 0],  #  50 knots per um, 0 means reduced dimention
+            phi_resolution=[50, 50],  # uniform physical level-set evaluation grid
             binary_projection=dict(
                 fw_threshold=100,
                 bw_threshold=100,
@@ -447,10 +619,18 @@ class LevelSetParameterization(BaseParametrization):
             denorm_mode="linear_eps",
             dims=(0, 1),  # the levelset2d describes x-y plane.
             extrude_direction="-",  # extrude in the negative z direction
-            extrude_angle=90.0,  # extrude vertically
+            extrude_angle=0.0,  # extrude vertically
         ),
         **kwargs,
     ):
+        """
+        Initialize the level-set parameterization, build its learnable knots, and configure binary/subpixel projection state.
+
+        Args:
+            *args: Positional arguments forwarded to ``BaseParametrization``.
+            cfgs (dict): Level-set configuration containing interpolation resolution, projection, transform, initialization, dimensions, and extrusion settings. Defaults to the built-in level-set configuration defined in the signature.
+            **kwargs: Additional keyword arguments forwarded to ``BaseParametrization``.
+        """
         super().__init__(*args, cfgs=cfgs, **kwargs)
 
         method = cfgs["method"]
@@ -481,21 +661,38 @@ class LevelSetParameterization(BaseParametrization):
         rho_resolution: Tuple[int, int],
         region_size: Tuple[float, float] | Tuple[float, float, float],
         dims: Tuple[int, int] = (0, 1),
+        phi_resolution: Tuple[int, int] | None = None,
     ):
+        """
+        Construct level-set knot/evaluation coordinates and dimensions from physical region size and requested resolutions.
+
+        Args:
+            rho_resolution (tuple[int, int]): Knot resolution in points per physical unit; non-positive entries create a single evaluation coordinate along that axis.
+            region_size (tuple[float, float] | tuple[float, float, float]): Physical design-region dimensions.
+            dims (tuple[int, int]): Physical axes represented by the 2-D level set. Defaults to ``(0, 1)``.
+            phi_resolution (tuple[int, int] | None): Optional evaluation-grid resolution. Defaults to None, which uses ``rho_resolution``.
+
+        Returns:
+            dict: Dictionary containing ``n_rho``, ``n_phi``, ``rho``, and ``phi`` coordinate metadata.
+
+        Raises:
+            ValueError: If ``phi_resolution`` has the wrong dimensionality.
+        """
         region_size = tuple(region_size)
         region_size = tuple([region_size[d] for d in dims])
-        design_region_mask = [self.design_region_mask[d] for d in dims]
-        hr_design_region_mask = [self.hr_design_region_mask[d] for d in dims]
-
         n_rho = [
             int(region_s * res) + 1
             for region_s, res in zip(region_size, rho_resolution)
         ]
-        ### this makes sure n_phi is the same as design_region_mask
-        ## add 1 here due to leveset needs to have one more point than the design region
-        n_phi = [(m.stop - m.start) for m in design_region_mask]
-
-        n_hr_phi = [(m.stop - m.start) for m in hr_design_region_mask]
+        phi_resolution = tuple(phi_resolution or rho_resolution)
+        if len(phi_resolution) != len(region_size):
+            raise ValueError(
+                "phi_resolution must have one entry for each level-set dimension"
+            )
+        n_phi = [
+            1 if res <= 0 else max(2, int(round(region_s * res)) + 1)
+            for region_s, res in zip(region_size, phi_resolution)
+        ]
 
         rho = [
             torch.linspace(-region_s / 2, region_s / 2, n, device=self.operation_device)
@@ -506,33 +703,33 @@ class LevelSetParameterization(BaseParametrization):
         phi = [
             torch.linspace(
                 -region_s / 2,
-                region_s / 2 if rho_res > 0 else -region_s / 2,
+                region_s / 2 if phi_res > 0 else -region_s / 2,
                 n,
                 device=self.operation_device,
             )
-            for region_s, n, rho_res in zip(region_size, n_phi, rho_resolution)
-        ]
-
-        ## if one dimension has rho_resolution=0, then this dimension need to be duplicated, e.g., ridge
-        ## then all n_phi points need to be the same number, which is -region_s/2
-        hr_phi = [
-            torch.linspace(
-                -region_s / 2,
-                region_s / 2 if rho_res > 0 else -region_s / 2,
-                n,
-                device=self.operation_device,
-            )
-            for region_s, n, rho_res in zip(region_size, n_hr_phi, rho_resolution)
+            for region_s, n, phi_res in zip(region_size, n_phi, phi_resolution)
         ]
 
         param_dict = dict(
-            n_rho=n_rho, n_phi=n_phi, rho=rho, phi=phi, n_hr_phi=n_hr_phi, hr_phi=hr_phi
+            n_rho=n_rho,
+            n_phi=n_phi,
+            rho=rho,
+            phi=phi,
         )
 
         return param_dict
 
     def _build_parameters_levelset(self, param_cfg, region_cfg):
+        """
+        Build the learnable level-set knot parameter and associated coordinate metadata for one design region.
 
+        Args:
+            param_cfg (dict): Level-set parameterization configuration.
+            region_cfg (dict): Design-region geometry configuration.
+
+        Returns:
+            tuple[dict, dict]: Parameter mapping containing ``ls_knots`` and coordinate metadata.
+        """
         dims = sorted(
             self.cfgs.get("dims", (0, 1))
         )  # the dimensions that the level set is defined on, default to [0, 1] for x-y plane
@@ -541,6 +738,9 @@ class LevelSetParameterization(BaseParametrization):
             tuple(param_cfg["rho_resolution"]),
             tuple(region_cfg["size"]),
             dims=tuple(dims),
+            phi_resolution=tuple(
+                param_cfg.get("phi_resolution", param_cfg["rho_resolution"])
+            ),
         )
         n_rho = param_dict["n_rho"]
         ls_knots = nn.Parameter(torch.zeros(*n_rho, device=self.operation_device))
@@ -549,9 +749,15 @@ class LevelSetParameterization(BaseParametrization):
         return weight_dict, param_dict
 
     def reset_levelset_sdf(self):
+        """
+        Project the current level-set knots toward a signed-distance-function representation in place.
+
+        Returns:
+            None: Updates ``self.weights["ls_knots"]`` under ``torch.no_grad``.
+        """
         weights = self.weights
         rho = self.params["rho"]
-        phi = self.params["hr_phi"]
+        phi = self.params["phi"]
         x0, y0 = rho[0], rho[1]
         x1, y1 = phi[0], phi[1]
         weights["ls_knots"].data.copy_(
@@ -570,7 +776,22 @@ class LevelSetParameterization(BaseParametrization):
     def _reset_parameters_levelset(
         self, weight_dict, param_cfg, region_cfg, init_method: str = "random"
     ):
+        """
+        Initialize level-set knot values according to the configured initialization method or external HDF5 source.
+
+        Args:
+            weight_dict (dict[str, torch.nn.Parameter]): Learnable level-set parameters.
+            param_cfg (dict): Level-set parameterization configuration.
+            region_cfg (dict): Design-region geometry configuration.
+            init_method (str | Callable): Initialization strategy. Defaults to ``"random"``.
+
+        Raises:
+            ValueError: If the requested initialization method is unsupported.
+        """
         init_file_path = param_cfg.get("initialization_file", None)
+        if isinstance(init_method, Callable):
+            init_method = init_method(weight_dict, param_cfg, region_cfg)
+            return
         if init_file_path is not None:
             assert (
                 init_method == "grating_1d"
@@ -807,12 +1028,26 @@ class LevelSetParameterization(BaseParametrization):
             raise ValueError(f"Unsupported initialization method: {init_method}")
 
     def _build_density(self, weights, rho, phi, n_phi, sharpness: float, ls_knots=None):
+        """
+        Interpolate level-set knots onto the evaluation grid and produce the normalized level-set density field.
+
+        Args:
+            weights (dict[str, torch.Tensor]): Level-set learnable weights.
+            rho (list[torch.Tensor]): Knot-grid coordinate tensors.
+            phi (list[torch.Tensor]): Evaluation-grid coordinate tensors.
+            n_phi (list[int]): Evaluation-grid shape.
+            sharpness (float): Projection sharpness parameter.
+            ls_knots (torch.Tensor | None): Optional alternative knot tensor used for sensitivity/evaluation. Defaults to None.
+
+        Returns:
+            torch.Tensor: High-resolution normalized density field.
+        """
         if ls_knots is not None:
             assert (
                 ls_knots.shape == weights["ls_knots"].shape
             ), f"the shape of ls_knots {ls_knots.shape} should be the same as the shape of ls_knots in weights {weights['ls_knots'].shape}"
-        sigma = getattr(self.cfgs, "sigma", 1 / max(self.cfgs["rho_resolution"]))
-        interpolation = getattr(self.cfgs, "interpolation", "gaussian")
+        sigma = self.cfgs.get("sigma", 1 / max(self.cfgs["rho_resolution"]))
+        interpolation = self.cfgs.get("interpolation", "gaussian")
         design_param = weights["ls_knots"] if ls_knots is None else ls_knots
         ### to avoid all knots becoming unreasonable large to make it stable
         ### also to avoid most knots concentrating near threshold, otherwise, binarization will not work
@@ -825,7 +1060,17 @@ class LevelSetParameterization(BaseParametrization):
             interpolation=interpolation,
             device=design_param.device,
         )
-        phi = phi_model.get_ls(x1=phi[0], y1=phi[1], shape=n_phi)  # [76, 2001]
+
+        phi = phi_model.get_ls(x1=phi[0], y1=phi[1], shape=n_phi)
+
+        # import matplotlib.pyplot as plt
+        # fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+
+        # axes[0].imshow(design_param.data.cpu().numpy())
+        # axes[1].imshow(phi.data.cpu().numpy())
+        # plt.savefig("phi.png")
+        # input("Press Enter to continue...")
+        # exit(0)
 
         ## This is used to constrain the value to be [0, 1] for heaviside input
         # phi = torch.tanh(phi) * 0.5
@@ -838,18 +1083,205 @@ class LevelSetParameterization(BaseParametrization):
 
         return density_phi
 
+    def _region_coordinates(self, device, region_mask):
+        """
+        Extract physical optical-grid coordinates inside a design-region mask relative to the region center.
+
+        Args:
+            device (object): Device-like object exposing ``optical_grid_metadata``.
+            region_mask (tuple[slice, ...]): Per-axis mask selecting the design region.
+
+        Returns:
+            tuple[torch.Tensor, ...] | None: Center-relative coordinates on the configured level-set dimensions, or None when grid metadata is unavailable.
+        """
+        metadata = getattr(device, "optical_grid_metadata", None)
+        if metadata is None:
+            return None
+        dims = sorted(self.cfgs.get("dims", (0, 1)))
+        coords = metadata.get("coords")
+        if coords is None:
+            return None
+        region_center = self.design_region_cfg["center"]
+        return tuple(
+            torch.as_tensor(
+                coords[dim][region_mask[dim]] - float(region_center[dim]),
+                dtype=torch.float32,
+                device=self.operation_device,
+            )
+            for dim in dims
+        )
+
+    def _resample_density_to_hr(self, density, target_size):
+        """
+        Resample an evaluation-grid density onto the high-resolution design-region grid.
+
+        Args:
+            density (torch.Tensor): Density on the level-set evaluation grid.
+            target_size (tuple[int, ...]): Target high-resolution spatial size.
+
+        Returns:
+            torch.Tensor: Density sampled on the high-resolution grid.
+        """
+        source_coords = self.params["phi"]
+        if source_coords is not None:
+            dims = sorted(self.cfgs.get("dims", (0, 1)))
+            absolute_coords = tuple(
+                coord + float(self.design_region_cfg["center"][dim])
+                for coord, dim in zip(source_coords, dims)
+            )
+            averaged = self._resample_volume_fraction_on_grid(
+                density, absolute_coords, self.hr_device, self.hr_design_region_mask
+            )
+            if averaged is not None:
+                return averaged
+        target_coords = self._region_coordinates(
+            self.hr_device, self.hr_design_region_mask
+        )
+        if target_coords is None:
+            return _convert_resolution(
+                density, intplt_mode="nearest", target_size=target_size
+            )
+        return _bilinear_from_knots(
+            density,
+            source_coords[0],
+            source_coords[1],
+            target_coords[0],
+            target_coords[1],
+        )
+
+    def _resample_density_to_native(self, density, target_size, eps_r, eps_bg):
+        """
+        Resample an evaluation-grid density onto the native simulation grid, optionally preserving material-aware subpixel interpolation.
+
+        Args:
+            density (torch.Tensor): Density on the level-set evaluation grid.
+            target_size (tuple[int, ...]): Target native-grid spatial size.
+            eps_r (float | torch.Tensor): Design-region material permittivity.
+            eps_bg (float | torch.Tensor): Background material permittivity.
+
+        Returns:
+            torch.Tensor: Density sampled on the native grid.
+        """
+        source_coords = self.params["phi"]
+        target_coords = self._region_coordinates(self.device, self.design_region_mask)
+        if source_coords is not None:
+            dims = sorted(self.cfgs.get("dims", (0, 1)))
+            absolute_coords = tuple(
+                coord + float(self.design_region_cfg["center"][dim])
+                for coord, dim in zip(source_coords, dims)
+            )
+            averaged = self._resample_volume_fraction_on_grid(
+                density, absolute_coords, self.device, self.design_region_mask
+            )
+            if averaged is not None:
+                return averaged
+        if source_coords is None or target_coords is None:
+            return average_uniform_cells(density, target_size)
+        return _bilinear_from_knots(
+            density,
+            source_coords[0],
+            source_coords[1],
+            target_coords[0],
+            target_coords[1],
+        )
+
     def build_density(self, weights, sharpness: float, ls_knots=None):
         ## this is the high resolution, e.g., res=200, 310 normalized density
+        """
+        Build the high-resolution normalized density field from the current level-set parameters.
+
+        Args:
+            weights (dict[str, torch.Tensor]): Learnable level-set weights.
+            sharpness (float): Projection sharpness parameter.
+            ls_knots (torch.Tensor | None): Optional alternative knot tensor for evaluation. Defaults to None.
+
+        Returns:
+            torch.Tensor: High-resolution normalized density field.
+        """
         hr_density = self._build_density(
             weights,
             self.params["rho"],
-            self.params["hr_phi"],
-            self.params["n_hr_phi"],
+            self.params["phi"],
+            self.params["n_phi"],
             sharpness,
             ls_knots=ls_knots,
         )
 
         return hr_density
+
+    def add_roughness(
+        self,
+        density: Tensor,
+        *,
+        A: float,
+        Lc: float,
+        seed: int | None = None,
+        **kwargs,
+    ) -> Tensor:
+        """
+        Apply correlated stochastic boundary roughness along the level-set normal direction while preserving the binary-density envelope.
+
+        Args:
+            density (torch.Tensor): Two-dimensional density field.
+            A (float): Roughness amplitude in the design-region physical units.
+            Lc (float): Correlation length in the design-region physical units.
+            seed (int | None): Optional random seed for deterministic roughness. Defaults to None.
+            **kwargs: Additional implementation-specific options forwarded to the roughness helper.
+        """
+        if density.ndim != 2 or not hasattr(self, "phi"):
+            raise ValueError(
+                "LevelSet add_roughness requires a 2D density and level-set field"
+            )
+        phi = self.phi.to(device=density.device, dtype=density.dtype)
+        if tuple(phi.shape) != tuple(density.shape):
+            phi = F.interpolate(
+                phi[None, None],
+                size=tuple(density.shape),
+                mode="bilinear",
+                align_corners=True,
+            )[0, 0]
+
+        region_size = tuple(float(v) for v in self.design_region_cfg["size"][:2])
+        spacing = tuple(
+            size / max(length - 1, 1)
+            for size, length in zip(region_size, density.shape)
+        )
+        phi_signed = phi - self.eta.to(device=phi.device, dtype=phi.dtype)
+        phi_grad_x = torch.gradient(
+            phi_signed, spacing=(spacing[0],), dim=(0,), edge_order=1
+        )[0]
+        phi_grad_y = torch.gradient(
+            phi_signed, spacing=(spacing[1],), dim=(1,), edge_order=1
+        )[0]
+        grad_mag = torch.sqrt(phi_grad_x.square() + phi_grad_y.square() + 1e-12)
+        normal_x = phi_grad_x / grad_mag
+        normal_y = phi_grad_y / grad_mag
+        density_grad_x = torch.gradient(
+            density, spacing=(spacing[0],), dim=(0,), edge_order=1
+        )[0]
+        density_grad_y = torch.gradient(
+            density, spacing=(spacing[1],), dim=(1,), edge_order=1
+        )[0]
+        displacement = self._correlated_roughness_2d(
+            density,
+            A=float(A),
+            Lc=float(Lc),
+            seed=seed,
+        )
+        normal_density_gradient = normal_x * density_grad_x + normal_y * density_grad_y
+
+        class ClipSTEFunc(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, input_tensor):
+                return input_tensor.clamp(0, 1)
+
+            @staticmethod
+            def backward(ctx, grad_output):
+                return grad_output
+
+        return ClipSTEFunc.apply(
+            density - (displacement * normal_density_gradient).detach()
+        )
 
     def build_permittivity(self, weights, sharpness: float, ls_knots=None):
         return self.build_density(weights, sharpness, ls_knots=ls_knots)

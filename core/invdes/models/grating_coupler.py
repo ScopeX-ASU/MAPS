@@ -4,7 +4,10 @@ from .base_optimization import BaseOptimization, DefaultOptimizationConfig
 
 
 class DefaultConfig(DefaultOptimizationConfig):
+    """Default FDFD and forward-transmission settings for a grating coupler."""
+
     def __init__(self):
+        """Initialize the GratingCoupler default configuration tree."""
         super().__init__()
         self.update(
             dict(
@@ -47,6 +50,26 @@ class DefaultConfig(DefaultOptimizationConfig):
 
 
 class GratingCouplerOptimization(BaseOptimization):
+    """Inverse-design optimization model for a grating coupler.
+
+    Args:
+        device: Simulation-resolution grating-coupler device.
+        hr_device: Higher-resolution device used for level-set transforms.
+        design_region_param_cfgs: Optional mapping of design-region settings.
+            Empty input triggers the built-in level-set configuration.
+        sim_cfg: Overrides for the default Ceviche/FDFD settings.
+        obj_cfgs: Objective overrides. ``override=True`` clears the default
+            objective mapping before applying supplied terms.
+        operation_device: PyTorch device used for optimization tensors.
+
+    Notes:
+        The default design representation uses ``rho_resolution=[25, 25]``,
+        mirror symmetry in dimension 1, ``mfs=0.05`` blur in ``xy``, binarization,
+        ``init_method="ones"``, bilinear interpolation, and binary projection
+        thresholds of 100. The forward-transmission objective runs from
+        ``out_slice_1`` to ``in_slice_1`` at 1.55 um in the ``x-`` direction.
+    """
+
     def __init__(
         self,
         device,

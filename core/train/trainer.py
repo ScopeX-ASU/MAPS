@@ -1,13 +1,32 @@
+import datetime
+import math
 import os
+import random
 
 import torch
 import torch.amp as amp
 import torch.fft
+import torch.nn.functional as F
+import wandb
 from pyutils.general import AverageMeter
 from pyutils.general import logger as lg
-from pyutils.torch_train import set_torch_deterministic
+from pyutils.torch_train import (
+    BestKModelSaver,
+    count_parameters,
+    get_learning_rate,
+    load_model,
+    set_torch_deterministic,
+)
+from pyutils.typing import Criterion, DataLoader, Optimizer, Scheduler
 
-from core.utils import plot_fields
+from core.train import builder
+from core.train.models.utils import from_Ez_to_Hx_Hy
+from core.utils import (
+    DeterministicCtx,
+    cal_total_field_adj_src_from_fwd_field,
+    plot_fields,
+    print_stat,
+)
 from core.utils import train_configs as configs
 from thirdparty.ceviche.constants import *
 
@@ -94,7 +113,7 @@ def data_preprocess(data, device):
         "opt_cfg_file_path": opt_cfg_file_path,
         "input_slice": input_slice,
         "wavelength": wavelength.to(device, non_blocking=True),
-        "mode": mode,
+        "mode": mode.to(device, non_blocking=True),
         "temp": temp.to(device, non_blocking=True),
     }
 
@@ -492,11 +511,11 @@ class PredTrainer(object):
         plot_fields(
             fields=forward_field.detach(),
             ground_truth=data["fwd_field"],
-            filepath=filepath + "-fwd.png",
+            filepath=filepath + f"-fwd.png",
         )
         if adjoint_field is not None:
             plot_fields(
                 fields=adjoint_field.clone().detach(),
                 ground_truth=data["adj_field"],
-                filepath=filepath + "-adj.png",
+                filepath=filepath + f"-adj.png",
             )

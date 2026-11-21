@@ -1,10 +1,10 @@
 """
 Description:
 Author: Jiaqi Gu (jiaqigu@asu.edu)
-Date: 2026-05-29 15:21:57
+Date: 2026-06-02 00:41:23
 LastEditors: Jiaqi Gu (jiaqigu@asu.edu)
-LastEditTime: 2026-06-01 23:28:40
-FilePath: /MAPS_fdtdx/core/heat/solver.py
+LastEditTime: 2026-07-17 11:56:36
+FilePath: /MAPS/core/heat/solver.py
 """
 
 import time
@@ -17,8 +17,13 @@ from core.utils import _jax_to_torch, _torch_to_jax
 
 def _runtime_torch_dtype(runtime, fallback_dtype: torch.dtype) -> torch.dtype:
     solver_options = getattr(runtime, "solver_options", {}) or {}
-    jax_options = solver_options.get("jax_solver", {}) or {}
-    solve_dtype = str(jax_options.get("solve_dtype", "")).lower()
+    options = (
+        solver_options.get("jax_matrix_free_solver")
+        or solver_options.get("jax_solver")
+        or solver_options.get("amjax_solver")
+        or {}
+    )
+    solve_dtype = str(options.get("solve_dtype", "")).lower()
     if solve_dtype in {"float64", "fp64", "double"}:
         return torch.float64
     if solve_dtype in {"float32", "fp32", "single"}:

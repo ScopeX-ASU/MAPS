@@ -11,7 +11,14 @@ from .base_optimization import BaseOptimization, DefaultOptimizationConfig
 
 
 class DefaultConfig(DefaultOptimizationConfig):
+    """Default FDFD objective configuration for the optical-diode workflow.
+
+    The active objective includes asymmetric forward/backward transmission,
+    reflection, radiation penalties, and an optional S-matrix term at 1.55 um.
+    """
+
     def __init__(self):
+        """Initialize the optical-diode default configuration tree."""
         super().__init__()
         self.update(
             dict(
@@ -239,6 +246,28 @@ class DefaultConfig(DefaultOptimizationConfig):
 
 
 class OpticalDiodeOptimization(BaseOptimization):
+    """Inverse-design optimization model for an asymmetric optical diode.
+
+    Args:
+        device: Simulation-resolution device defining the optical-isolator
+            geometry, ports, monitors, and design regions.
+        hr_device: Higher-resolution device used by parameterization transforms.
+        design_region_param_cfgs: Reserved custom mapping; the current
+            implementation constructs the built-in level-set mapping for each
+            device design region.
+        sim_cfg: Overrides for the default Ceviche/FDFD simulation settings.
+        obj_cfgs: Objective overrides for forward/backward transmission,
+            reflection, radiation, and optional S-matrix metrics.
+        operation_device: PyTorch device used for optimization state.
+
+    Notes:
+        The default design representation uses ``rho_resolution=[100,100]``,
+        mirror symmetry along dimension 1, ``mfs=0.08`` blur in ``xy``,
+        binarization, random initialization, Gaussian-linear interpolation, and
+        binary projection thresholds of 100. The objective weights intentionally
+        make forward transmission and backward suppression asymmetric.
+    """
+
     def __init__(
         self,
         device,

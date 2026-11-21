@@ -1,18 +1,19 @@
 """
 Date: 2024-10-02 20:59:04
-LastEditors: Jiaqi Gu && jiaqigu@asu.edu
-LastEditTime: 2025-02-25 23:16:17
+LastEditors: Jiaqi Gu && jqgu@utexas.edu
+LastEditTime: 2026-09-02 23:48:52
 FilePath: /MAPS/core/invdes/models/layers/device_base.py
 """
 
 import copy
 import inspect
+import logging
 import os
 from functools import lru_cache
 from typing import Any, List, Sequence, Tuple
 
 try:
-    import fdtdx
+    from thirdparty.fdtdx import fdtdx
 except ImportError:
     fdtdx = None
 
@@ -28,15 +29,23 @@ from pyutils.config import Config
 from pyutils.general import ensure_dir
 from torch.nn import functional as F
 
+from core.env_args import get_env_arg
 from core.fdfd import fdfd_ez as fdfd_ez_torch
 from core.fdfd import fdfd_hz as fdfd_hz_torch
-from core.invdes.models.layers.utils import modulation_fn_dict, slice_to_indices
+from core.heat.transfer import conservative_rectilinear_remap
+from core.invdes.models.layers.utils import (
+    apply_line_edge_roughness,
+    modulation_fn_dict,
+    slice_to_indices,
+)
 from core.utils import (
     Si_eps,
     SiO2_eps,
     Slice,
     Slice3D,
+    _design_region_visualization_bounds,
     _jax_to_torch,
+    _origin_grid_cell_bounds,
     build_rectilinear_grid_metadata,
     convert_to_fdtdx_grid_shape_loc_slice,
     get_electrical_conductivity_fn,
@@ -80,7 +89,11 @@ from .utils import insert_mode, plot_eps_field
 __all__ = ["BaseDevice", "N_Ports"]
 
 _AXES = ("x", "y", "z")
-_MAPS_ENABLE_PHASOR_H = os.environ.get("MAPS_ENABLE_PHASOR_H", "0") == "1"
+_MAPS_SPARSE_PHASOR = get_env_arg("MAPS_SPARSE_PHASOR", context="device")
+_MAPS_SPARSE_PHASOR_VISUALIZATION_PLANES = get_env_arg(
+    "MAPS_SPARSE_PHASOR_VISUALIZATION_PLANES", context="device"
+)
+_MAPS_ENABLE_PHASOR_H = get_env_arg("MAPS_ENABLE_PHASOR_H", context="device")
 _PHASOR_COMPONENTS = (
     ("Ex", "Ey", "Ez", "Hx", "Hy", "Hz")
     if _MAPS_ENABLE_PHASOR_H
@@ -446,75 +459,266 @@ class BaseDevice(object):
 
     def build_ports(self):
         ### build geometry for input/output ports
+        """
+        Hook for building input/output port geometry on a base device.
+
+        Returns:
+            None in the base implementation. Concrete device subclasses override this method when port geometry must be constructed from higher-level device configuration.
+        """
         pass
 
     def update_device_config(self, device_type, device_cfg):
+        """
+        Replace the active device type and device-configuration payload.
+
+        Args:
+            device_type: String identifying the concrete device representation.
+            device_cfg: Serializable configuration dictionary associated with the device.
+
+        Returns:
+            None. ``self.config.device.type`` and ``self.config.device.cfg`` are updated in-place.
+        """
         self.config.device.type = device_type
         self.config.device.update(dict(cfg=device_cfg))
 
     def reset_device_config(self):
+        """
+        Reset the stored device type and device configuration to empty defaults.
+
+        Returns:
+            None. ``self.config.device.type`` becomes an empty string and ``self.config.device.cfg`` becomes an empty dictionary.
+        """
         self.config.device.type = ""
         self.config.device.update(dict(cfg=dict()))
 
     def add_source_config(self, source_config):
+        """
+        Append one optical source configuration to the device configuration.
+
+        Args:
+            source_config: Serializable source-configuration object/dictionary consumed by the active solver backend.
+
+        Returns:
+            None. The object is appended to ``self.config.sources`` without solver construction.
+        """
         self.config.sources.append(source_config)
 
     def reset_source_config(self):
+        """
+        Remove all stored optical source configurations.
+
+        Returns:
+            None. ``self.config.sources`` becomes an empty list.
+        """
         self.config.sources = []
 
     def add_heat_source_config(self, source_name, source_config):
+        """
+        Register or replace one named thermal heat-source configuration.
+
+        Args:
+            source_name: Unique key used to identify the heat source.
+            source_config: Serializable configuration for the heat source geometry/intensity/material coupling.
+
+        Returns:
+            None. The source is stored in ``self.heat_source_cfgs`` and the runtime heat-source cache is invalidated.
+        """
         self.heat_source_cfgs[source_name] = source_config
         self._runtime_heat_source_map_cache = []
 
     def reset_heat_source_config(self):
+        """
+        Reset all thermal heat-source configuration and cached runtime maps.
+
+        Returns:
+            None. Clears ``heat_source_cfgs``, ``heat_sources_dict``, ``heat_source_map``, and the runtime heat-source map cache.
+        """
         self.heat_source_cfgs = {}
         self.heat_sources_dict = {}
         self.heat_source_map = None
         self._runtime_heat_source_map_cache = []
 
     def update_simulation_config(self, simulation_config):
+        """
+        Replace the active solver/simulation configuration payload.
+
+        Args:
+            simulation_config: Serializable dictionary containing simulation settings such as resolution, wavelength, cell size, PML, and backend-specific options.
+
+        Returns:
+            None. ``self.config.simulation`` is replaced with the supplied mapping.
+        """
         self.config.update(dict(simulation=simulation_config))
 
     def reset_simulation_config(self):
+        """
+        Reset the stored simulation configuration to an empty dictionary.
+
+        Returns:
+            None.
+        """
         self.config.update(dict(simulation=dict()))
 
     def dump_config(self, filepath, verbose=False):
+        """
+        Serialize the current device configuration to a YAML file.
+
+        Args:
+            filepath: Destination YAML path. Parent directories are created when needed.
+            verbose: If true, print a confirmation message after writing the file.
+
+        Returns:
+            None. The active ``self.config`` is serialized; simulation/device runtime tensors are not exported by this method.
+        """
         ensure_dir(os.path.dirname(filepath))
         self.config.dump_to_yml(filepath)
         if verbose:
             print(f"Dumped device config to {filepath}")
 
     def trim_pml(self, resolution, PML, x):
+        """
+        Remove PML cells from the boundary of a dense field/material tensor.
+
+        Args:
+            resolution: Grid resolution in pixels per physical length unit, used to convert the requested physical PML thickness into integer cell counts.
+            PML: Scalar or per-axis physical PML thickness specification.
+            x: Tensor/array whose trailing spatial dimensions correspond to the simulation grid. The implementation supports 2-D and 3-D spatial arrays.
+
+        Returns:
+            Tensor/array with the same leading dimensions as ``x`` and with the PML cells removed from every spatial axis.
+        """
         dim = x.ndim if x.ndim in (2, 3) else min(3, x.ndim)
         pml = [int(round(i * resolution)) for i in _axis_values(PML, dim)]
         slices = tuple(slice(v, -v if v > 0 else None) for v in pml)
         return x[(..., *slices)]
 
 
+def _port_cross_section_box_cfgs(
+    device,
+    *,
+    direction: str,
+    plane_coordinate: float,
+):
+    """Extract box-material cross sections for an auxiliary port device.
+
+    Args:
+        device: Source device containing recentered geometry configurations.
+        direction: Port propagation direction, such as ``"x"`` or ``"z-"``.
+        plane_coordinate: Physical coordinate of the mode plane along the
+            propagation axis.
+
+    Returns:
+        Geometry configurations for boxes intersecting the mode plane. Each
+        selected box is extruded across the auxiliary cell along the
+        propagation axis, producing a translation-invariant mode cross section.
+
+    Notes:
+        Non-box geometries are intentionally omitted. Copying a finite curved
+        or compound object into the normalization device would introduce a
+        scatterer rather than its local cross section. Port backgrounds such as
+        buried and substrate layers are represented as boxes.
+    """
+    axis = _axis_index(direction)
+    dim = int(device.dim)
+    cell_size = tuple(float(value) for value in device.cell_size)
+    cross_section_cfgs = {}
+    tolerance = 1e-9
+
+    for name, cfg in device.geometry_cfgs.items():
+        if cfg.get("_exclude_from_port_mode", False):
+            continue
+        if str(cfg.get("type", "box")).lower() != "box":
+            continue
+        center = list(cfg.get("center", ()))
+        size = list(cfg.get("size", ()))
+        if len(center) < dim or len(size) < dim:
+            continue
+
+        axis_size = size[axis]
+        intersects_plane = axis_size is None
+        if axis_size is not None:
+            axis_size = float(axis_size)
+            intersects_plane = not np.isfinite(axis_size) or (
+                abs(float(plane_coordinate) - float(center[axis]))
+                <= axis_size / 2 + tolerance
+            )
+        if not intersects_plane:
+            continue
+
+        cross_section_cfg = copy.deepcopy(cfg)
+        cross_section_center = list(cross_section_cfg["center"])
+        cross_section_size = list(cross_section_cfg["size"])
+        cross_section_center[axis] = 0.0
+        cross_section_size[axis] = cell_size[axis]
+        cross_section_cfg["center"] = cross_section_center
+        cross_section_cfg["size"] = cross_section_size
+        cross_section_cfg.pop("roughness", None)
+        cross_section_cfgs[f"port_cross_section_{name}"] = cross_section_cfg
+
+    return cross_section_cfgs
+
+
 def get_two_ports(device, port_name, slice_name=None):
+    """
+    Construct an auxiliary ``N_Ports`` device representing one optical port and its associated monitor slice.
+
+    Args:
+        device: Existing MAPS device supplying port configuration, simulation configuration, native grid metadata, epsilon background, and monitor-slice information.
+        port_name: Key into ``device.port_cfgs`` selecting the port to materialize.
+        slice_name: Optional monitor-slice name. When provided, only that compatible slice is copied.
+
+    Returns:
+        A new ``N_Ports`` object whose cell extent/grid is aligned with the source device and whose port geometry is oriented along the configured port direction.
+
+    Notes:
+        The auxiliary device is not allowed to reuse the source ``Slice`` object directly because slice indices can depend on the target grid. Instead, compatible monitor slices are reconstructed from their physical center/size/direction coordinates. Symmetry settings are removed when they are incompatible with the requested port location.
+
+        Box geometries intersecting the requested mode plane are copied and
+        extruded along the propagation axis. Consequently, buried layers,
+        substrates, and other box-based cross-section materials participate in
+        mode solving without copying finite downstream structures into the
+        normalization simulation.
+
+    Example:
+        ``port_device = get_two_ports(device, "in_port")``
+        creates the single-port normalization device used by modal source/reference construction.
+    """
     port = device.port_cfgs[port_name]
-    center = port["center"]
-    size = port["size"]
+    center = list(port["center"])
+    size = list(port["size"])
     direction = port["direction"]
+    direction_axis = direction[0].lower()
     eps = port["eps"]
+    sidewall_angle = port.get("sidewall_angle", 0.0)
     cell_size = device.cell_size
+    normal_axis = _axis_index(direction)
+    plane_coordinate = float(center[normal_axis])
+    if slice_name is not None:
+        slice_info = device.port_monitor_slices_info.get(slice_name)
+        if slice_info is not None:
+            plane_coordinate = float(slice_info["center"][normal_axis])
+    cross_section_geometry_cfgs = _port_cross_section_box_cfgs(
+        device,
+        direction=direction,
+        plane_coordinate=plane_coordinate,
+    )
     if len(center) == 3:
-        if direction == "x":
+        if direction_axis == "x":
             center = [0, center[1], center[2]]
             size = [cell_size[0], size[1], size[2]]
-        elif direction == "y":
+        elif direction_axis == "y":
             center = [center[0], 0, center[2]]
             size = [size[0], cell_size[1], size[2]]
-        elif direction == "z":
+        elif direction_axis == "z":
             center = [center[0], center[1], 0]
             size = [size[0], size[1], cell_size[2]]
         else:
             raise ValueError(f"Direction {direction} not supported")
     elif len(center) == 2:
-        if direction == "x":
+        if direction_axis == "x":
             center = [0, center[1]]
             size = [cell_size[0], size[1]]
-        elif direction == "y":
+        elif direction_axis == "y":
             center = [center[0], 0]
             size = [size[0], cell_size[1]]
         else:
@@ -526,6 +730,7 @@ def get_two_ports(device, port_name, slice_name=None):
     if "optical_grid" in device.sim_cfg:
         sim_cfg["optical_grid"] = copy.deepcopy(device.sim_cfg["optical_grid"])
     native_grid = device.grid_info_dict.get("epsilon_map", {}).get("grid")
+
     if "symmetry" in sim_cfg:
         remove_symmetry = False
         symmetry = sim_cfg["symmetry"]
@@ -547,11 +752,14 @@ def get_two_ports(device, port_name, slice_name=None):
                 center=center,
                 size=size,
                 eps=eps,
+                sidewall_angle=sidewall_angle,
             ),
         },
+        geometry_cfgs=cross_section_geometry_cfgs,
         design_region_cfgs=dict(),
         sim_cfg=sim_cfg,
         grid=native_grid,
+        grid_info=device.grid_info_dict.get("epsilon_map"),
         device=device.device,
     )
     # Recreate the source monitor on the auxiliary device.  Reusing the
@@ -582,23 +790,23 @@ def calculate_pml_thickness_for_face(
     return_actual: bool = False,
 ):
     """
-    Calculate number of PML cells whose accumulated physical thickness is
-    closest to desired_physical_thickness.
+    Calculate the number of boundary cells whose accumulated physical thickness best matches a target PML thickness.
 
-    This is the nonuniform-grid analogue of:
+    Args:
+        edges: Strictly increasing 1-D cell-boundary coordinates with shape ``[N + 1]``. Units must match ``desired_physical_thickness``.
+        desired_physical_thickness: Target physical PML thickness in the same units as ``edges``.
+        direction: Boundary side to accumulate from: ``"-"`` starts at the minimum coordinate and ``"+"`` starts at the maximum coordinate.
+        min_cells: Minimum number of boundary cells allowed.
+        return_actual: If true, return both the selected cell count and its actual accumulated physical thickness.
 
-        round(desired_physical_thickness / dx)
+    Returns:
+        Integer number of PML cells when ``return_actual=False``; otherwise ``(num_cells, actual_thickness)``.
 
-    edges:
-        Cell boundary coordinates, shape [N + 1].
-    desired_physical_thickness:
-        Desired PML physical thickness.
-    direction:
-        "-" for min boundary, "+" for max boundary.
-    min_cells:
-        Minimum number of cells to use.
-    return_actual:
-        If True, return (num_cells, actual_physical_thickness).
+    Raises:
+        ValueError: If ``edges`` are not strictly increasing, ``direction`` is invalid, or ``min_cells`` is negative.
+
+    Notes:
+        The selection minimizes ``abs(cumulative_thickness - desired_physical_thickness)`` over all admissible cell counts. This is the nonuniform-grid analogue of rounding ``desired_thickness / dx`` on a uniform grid.
     """
 
     edges = np.asarray(edges)
@@ -645,6 +853,18 @@ def calculate_pml_grid_thickness_from_physical(
     min_cells: int = 0,
     return_actual: bool = False,
 ) -> List[Tuple[int, int]]:
+    """
+    Calculate minimum/maximum PML cell counts independently for every simulation axis.
+
+    Args:
+        pml: Per-axis desired physical PML thickness. The sequence length must match the number of axes in ``grid_boundaries``.
+        grid_boundaries: Sequence of 1-D boundary-coordinate arrays; each array has shape ``[N_axis + 1]`` and is strictly increasing.
+        min_cells: Minimum number of cells allowed on each face.
+        return_actual: If true, each face result is returned as ``(num_cells, actual_thickness)``.
+
+    Returns:
+        List of ``(min_face, max_face)`` pairs, one pair per axis. With ``return_actual=False`` each entry is an integer cell count; with ``True`` each entry is a tuple returned by ``calculate_pml_thickness_for_face``.
+    """
     NPML = []
 
     for axis, desired in enumerate(pml):
@@ -671,6 +891,19 @@ def recenter_geometries(geometry_cfgs, extends):
     ### extends: [(xmin, xmax), (ymin, ymax)] or [(xmin, xmax), (ymin, ymax), (zmin, zmax)]
     ## geometry_cfgs contains the geometry configurations.
     ## we need to adjust the geometry center by shifting the structures such that extends are centered at (0,0,0)
+    """
+    Translate configured geometries so their enclosing extent is centered at the origin.
+
+    Args:
+        geometry_cfgs: Mapping from geometry name to mutable geometry configuration dictionaries.
+        extends: Axis-aligned physical extents in the form ``[(xmin, xmax), (ymin, ymax)]`` or ``[(xmin, xmax), (ymin, ymax), (zmin, zmax)]``.
+
+    Returns:
+        None. The configuration dictionaries are modified in-place.
+
+    Notes:
+        For ``sine_bend`` geometries, the offsets are applied according to the configured propagation axis so transverse start/end coordinates and the slab bounds remain physically aligned. Other supported geometry types use their center/position representation. This helper is intended to establish the device-coordinate convention before rasterization.
+    """
     offset_x = -(extends[0][0] + extends[0][1]) / 2
     offset_y = -(extends[1][0] + extends[1][1]) / 2
     offset_z = -(extends[2][0] + extends[2][1]) / 2 if len(extends) == 3 else 0
@@ -895,6 +1128,7 @@ class N_Ports(BaseDevice):
             "plot_root": "./figs",
         },
         grid=None,
+        grid_info=None,
         device="cuda:0",
         verbose: bool = True,
     ):
@@ -946,6 +1180,7 @@ class N_Ports(BaseDevice):
         # is primarily used by normalization's extended two-port device so
         # that both devices have identical native coordinates and cell widths.
         self.native_grid = grid
+        self.native_grid_info = grid_info
         self.material_property_maps = {}
         self.conductivity_map = None
         self.electrical_conductivity_map = None
@@ -972,6 +1207,9 @@ class N_Ports(BaseDevice):
         self._electrical_conductivity_map_built = False
         self._heat_solver = None
         self._heat_solver_signature = None
+        self._heat_solution_cache = None
+        self._heat_solution_cache_interval = None
+        self._heat_solution_query_count = 0
         self._heat_fixed_mesh = None
         self._heat_fixed_mesh_signature = None
         self.grid_info_dict = {}
@@ -997,12 +1235,12 @@ class N_Ports(BaseDevice):
                     "Compound geometry cfgs require tidy3d, but tidy3d is not installed."
                 )
             use_tidy3d = True
-        self.add_geometries(port_cfgs, use_tidy3d=use_tidy3d)
-        self.add_geometries(geometry_cfgs, use_tidy3d=use_tidy3d)
+        self.override_structures = {}
+        self.add_geometries(port_cfgs, use_tidy3d=use_tidy3d, apply_roughness=False)
+        self.add_geometries(geometry_cfgs, use_tidy3d=use_tidy3d, apply_roughness=False)
         ## do not add design region to geometry, otherwise meep will have subpixel smoothing on the border
         ## but need to consider this in bounding box
         # self.add_geometries(design_region_cfgs)
-        self.override_structures = {}
         self.add_override_structures(design_region_cfgs, use_tidy3d=use_tidy3d)
         if self.sim_cfg["cell_size"] is None or self.sim_cfg["cell_size"] == "None":
             self.cell_size, self.cell_extend = self.get_geometry_box(
@@ -1011,6 +1249,14 @@ class N_Ports(BaseDevice):
         else:
             self.cell_size = tuple(_axis_values(sim_cfg["cell_size"], self.dim))
             self.cell_extend = tuple((-s / 2, s / 2) for s in self.cell_size)
+        if self.native_grid_info is not None:
+            boundaries = self.native_grid_info["boundaries"]
+            self.cell_extend = tuple(
+                (float(axis[0]), float(axis[-1])) for axis in boundaries[: self.dim]
+            )
+            self.cell_size = tuple(
+                float(axis[-1] - axis[0]) for axis in boundaries[: self.dim]
+            )
         self.cell_center = tuple((s[0] + s[1]) / 2 for s in self.cell_extend)
         ### here we use ceil to match meep
 
@@ -1019,13 +1265,13 @@ class N_Ports(BaseDevice):
         recenter_geometries(self.port_cfgs, self.cell_extend)
         recenter_geometries(self.geometry_cfgs, self.cell_extend)
         self.geometry = {}
+        self.override_structures = {}
 
-        self.add_geometries(port_cfgs, use_tidy3d=use_tidy3d)
-        self.add_geometries(geometry_cfgs, use_tidy3d=use_tidy3d)
+        self.add_geometries(port_cfgs, use_tidy3d=use_tidy3d, apply_roughness=False)
+        self.add_geometries(geometry_cfgs, use_tidy3d=use_tidy3d, apply_roughness=False)
         ## do not add design region to geometry, otherwise meep will have subpixel smoothing on the border
         ## but need to consider this in bounding box
         # self.add_geometries(design_region_cfgs)
-        self.override_structures = {}
         self.add_override_structures(design_region_cfgs, use_tidy3d=use_tidy3d)
         if self.sim_cfg["cell_size"] is None or self.sim_cfg["cell_size"] == "None":
             self.cell_size, self.cell_extend = self.get_geometry_box(
@@ -1034,10 +1280,27 @@ class N_Ports(BaseDevice):
         else:
             self.cell_size = tuple(_axis_values(sim_cfg["cell_size"], self.dim))
             self.cell_extend = tuple((-s / 2, s / 2) for s in self.cell_size)
+        if self.native_grid_info is not None:
+            boundaries = self.native_grid_info["boundaries"]
+            self.cell_extend = tuple(
+                (float(axis[0]), float(axis[-1])) for axis in boundaries[: self.dim]
+            )
+            self.cell_size = tuple(
+                float(axis[-1] - axis[0]) for axis in boundaries[: self.dim]
+            )
         self.cell_center = tuple((s[0] + s[1]) / 2 for s in self.cell_extend)
-        assert np.allclose(
-            self.cell_center, (0,) * self.dim, atol=1e-9
-        ), f"Cell center is not at origin: {self.cell_center}"
+        if not np.allclose(self.cell_center, (0,) * self.dim, atol=1e-9):
+            logging.warning(
+                f"Cell center: {self.cell_center} is not at origin (0,0,0)."
+            )
+
+        ## we rebuild geometry with roughness
+        ## because we do not want roughness to change cell_extend and center.
+        self.geometry = {}
+        self.override_structures = {}
+        self.add_geometries(port_cfgs, use_tidy3d=use_tidy3d, apply_roughness=True)
+        self.add_geometries(geometry_cfgs, use_tidy3d=use_tidy3d, apply_roughness=True)
+        self.add_override_structures(design_region_cfgs, use_tidy3d=use_tidy3d)
 
         self.build_epsilon_map(use_tidy3d=use_tidy3d)
         # self.epsilon_map_unique_count = int(np.unique(self.epsilon_map).size)
@@ -1101,11 +1364,55 @@ class N_Ports(BaseDevice):
             {}
         )  # {slice_name: {(wl, mode): (profile, ht_m, et_m, norm_power)}}
 
-    def add_geometries(self, cfgs, use_tidy3d: bool = False):
+    def add_geometries(
+        self,
+        cfgs,
+        use_tidy3d: bool = False,
+        apply_roughness: bool = True,
+    ):
+        """
+        Add configured geometries to the appropriate device dictionary.
+
+        Args:
+            cfgs: Mapping from geometry name to geometry configuration dictionary.
+                Configurations with ``override_structure=True`` are stored in
+                ``self.override_structures`` instead of ``self.geometry``.
+            use_tidy3d: Whether geometry construction should use the Tidy3D geometry representation when supported.
+            apply_roughness: If true, apply the configured line-edge roughness transform before geometry construction.
+
+        Returns:
+            None. Each geometry is constructed and stored under its configuration
+            name. Configurations with a false or absent ``override_structure``
+            flag remain ordinary physical geometry.
+        """
         for name, cfg in cfgs.items():
-            self.add_geometry(name, cfg, use_tidy3d=use_tidy3d)
+            geometry_cfg = (
+                apply_line_edge_roughness(cfg)
+                if apply_roughness and cfg.get("roughness") is not None
+                else cfg
+            )
+            if cfg.get("override_structure", False):
+                self.add_override_structures(
+                    {name: geometry_cfg}, use_tidy3d=use_tidy3d
+                )
+            else:
+                self.add_geometry(name, geometry_cfg, use_tidy3d=use_tidy3d)
 
     def add_geometry(self, name, cfg, use_tidy3d: bool = False):
+        """
+        Build one geometry object from a configuration dictionary and register it in ``self.geometry``.
+
+        Args:
+            name: Geometry key used in the device geometry mapping.
+            cfg: Geometry configuration. Supported types include the concrete geometry primitives handled by ``_build_geometry_from_cfg`` such as boxes, prisms, sine bends, cylinders, and compound forms.
+            use_tidy3d: Whether to request the Tidy3D representation when that backend is available.
+
+        Returns:
+            None. The resulting geometry object is stored as ``self.geometry[name]``.
+
+        Notes:
+            ``cfg`` controls geometry only; the design-region mask itself is handled separately so that solver-specific subpixel/rasterization behavior is not inadvertently applied to the optimization boundary.
+        """
         geometry = self._build_geometry_from_cfg(
             cfg,
             value_key="eps",
@@ -1115,6 +1422,19 @@ class N_Ports(BaseDevice):
         self.geometry[name] = geometry
 
     def add_override_structures(self, cfgs, use_tidy3d: bool = False):
+        """
+        Build geometry objects that override the material/background map without adding them to the primary geometry collection.
+
+        Args:
+            cfgs: Mapping from override-structure name to geometry configuration.
+            use_tidy3d: Whether to construct backend-specific Tidy3D geometry when supported.
+
+        Returns:
+            None. Each constructed object is stored in ``self.override_structures``.
+
+        Notes:
+            Override structures are used for regions such as design-region material overrides where the geometry must affect the material representation without becoming an ordinary geometry primitive in the main device collection.
+        """
         for name, cfg in cfgs.items():
             geometry = self._build_geometry_from_cfg(
                 cfg,
@@ -1134,22 +1454,72 @@ class N_Ports(BaseDevice):
             else:
                 size.append(cfg["size"][i])
         if geo_type == "box":
+            sidewall_angle = cfg.get("sidewall_angle")
+            if sidewall_angle is not None and len(cfg.get("size", [])) == 3:
+                # Public APIs use degrees; Tidy3D uses the same signed angle in radians.
+                angle_radians = np.deg2rad(float(sidewall_angle))
+                axis = int(cfg.get("axis", 2))
+                if axis not in (0, 1, 2):
+                    raise ValueError("PolySlab axis must be 0, 1, or 2.")
+                size = [float(value) for value in cfg["size"]]
+                center = [float(value) for value in cfg["center"]]
+                normal_origin = center[axis] - size[axis] / 2.0
+                normal_top = center[axis] + size[axis] / 2.0
+                transverse_axes = [index for index in range(3) if index != axis]
+                u, v = transverse_axes
+                half_u = size[u] / 2.0
+                half_v = size[v] / 2.0
+                vertices = [
+                    (center[u] - half_u, center[v] - half_v),
+                    (center[u] + half_u, center[v] - half_v),
+                    (center[u] + half_u, center[v] + half_v),
+                    (center[u] - half_u, center[v] + half_v),
+                ]
+
+                return td.PolySlab(
+                    vertices=vertices,
+                    slab_bounds=(normal_origin, normal_top),
+                    sidewall_angle=angle_radians,
+                    reference_plane="middle",
+                    axis=axis,
+                )
             return td.Box(
                 size=_as_3(size, fill=td.inf if self.dim == 2 else 0),
                 center=_as_3(cfg["center"], fill=0),
             )
         if geo_type == "prism":
+            sidewall_angle = cfg.get("sidewall_angle")
+            slab_bounds = cfg.get("slab_bounds", (-td.inf, td.inf))
+            angle_radians = (
+                None if sidewall_angle is None else np.deg2rad(float(sidewall_angle))
+            )
+
             return td.PolySlab(
-                vertices=[_as_3(v, fill=0) for v in cfg["vertices"]],
-                height=cfg.get("height", td.inf),
+                vertices=cfg["vertices"],
+                slab_bounds=slab_bounds,
+                **(
+                    {
+                        "sidewall_angle": angle_radians,
+                        "reference_plane": "top",
+                        "axis": int(cfg.get("axis", 2)),
+                    }
+                    if sidewall_angle is not None
+                    else {}
+                ),
             )
         if geo_type == "sine_bend":
             cell = build_sine_bend_cell(cfg)
+            sidewall_angle = cfg.get("sidewall_angle")
+            angle_radians = (
+                0.0 if sidewall_angle is None else np.deg2rad(float(sidewall_angle))
+            )
             return td.PolySlab.from_gds(
                 cell,
                 gds_layer=1,
                 axis=cfg.get("axis", 2),
                 slab_bounds=cfg.get("slab_bounds", None),
+                sidewall_angle=angle_radians,
+                reference_plane="middle" if sidewall_angle is not None else "middle",
             )[0]
         if geo_type == "cylinder":
             cylinder_kwargs = dict(
@@ -1310,7 +1680,20 @@ class N_Ports(BaseDevice):
             mins = np.minimum(mins, center - size / 2)
             maxs = np.maximum(maxs, center + size / 2)
 
-        for geometry in self.geometry.values():
+        bounded_geometries = dict(self.geometry)
+        bounded_geometries.update(
+            {
+                name: self.override_structures[name]
+                for name, cfg in self.geometry_cfgs.items()
+                if cfg.get("override_structure", False)
+                and name in self.override_structures
+            }
+        )
+        for name, geometry in bounded_geometries.items():
+            # Some background-partition geometries must fill the already
+            # inferred cell without enlarging that cell themselves.
+            if self.geometry_cfgs.get(name, {}).get("_exclude_from_bounds", False):
+                continue
             if TD_SUPPORTED and isinstance(geometry, td.Structure):
                 min_bounds, max_bounds = geometry.geometry.bounds
                 geo_min = np.asarray(min_bounds[: self.dim], dtype=float)
@@ -1405,6 +1788,7 @@ class N_Ports(BaseDevice):
             map_name=map_name,
             is_complex=is_complex,
             grid=grid,
+            subpixel=self.sim_cfg.get("subpixel", True),
         )
         return raster_map
 
@@ -1582,7 +1966,7 @@ class N_Ports(BaseDevice):
             #         )
             #     ),
             # )
-            sim = td.Simulation(
+            simulation_kwargs = dict(
                 center=center,
                 symmetry=self.sim_cfg.get("symmetry", (0, 0, 0)),
                 size=cell_size_3d,
@@ -1606,18 +1990,22 @@ class N_Ports(BaseDevice):
                 monitors=[monitor] if not return_grid_only else [],
                 subpixel=subpixel,
                 run_time=1e-15,
-                # boundary_spec=(
-                #     td.BoundarySpec.pml(
-                #         x=pml[0] > 0,
-                #         y=pml[1] > 0,
-                #         z=self.dim == 3 and pml[2] > 0,
-                #     )
-                #     if not return_grid_only
-                #     else td.BoundarySpec.pml(x=False, y=False, z=False)
-                # ),
-                ## we do not need add PML here.
                 boundary_spec=td.BoundarySpec.pml(x=False, y=False, z=False),
             )
+            local_subpixel = False
+            try:
+                sim = td.Simulation(**simulation_kwargs)
+            except Exception as tidy3d_error:
+                if not subpixel:
+                    raise
+                logging.warning(
+                    "Tidy3D subpixel rasterization failed; using the local CuPy "
+                    "geometric volume-averaging implementation instead. "
+                    f"Original error: {tidy3d_error}",
+                )
+                local_subpixel = True
+                simulation_kwargs["subpixel"] = False
+                sim = td.Simulation(**simulation_kwargs)
             coords_xyz = sim.grid.boundaries.to_list
             for i, sym in enumerate(self.sim_cfg.get("symmetry", (0, 0, 0))):
                 if sym != 0:
@@ -1648,10 +2036,61 @@ class N_Ports(BaseDevice):
                     for axis in _AXES[: self.dim]
                 )
             else:
-                raster_data = sim.epsilon(monitor)
-                raster_map = np.asarray(raster_data.to_numpy())
-                raster_coords = tuple(
-                    np.asarray(raster_data.coords[axis]) for axis in _AXES[: self.dim]
+                if local_subpixel:
+                    import cupy as cp
+
+                    from gpu_subpixel import gpu_subpixel_rasterize
+
+                    local_structures = list(geometry.values())
+                    local_map = gpu_subpixel_rasterize(
+                        local_structures,
+                        sim.grid,
+                        background_eps=background_value,
+                        dtype=cp.float64 if is_complex else cp.float32,
+                    )
+                    raster_map = np.asarray(local_map.get())
+                    raster_data = None
+                else:
+                    try:
+                        raster_data = sim.epsilon(monitor)
+                    except Exception as tidy3d_error:
+                        if not subpixel:
+                            raise
+                        logging.warning(
+                            "Tidy3D subpixel rasterization failed while extracting "
+                            "epsilon; using the local CuPy geometric "
+                            "volume-averaging implementation instead. "
+                            f"Original error: {tidy3d_error}"
+                        )
+                        local_subpixel = True
+                        simulation_kwargs["subpixel"] = False
+                        sim = td.Simulation(**simulation_kwargs)
+                        raster_data = None
+                    if raster_data is not None:
+                        raster_map = np.asarray(raster_data.to_numpy())
+                    else:
+                        import cupy as cp
+
+                        from gpu_subpixel import gpu_subpixel_rasterize
+
+                        local_structures = list(geometry.values())
+                        local_map = gpu_subpixel_rasterize(
+                            local_structures,
+                            sim.grid,
+                            background_eps=background_value,
+                            dtype=cp.float64 if is_complex else cp.float32,
+                        )
+                        raster_map = np.asarray(local_map.get())
+                raster_coords = (
+                    tuple(
+                        np.asarray(raster_data.coords[axis])
+                        for axis in _AXES[: self.dim]
+                    )
+                    if raster_data is not None
+                    else tuple(
+                        np.asarray(getattr(sim.grid.centers, axis))
+                        for axis in _AXES[: self.dim]
+                    )
                 )
 
                 raster_inds = sim.grid.discretize_inds(monitor)
@@ -1681,7 +2120,7 @@ class N_Ports(BaseDevice):
             )
             if not is_complex and raster_map is not None:
                 raster_map = raster_map.real
-            backend_name = "tidy3d"
+            backend_name = "local_cupy" if local_subpixel else "tidy3d"
             raster_grid_info = self._build_raster_grid_info(
                 map_name=map_name,
                 backend=backend_name,
@@ -1765,9 +2204,22 @@ class N_Ports(BaseDevice):
         return any(_geometry_cfg_is_compound(cfg) for cfg in cfgs.values())
 
     def _combined_geometry_cfgs(self):
+        """Return physical port and non-port geometry configurations.
+
+        Returns:
+            A new mapping containing port configurations and ordinary geometry
+            configurations. Mesh-only entries marked with
+            ``override_structure=True`` are excluded.
+        """
         combined_cfgs = {}
         combined_cfgs.update(self.port_cfgs)
-        combined_cfgs.update(self.geometry_cfgs)
+        combined_cfgs.update(
+            {
+                name: cfg
+                for name, cfg in self.geometry_cfgs.items()
+                if not cfg.get("override_structure", False)
+            }
+        )
         return combined_cfgs
 
     def _has_cfg_property(self, value_keys, bg_value):
@@ -2151,6 +2603,7 @@ class N_Ports(BaseDevice):
             map_name=map_name,
             is_complex=is_complex,
             grid_info=reuse_grid_info,
+            subpixel=self.sim_cfg.get("subpixel", True),
         )
         decoded_map = decode_map(encoded_map)
         # print(np.min(decoded_map), np.max(decoded_map), np.mean(decoded_map))
@@ -2263,6 +2716,9 @@ class N_Ports(BaseDevice):
             )
         self.export_epsilon_map = export_epsilon_map
         self.epsilon_map = self.native_epsilon_map
+        # import matplotlib.pyplot as plt
+        # plt.imshow(np.real(self.export_epsilon_map)[self.export_epsilon_map.shape[0] // 2, :, :])
+        # plt.savefig("debug_build_epsilon_map.png")
         self.has_complex_epsilon = bool(np.iscomplexobj(self.epsilon_map))
         self.material_property_maps["epsilon"] = self.epsilon_map
         self.material_property_backend = native_grid_info["backend"]
@@ -3494,6 +3950,22 @@ class N_Ports(BaseDevice):
         grid_spec_cfg=None,
         reuse_grid_info: dict | None = None,
     ):
+        """
+        Build the thermal-conductivity map on the configured simulation/raster grid.
+
+        Args:
+            cell_size (Sequence[float]): Physical simulation-cell size in micrometers. The first ``self.dim`` entries are used.
+            PML (Sequence[float]): PML thickness configuration in the device coordinate system.
+            resolution (float): Optical/thermal raster resolution in pixels per micrometer when a uniform raster is requested.
+            use_tidy3d (bool): Whether to build the property map using Tidy3D rasterization and harmonic subpixel averaging. Defaults to False.
+            spacing (Sequence[float] | None): Explicit thermal-grid spacing in micrometers. Defaults to None.
+            grid_spec_cfg (dict | Any | None): Optional Tidy3D grid specification or configuration mapping. Defaults to None.
+            reuse_grid_info (dict | None): Existing raster-grid metadata to reuse when rebuilding a map. Defaults to None.
+
+        Returns:
+            NumPy array containing thermal conductivity values on the generated or reused raster grid.
+        """
+
         def _reciprocal_conductivity(value: float) -> float:
             value = float(value)
             if value <= 0:
@@ -3535,6 +4007,21 @@ class N_Ports(BaseDevice):
         grid_spec_cfg=None,
         reuse_grid_info: dict | None = None,
     ):
+        """
+        Build the electrical-conductivity map on the configured simulation/raster grid.
+
+        Args:
+            cell_size (Sequence[float]): Physical simulation-cell size in micrometers. The first ``self.dim`` entries are used.
+            PML (Sequence[float]): PML thickness configuration in the device coordinate system.
+            resolution (float): Raster resolution in pixels per micrometer when a uniform raster is requested.
+            use_tidy3d (bool): Whether to use Tidy3D rasterization for the property map. Defaults to False.
+            spacing (Sequence[float] | None): Explicit thermal-grid spacing in micrometers. Defaults to None.
+            grid_spec_cfg (dict | Any | None): Optional Tidy3D grid specification or configuration mapping. Defaults to None.
+            reuse_grid_info (dict | None): Existing raster-grid metadata to reuse when rebuilding a map. Defaults to None.
+
+        Returns:
+            NumPy array containing electrical conductivity values on the generated or reused raster grid.
+        """
         return self._build_scalar_property_map(
             map_name="electrical_conductivity_map",
             value_keys=_ELECTRICAL_CONDUCTIVITY_KEYS,
@@ -3565,6 +4052,21 @@ class N_Ports(BaseDevice):
         grid_spec_cfg=None,
         reuse_grid_info: dict | None = None,
     ):
+        """
+        Build the heat-capacity map on the configured simulation/raster grid.
+
+        Args:
+            cell_size (Sequence[float]): Physical simulation-cell size in micrometers. The first ``self.dim`` entries are used.
+            PML (Sequence[float]): PML thickness configuration in the device coordinate system.
+            resolution (float): Raster resolution in pixels per micrometer when a uniform raster is requested.
+            use_tidy3d (bool): Whether to use Tidy3D rasterization for the property map. Defaults to False.
+            spacing (Sequence[float] | None): Explicit thermal-grid spacing in micrometers. Defaults to None.
+            grid_spec_cfg (dict | Any | None): Optional Tidy3D grid specification or configuration mapping. Defaults to None.
+            reuse_grid_info (dict | None): Existing raster-grid metadata to reuse when rebuilding a map. Defaults to None.
+
+        Returns:
+            NumPy array containing volumetric heat-capacity values on the generated or reused raster grid.
+        """
         return self._build_scalar_property_map(
             map_name="heat_capacity_map",
             value_keys=_HEAT_CAPACITY_KEYS,
@@ -3591,6 +4093,21 @@ class N_Ports(BaseDevice):
         grid_spec_cfg=None,
         reuse_grid_info: dict | None = None,
     ):
+        """
+        Build the thermo-optic coefficient map on the configured simulation/raster grid.
+
+        Args:
+            cell_size (Sequence[float]): Physical simulation-cell size in micrometers. The first ``self.dim`` entries are used.
+            PML (Sequence[float]): PML thickness configuration in the device coordinate system.
+            resolution (float): Raster resolution in pixels per micrometer when a uniform raster is requested.
+            use_tidy3d (bool): Whether to use Tidy3D rasterization for the property map. Defaults to False.
+            spacing (Sequence[float] | None): Explicit thermal-grid spacing in micrometers. Defaults to None.
+            grid_spec_cfg (dict | Any | None): Optional Tidy3D grid specification or configuration mapping. Defaults to None.
+            reuse_grid_info (dict | None): Existing raster-grid metadata to reuse when rebuilding a map. Defaults to None.
+
+        Returns:
+            NumPy array containing thermo-optic coefficient values on the generated or reused raster grid.
+        """
         return self._build_scalar_property_map(
             map_name="thermo_optic_coeff_map",
             value_keys=_THERMO_OPTIC_KEYS,
@@ -3614,6 +4131,20 @@ class N_Ports(BaseDevice):
         use_tidy3d: bool | None = None,
         combine: bool | None = None,
     ):
+        """
+        Rasterize configured heat sources into per-source maps and optionally combine them.
+
+        Args:
+            heat_source_cfgs (dict | None): Mapping from source name to heat-source configuration. Defaults to None.
+            use_tidy3d (bool | None): Whether to use the Tidy3D thermal rasterization path. Defaults to None.
+            combine (bool | None): Whether to also store the elementwise sum of all generated source maps in ``self.heat_source_map``. Defaults to None.
+
+        Returns:
+            dict[str, np.ndarray]: Mapping from source name to its rasterized volumetric heat-source map.
+
+        Side Effects:
+            Updates ``self.heat_sources_dict`` and, when ``combine`` is enabled, ``self.heat_source_map``.
+        """
         if use_tidy3d is None:
             use_tidy3d = self._heat_use_tidy3d_default()
         if combine is None:
@@ -3682,6 +4213,17 @@ class N_Ports(BaseDevice):
         use_tidy3d: bool | None = None,
         combine: bool | None = None,
     ):
+        """
+        Rebuild the configured heat-source maps using the same rasterization path as ``build_heat_source_maps``.
+
+        Args:
+            heat_source_cfgs (dict | None): Mapping from source name to heat-source configuration. Defaults to None.
+            use_tidy3d (bool | None): Whether to use the Tidy3D thermal rasterization path. Defaults to None.
+            combine (bool | None): Whether to also rebuild the combined heat-source map. Defaults to None.
+
+        Returns:
+            dict[str, np.ndarray]: Mapping from source name to its rebuilt rasterized heat-source map.
+        """
         return self.build_heat_source_maps(
             heat_source_cfgs=heat_source_cfgs,
             use_tidy3d=use_tidy3d,
@@ -3689,6 +4231,18 @@ class N_Ports(BaseDevice):
         )
 
     def get_heat_source_map(self, source_name: str | None = None):
+        """
+        Return the combined heat-source map or one named source map.
+
+        Args:
+            source_name (str | None): Name of a source in ``self.heat_sources_dict``. When omitted, the combined map is returned. Defaults to None.
+
+        Returns:
+            np.ndarray | None: The requested source map, or ``self.heat_source_map`` when ``source_name`` is None.
+
+        Raises:
+            KeyError: If ``source_name`` is provided but is not present in ``self.heat_sources_dict``.
+        """
         if source_name is None:
             return self.heat_source_map
         if source_name not in self.heat_sources_dict:
@@ -3711,6 +4265,14 @@ class N_Ports(BaseDevice):
 
     def _heat_backend_default(self):
         return self._heat_sim_cfg().get("backend", "jax")
+
+    def _heat_solve_interval(self):
+        interval = self._heat_sim_cfg().get("solve_interval", 1)
+        try:
+            interval = int(interval)
+        except (TypeError, ValueError):
+            interval = 1
+        return max(interval, 1)
 
     def _heat_mesh_type_default(self):
         return _normalize_heat_mesh_type(
@@ -3858,17 +4420,55 @@ class N_Ports(BaseDevice):
             size = np.asarray(_as_3(cfg["size"], fill=0.0), dtype=float)
             return center - size / 2.0, center + size / 2.0
         if geo_type == "prism":
-            vertices = np.asarray(
-                [_as_3(v, fill=0.0) for v in cfg["vertices"]], dtype=float
-            )
-            mins = vertices.min(axis=0)
-            maxs = vertices.max(axis=0)
             if self.dim == 3:
-                height = cfg.get("height", 0.0)
-                if np.isfinite(height):
-                    mins[2] = min(mins[2], -float(height) / 2.0)
-                    maxs[2] = max(maxs[2], float(height) / 2.0)
+                # PolySlab vertices occupy the two axes transverse to its
+                # extrusion axis; slab_bounds occupy the extrusion axis.
+                # The Tidy3D config builder only forwards a non-default axis
+                # when sidewall settings are present.
+                axis = (
+                    int(cfg.get("axis", 2))
+                    if cfg.get("sidewall_angle") is not None
+                    else 2
+                )
+                if axis not in (0, 1, 2):
+                    raise ValueError("Prism axis must be 0, 1, or 2.")
+                vertices = np.asarray(cfg["vertices"], dtype=float)
+                if vertices.ndim != 2 or vertices.shape[1] != 2:
+                    raise ValueError("Prism vertices must have shape (N, 2).")
+                transverse_axes = [idx for idx in range(3) if idx != axis]
+                mins = np.full(3, np.inf)
+                maxs = np.full(3, -np.inf)
+                mins[transverse_axes] = vertices.min(axis=0)
+                maxs[transverse_axes] = vertices.max(axis=0)
+                slab_bounds = cfg.get("slab_bounds")
+                if slab_bounds is not None:
+                    slab_bounds = np.asarray(slab_bounds, dtype=float)
+                    if (
+                        slab_bounds.shape != (2,)
+                        or np.any(np.isnan(slab_bounds))
+                        or slab_bounds[1] < slab_bounds[0]
+                    ):
+                        raise ValueError(
+                            "Prism slab_bounds must be an ordered pair of values."
+                        )
+                    mins[axis], maxs[axis] = slab_bounds
+                elif axis == 2:
+                    # Preserve the legacy height convention when the prism
+                    # does not provide its Tidy3D slab_bounds explicitly.
+                    mins[axis] = maxs[axis] = 0.0
+                    height = cfg.get("height", 0.0)
+                    if np.isfinite(height):
+                        mins[axis] = min(mins[axis], -float(height) / 2.0)
+                        maxs[axis] = max(maxs[axis], float(height) / 2.0)
+                else:
+                    # Tidy3D uses unbounded slab limits when omitted.
+                    mins[axis], maxs[axis] = -np.inf, np.inf
             else:
+                vertices = np.asarray(
+                    [_as_3(v, fill=0.0) for v in cfg["vertices"]], dtype=float
+                )
+                mins = vertices.min(axis=0)
+                maxs = vertices.max(axis=0)
                 mins[2] = 0.0
                 maxs[2] = 0.0
             return mins, maxs
@@ -4455,6 +5055,82 @@ class N_Ports(BaseDevice):
     def _heat_solver_grid_shape(self):
         return self._heat_grid_shape_from_spacing(cell_size=self.cell_size)
 
+    def _uniform_heat_remap_grid(self, source_boundaries):
+        """Construct a uniform thermal grid with the same physical endpoints.
+
+        Args:
+            source_boundaries: Per-axis boundaries of a cell-centered thermal
+                material/source raster.
+
+        Returns:
+            Tuple ``(boundaries, centers, spacing)`` for a nearly requested-
+            spacing uniform grid. Cell counts are rounded from the physical
+            lengths, then spacing is adjusted slightly so the source and target
+            domains have exactly identical endpoints.
+        """
+        requested_spacing = self._heat_solver_spacing()
+        target_boundaries = []
+        target_centers = []
+        actual_spacing = []
+        for axis, requested_dl in zip(source_boundaries, requested_spacing):
+            axis = np.asarray(axis, dtype=np.float64)
+            if axis.ndim != 1 or axis.size < 2 or np.any(np.diff(axis) <= 0.0):
+                raise ValueError(
+                    "Thermal raster boundaries must be strictly increasing 1D arrays."
+                )
+            length = float(axis[-1] - axis[0])
+            count = max(1, int(round(length / float(requested_dl))))
+            boundaries = np.linspace(axis[0], axis[-1], count + 1)
+            target_boundaries.append(boundaries)
+            target_centers.append(0.5 * (boundaries[:-1] + boundaries[1:]))
+            actual_spacing.append(length / count)
+        return (
+            tuple(target_boundaries),
+            tuple(target_centers),
+            tuple(actual_spacing),
+        )
+
+    def _remap_nonuniform_heat_inputs_to_uniform(
+        self, conductivity, source, source_boundaries
+    ):
+        """Conservatively map nonuniform thermal inputs to a uniform grid.
+
+        Args:
+            conductivity: Positive cell-wise thermal conductivity tensor.
+            source: Cell-wise volumetric heat-density tensor.
+            source_boundaries: Physical source cell boundaries for every axis.
+
+        Returns:
+            Tuple containing remapped conductivity, remapped source, target
+            boundaries, target centers, and actual target spacing.
+
+        Notes:
+            Source density uses volume-overlap averaging, preserving total heat.
+            Conductivity uses the same overlap operator on resistivity followed
+            by inversion, retaining the previous resistance-aware coarse-grid
+            convention without assuming equal source-cell volumes.
+        """
+        target_boundaries, target_centers, target_spacing = (
+            self._uniform_heat_remap_grid(source_boundaries)
+        )
+        source_uniform = conservative_rectilinear_remap(
+            source, source_boundaries, target_boundaries
+        )
+        tiny = torch.finfo(conductivity.dtype).tiny
+        target_resistivity = conservative_rectilinear_remap(
+            1.0 / torch.clamp(conductivity, min=tiny),
+            source_boundaries,
+            target_boundaries,
+        )
+        conductivity_uniform = 1.0 / torch.clamp(target_resistivity, min=tiny)
+        return (
+            conductivity_uniform,
+            source_uniform,
+            target_boundaries,
+            target_centers,
+            target_spacing,
+        )
+
     def _heat_fixed_mesh_transfer_neighbors(self):
         mesh_cfg = self._heat_fixed_mesh_cfg()
         return int(mesh_cfg.get("transfer_neighbors", 8))
@@ -4773,10 +5449,16 @@ class N_Ports(BaseDevice):
 
             pieces = []
             if left_cells > 0:
-                left_widths = self._heat_padding_axis_widths(
-                    left_step,
-                    cell_count=left_cells,
-                    distance=None if use_cells else pad_values[2 * axis_index],
+                left_widths = (
+                    self._heat_padding_axis_widths(
+                        left_step,
+                        cell_count=left_cells,
+                    )
+                    if use_cells
+                    else self._heat_padding_axis_widths(
+                        left_step,
+                        distance=pad_values[2 * axis_index],
+                    )
                 )
                 left_offsets = np.cumsum(np.asarray(left_widths, dtype=np.float64))[
                     ::-1
@@ -4784,10 +5466,16 @@ class N_Ports(BaseDevice):
                 pieces.append(axis[0] - left_offsets)
             pieces.append(axis)
             if right_cells > 0:
-                right_widths = self._heat_padding_axis_widths(
-                    right_step,
-                    cell_count=right_cells,
-                    distance=None if use_cells else pad_values[2 * axis_index + 1],
+                right_widths = (
+                    self._heat_padding_axis_widths(
+                        right_step,
+                        cell_count=right_cells,
+                    )
+                    if use_cells
+                    else self._heat_padding_axis_widths(
+                        right_step,
+                        distance=pad_values[2 * axis_index + 1],
+                    )
                 )
                 right_offsets = np.cumsum(np.asarray(right_widths, dtype=np.float64))
                 pieces.append(axis[-1] + right_offsets)
@@ -4882,6 +5570,7 @@ class N_Ports(BaseDevice):
         *,
         map_shape=None,
         padding_cells=None,
+        grid_step=None,
         backend=None,
         dirichlet_bc=None,
         neumann_bc=None,
@@ -4902,6 +5591,12 @@ class N_Ports(BaseDevice):
             adjoint_solver_options,
             self._heat_adjoint_solver_options_default(),
         )
+        solver_grid_step = tuple(
+            float(value)
+            for value in _spacing_values(
+                grid_step or self._heat_solver_spacing(), self.dim
+            )
+        )
         mesh_type = self._heat_mesh_type_default()
         fixed_mesh = None
         if mesh_type in {
@@ -4919,7 +5614,7 @@ class N_Ports(BaseDevice):
             self.dim,
             mesh_type,
             map_shape,
-            tuple(float(v) for v in self._heat_solver_spacing()),
+            solver_grid_step,
             backend,
             tuple(sorted((dirichlet_bc or {}).items())),
             tuple(sorted((neumann_bc or {}).items())),
@@ -4946,7 +5641,7 @@ class N_Ports(BaseDevice):
         )
         if self._heat_solver is None or self._heat_solver_signature != signature:
             solver_kwargs = dict(
-                grid_step=self._heat_solver_spacing(),
+                grid_step=solver_grid_step,
                 dimension=f"{self.dim}d",
                 backend=backend,
                 dirichlet_bc=dirichlet_bc,
@@ -4988,6 +5683,25 @@ class N_Ports(BaseDevice):
         adjoint_solver_options=None,
         return_metadata: bool = False,
     ):
+        solve_interval = self._heat_solve_interval()
+        if self._heat_solution_cache_interval != solve_interval:
+            self._heat_solution_cache = None
+            self._heat_solution_query_count = 0
+            self._heat_solution_cache_interval = solve_interval
+        query_index = self._heat_solution_query_count
+        self._heat_solution_query_count += 1
+        if (
+            solve_interval > 1
+            and query_index % solve_interval != 0
+            and self._heat_solution_cache is not None
+            and self._heat_solution_cache[0] == return_metadata
+        ):
+            print(f"HEAT solver takes 0 seconds. Use cached solution", flush=True)
+            cached_result = self._heat_solution_cache[1]
+            if return_metadata:
+                return cached_result[0], copy.deepcopy(cached_result[1])
+            return cached_result
+
         backend = _coalesce(backend, self._heat_backend_default(), "jax")
         dirichlet_bc = _coalesce(dirichlet_bc, self._heat_dirichlet_bc_default())
         neumann_bc = _coalesce(neumann_bc, self._heat_neumann_bc_default())
@@ -5023,9 +5737,35 @@ class N_Ports(BaseDevice):
                 "Build the thermal property maps first so the conductivity grid info is available."
             )
 
-        input_grid_step = self.thermal_grid_spacing or tuple(
-            [self.grid_step] * self.dim
-        )
+        remap_temperature_coords = None
+        solver_temperature_coords = None
+        solver_grid_step = self._heat_solver_spacing()
+        if mesh_type == "rectangular" and thermal_grid_info is not None:
+            source_boundaries = tuple(
+                np.asarray(axis, dtype=np.float64)
+                for axis in thermal_grid_info["boundaries"]
+            )
+            remap_temperature_coords = tuple(
+                np.asarray(axis, dtype=np.float64)
+                for axis in thermal_grid_info["coords"]
+            )
+            (
+                k_map,
+                q_map,
+                _,
+                solver_temperature_coords,
+                solver_grid_step,
+            ) = self._remap_nonuniform_heat_inputs_to_uniform(
+                k_map,
+                q_map,
+                source_boundaries,
+            )
+            k_shape = tuple(int(v) for v in k_map.shape)
+            input_grid_step = solver_grid_step
+        else:
+            input_grid_step = self.thermal_grid_spacing or tuple(
+                [self.grid_step] * self.dim
+            )
         padding_cells = self._heat_padding_cells(
             map_shape=k_shape,
             spacing=input_grid_step,
@@ -5066,6 +5806,7 @@ class N_Ports(BaseDevice):
             neumann_bc=neumann_bc,
             solver_options=solver_options,
             adjoint_solver_options=adjoint_solver_options,
+            grid_step=solver_grid_step,
         )
         result = solver(
             k_map,
@@ -5078,6 +5819,33 @@ class N_Ports(BaseDevice):
             source_padding_mode=self._heat_source_padding_mode_default(),
             return_metadata=return_metadata,
         )
+        if remap_temperature_coords is not None:
+            if return_metadata:
+                temperature_map, metadata = result
+            else:
+                temperature_map = result
+                metadata = None
+            temperature_map = resample_rectilinear_tensor(
+                temperature_map,
+                src_coords=solver_temperature_coords,
+                dst_coords=remap_temperature_coords,
+                axes=tuple(range(self.dim)),
+                mode="cartesian",
+            )
+            if metadata is not None:
+                metadata["conservative_input_remap"] = True
+                metadata["solver_unpadded_grid_shape"] = tuple(
+                    int(axis.size) for axis in solver_temperature_coords
+                )
+                metadata["solver_grid_spacing"] = tuple(
+                    float(value) for value in solver_grid_step
+                )
+                metadata["cropped_output_grid_shape"] = tuple(
+                    int(v) for v in temperature_map.shape
+                )
+                result = (temperature_map, metadata)
+            else:
+                result = temperature_map
         if return_metadata:
             temperature_map, metadata = result
             fixed_mesh = (
@@ -5106,7 +5874,14 @@ class N_Ports(BaseDevice):
                 metadata["thermal_grid_boundaries"] = thermal_grid_info["boundaries"]
             if fixed_mesh is not None:
                 metadata["fixed_mesh"] = fixed_mesh["metadata"]
-            return temperature_map, metadata
+            result = (temperature_map, metadata)
+
+        if solve_interval > 1:
+            if return_metadata:
+                cached_result = (result[0].detach(), copy.deepcopy(result[1]))
+            else:
+                cached_result = result.detach()
+            self._heat_solution_cache = (return_metadata, cached_result)
         return result
 
     def _tidy3d_structure_from_cfg(
@@ -5280,6 +6055,24 @@ class N_Ports(BaseDevice):
         return region_masks, region_mask_weights, region_axis_weights
 
     def build_design_region_mask(self, design_region_cfgs):
+        """
+        Build spatial design-region selectors and fractional pixel-coverage weights on the optical grid.
+
+        Args:
+            design_region_cfgs: Mapping from region name to geometry configuration. Each region requires ``center`` and ``size`` in the device physical coordinate system; coordinates are interpreted in the first ``self.dim`` axes.
+
+        Returns:
+            Dictionary mapping each region name to a ``Slice`` (2-D) or ``Slice3D`` (3-D) covering the intersected optical-grid cells. The selected span is the bounding index range of all cells with nonzero geometric coverage.
+
+        Side Effects:
+            Populates ``self.design_region_mask_weights`` with an array of fractional cell-coverage weights and ``self.design_region_axis_weights`` with one 1-D coverage vector per spatial axis. When raster-grid boundary metadata is available, coverage is computed from cell boundaries; otherwise it is computed from grid centers.
+
+        Scientific contract:
+            The mask is an indexer, while the weight array contains values in ``[0, 1]`` that represent the fraction of each selected cell covered by the physical design-region rectangle/box. This distinction is important for nonuniform grids and FDTD-X native-grid blending.
+
+        Example:
+            For a 2-D region centered at ``(0, 0)`` with ``size=(1.0, 0.5)``, the returned mask selects the minimal rectangular index range intersecting that physical box; ``design_region_mask_weights[name]`` contains the corresponding per-cell area fractions.
+        """
         design_region_masks = {}
         self.design_region_mask_weights = {}
         self.design_region_axis_weights = {}
@@ -5302,6 +6095,7 @@ class N_Ports(BaseDevice):
             self.design_region_axis_weights[name] = axis_weights[name]
             self.design_region_mask_weights[name] = weights[name]
 
+        # print(design_region_cfgs, design_region_masks)
         return design_region_masks
 
     def _optical_grid_cfg(self):
@@ -5421,8 +6215,26 @@ class N_Ports(BaseDevice):
         return self.fdtdx_field_grid_metadata
 
     def resample_map_between_coords(
-        self, values, *, src_coords, dst_coords, mode: str = "polar"
+        self,
+        values,
+        *,
+        src_coords,
+        dst_coords,
+        mode: str = "cartesian",
+        interpolation: str = "linear",
     ):
+        """Resample a material or field tensor between physical grids.
+
+        Args:
+            values: Tensor or array with trailing spatial dimensions.
+            src_coords: Source cell-center coordinates in micrometers.
+            dst_coords: Destination cell-center coordinates in micrometers.
+            mode: Complex interpolation convention.
+            interpolation: ``"linear"`` or ``"nearest"`` spatial sampling.
+
+        Returns:
+            Resampled PyTorch tensor on the device array placement.
+        """
         if not isinstance(values, torch.Tensor):
             values_np = np.asarray(values)
             dtype = torch.complex64 if np.iscomplexobj(values_np) else torch.float32
@@ -5433,6 +6245,82 @@ class N_Ports(BaseDevice):
             dst_coords=dst_coords,
             axes=tuple(range(values.ndim - len(src_coords), values.ndim)),
             mode=mode,
+            interpolation=interpolation,
+        )
+
+    def _resample_map_to_fdtdx_native(
+        self,
+        values,
+        *,
+        map_name: str,
+        native_grid: dict,
+    ):
+        """Resample a material map from its recorded grid to the optical grid.
+
+        Thermal and optical material maps may use different rectilinear grids.
+        FDTD-X, however, combines permittivity and electric conductivity cell by
+        cell, so an auxiliary map must be represented on the native optical grid
+        before it is passed to the solver.
+
+        Args:
+            values: Material map tensor or NumPy array. Spatial dimensions must
+                be the final dimensions of the value.
+            map_name (str): Raster-grid metadata key associated with ``values``.
+            native_grid (dict): FDTD-X native optical grid metadata.
+
+        Returns:
+            The original map when its coordinates already match ``native_grid``,
+            otherwise a differentiable map resampled onto the native grid.
+
+        Raises:
+            ValueError: If the map shape differs from the native grid and no
+                source coordinates are available for a physically meaningful
+                resampling.
+        """
+        if values is None:
+            return None
+
+        target_coords = tuple(
+            np.asarray(axis, dtype=np.float64) for axis in native_grid["coords"]
+        )
+        value_shape = tuple(int(v) for v in values.shape)
+        target_shape = tuple(int(axis.size) for axis in target_coords)
+        if len(value_shape) < len(target_shape):
+            raise ValueError(
+                f"{map_name} has shape {value_shape}, but the native FDTD-X "
+                f"grid requires {len(target_shape)} spatial dimensions."
+            )
+        spatial_shape = value_shape[-len(target_shape) :]
+
+        source_grid = self._get_raster_grid_info(map_name)
+        source_coords = None if source_grid is None else source_grid.get("coords")
+        if source_coords is None and map_name == "electrical_conductivity_map":
+            source_coords = self.thermal_coords
+        if source_coords is not None:
+            source_coords = tuple(
+                np.asarray(axis, dtype=np.float64) for axis in source_coords
+            )
+            if len(source_coords) != len(target_coords):
+                raise ValueError(
+                    f"{map_name} has {len(source_coords)} source coordinate axes, "
+                    f"but the native FDTD-X grid has {len(target_coords)}."
+                )
+            if spatial_shape == target_shape and all(
+                np.allclose(source_axis, target_axis, atol=1e-12, rtol=1e-9)
+                for source_axis, target_axis in zip(source_coords, target_coords)
+            ):
+                return values
+            return self.resample_map_between_coords(
+                values,
+                src_coords=source_coords,
+                dst_coords=target_coords,
+            )
+
+        if spatial_shape == target_shape:
+            return values
+        raise ValueError(
+            f"Cannot align {map_name} with shape {value_shape} to the native "
+            f"FDTD-X shape {target_shape}: source grid coordinates are unavailable."
         )
 
     def _region_mask_to_index(self, region_mask):
@@ -5518,6 +6406,21 @@ class N_Ports(BaseDevice):
         )
 
     def build_active_region_mask(self, active_region_cfgs):
+        """
+        Build active-region selectors and enforce that every active region is contained within its corresponding design region.
+
+        Args:
+            active_region_cfgs: Mapping from active-region name to ``center``/``size`` configuration. Each key must also exist in ``self.design_region_cfgs``.
+
+        Returns:
+            Mapping from active-region name to a ``Slice`` or ``Slice3D`` selecting the intersected optical-grid cells.
+
+        Raises:
+            AssertionError: If an active-region name is not present in the design regions, or if its physical bounding box extends outside the parent design-region box.
+
+        Notes:
+            Active-region bounds are checked in physical coordinates before conversion to grid indices. The returned mask is generated from grid centers and does not carry fractional coverage weights.
+        """
         active_region_masks = {}
         for name, cfg in active_region_cfgs.items():
             assert (
@@ -5578,6 +6481,19 @@ class N_Ports(BaseDevice):
         return eps_copy
 
     def build_port_region(self, port_cfgs, rel_width=2):
+        """
+        Rasterize all configured optical ports into one boolean device mask.
+
+        Args:
+            port_cfgs: Mapping from port name to port geometry configuration. Each port uses ``center``, ``size``, and ``direction``.
+            rel_width: Transverse width multiplier. The propagation/normal axis uses a multiplier of ``1`` while transverse axes use ``rel_width``.
+
+        Returns:
+            Boolean NumPy array with shape ``self.grid_shape``. ``True`` marks cells belonging to at least one port-region mask; the individual port masks are combined with logical OR.
+
+        Notes:
+            The returned mask is based on the optical grid coordinates ``self.meshes`` and is intended to exclude port areas from radiation monitoring rather than to represent a physical geometry boundary.
+        """
         port_regions = []
         coord_tensors = [torch.tensor(mesh, device=self.device) for mesh in self.meshes]
         for name, cfg in port_cfgs.items():
@@ -5605,8 +6521,36 @@ class N_Ports(BaseDevice):
         direction: str | None = None,
     ):
         """
-        the center is the center of the slice in um within the coordinate system where the center is (0, 0)
-        the size is in the unit of um
+        Register a codimension-1 optical monitor slice and derive native/export-grid indexers from physical coordinates.
+
+        Args:
+            slice_name: Unique monitor identifier.
+            center: Physical center coordinates in micrometers, in the device coordinate system.
+            size: Physical extents in micrometers. Exactly one spatial dimension must have size zero, defining the monitor plane.
+            direction: Propagation/normal direction label such as ``"x"``, ``"x+"``, ``"x-"``, ``"y"``, or ``"z"``. When omitted, the zero-size axis determines the normal axis.
+
+        Returns:
+            A ``Slice`` (2-D) or ``Slice3D`` (3-D) indexer on the export grid, stored in ``self.port_monitor_slices[slice_name]``.
+
+        Side Effects:
+            Stores physical/grid metadata in ``self.port_monitor_slices_info`` and creates separate indexers for the native optical grid, symmetry-reduced native grid, and export grid in ``self.port_monitor_slices_native``, ``self.port_monitor_slices_native_symmetry``, and ``self.port_monitor_slices_export``.
+
+        Grid contract:
+            The public ``port_monitor_slices`` entry is export-grid indexed for plotting/visualization. Solver-facing workflows should use the native entry when running on the native optical/FDTD-X grid. In 3-D, native and export slices are constructed independently from physical coordinates because their grid spacings may differ.
+
+        Notes:
+            Nonuniform-grid detector apertures cover their physical transverse
+            intervals using edges at the requested center. The normal axis
+            retains one cell. Explicit native shape and edge constraints are
+            applied before symmetry reduction; plotted slices continue to use
+            the export coordinate grid.
+
+        Raises:
+            AssertionError: If ``size`` does not define exactly one zero-width axis.
+            ValueError: If the requested direction is incompatible with the device dimension.
+
+        Example:
+            ``add_monitor_slice("in_port_1", center=(-2.0, 0), size=(0, 1.0), direction="x-")`` creates a vertical 2-D port plane at ``x=-2 um`` spanning ``1 um`` in ``y``.
         """
         center = np.asarray(_as_3(center)[: self.dim], dtype=float)
         size = np.asarray(_as_3(size)[: self.dim], dtype=float)
@@ -5668,10 +6612,10 @@ class N_Ports(BaseDevice):
 
             config = fdtdx.SimulationConfig(
                 grid=grid,
-                symmetry=self.sim_cfg.get("symmetry", (0, 0, 0)),
                 time=1e-15,  # this is the max simulation time, can set to a larger number if needed, but this is already very large
                 dtype=jnp.float32,
                 courant_factor=0.99,
+                symmetry=self.sim_cfg.get("symmetry", (0, 0, 0)),
             )
             key = jax.random.PRNGKey(0)
 
@@ -5689,26 +6633,58 @@ class N_Ports(BaseDevice):
                 spectral_width=fdtdx.WaveCharacter(wavelength=1.55 * MICRON_UNIT * 10),
             )
 
-            source = fdtdx.ModePlaneSource(
+            # source = fdtdx.ModePlaneSource(
+            #     name="dummy_source",
+            #     partial_grid_shape=partial_grid_shape,
+            #     partial_real_shape=partial_real_shape,
+            #     partial_real_position=partial_real_position,
+            #     wave_character=wave,
+            #     direction=direction[-1],
+            #     mode_index=0,
+            #     temporal_profile=pulse,
+            #     static_amplitude_factor=1,
+            #     filter_pol="te",
+            # )
+            source = fdtdx.ModeOverlapDetector(
                 name="dummy_source",
                 partial_grid_shape=partial_grid_shape,
                 partial_real_shape=partial_real_shape,
                 partial_real_position=partial_real_position,
-                wave_character=wave,
+                wave_characters=(wave,),
                 direction=direction[-1],
                 mode_index=0,
-                temporal_profile=pulse,
-                static_amplitude_factor=1,
+                scaling_mode="pulse",
                 filter_pol="te",
             )
 
-            objects.append(source)  # source[0] is the source objective
+            export_source = fdtdx.ModeOverlapDetector(
+                name="dummy_source",
+                partial_grid_shape=partial_grid_shape,
+                partial_real_shape=partial_real_shape,
+                partial_real_position=partial_real_position,
+                wave_characters=(wave,),
+                direction=direction[-1],
+                mode_index=0,
+                scaling_mode="pulse",
+                filter_pol="te",
+            )
+            objects.append(source)
+
+            if config.has_nonuniform_grid:
+                from core.fdtd.fdtd import detector_native_placement
+
+                source, detector_constraints = detector_native_placement(
+                    source, boundaries, grid
+                )
+                objects[-1] = source
+                constraints.extend(detector_constraints)
 
             objects, arrays, params, config, info = fdtdx.place_objects(
                 object_list=objects,
                 config=config,
                 constraints=constraints,
                 key=key,
+                apply_objects=False,
             )
             if config.has_symmetry:
                 # print(objects[source.name].grid_slice)
@@ -5764,24 +6740,46 @@ class N_Ports(BaseDevice):
                 time=1e-15,  # this is the max simulation time, can set to a larger number if needed, but this is already very large
                 dtype=jnp.float32,
                 courant_factor=0.99,
-                symmetry=self.sim_cfg.get("symmetry", (0, 0, 0)),
+                # symmetry=self.sim_cfg.get("symmetry", (0, 0, 0)),
             )
 
-            objects.append(source)  # source[0] is the source objective
+            objects.append(export_source)
+
+            if config.has_nonuniform_grid:
+                from core.fdtd.fdtd import detector_native_placement
+
+                export_source, detector_constraints = detector_native_placement(
+                    export_source, boundaries, grid
+                )
+                objects[-1] = export_source
+                constraints.extend(detector_constraints)
 
             objects, arrays, params, config, info = fdtdx.place_objects(
                 object_list=objects,
                 config=config,
                 constraints=constraints,
                 key=key,
+                apply_objects=False,
             )
 
             if config.has_symmetry:
-                export_grid_indices = fdtdx.unfold_grid_slice(
-                    objects[source.name], config, info["symmetry_mid_abs"]
-                )
+                if self._check_object_on_symmetry_axis(
+                    input_slice_name=slice_name,
+                    symmetry=self.sim_cfg.get("symmetry", (0, 0, 0)),
+                ):
+                    export_grid_indices = fdtdx.unfold_grid_slice(
+                        objects[export_source.name], config, info["symmetry_mid_abs"]
+                    )
+                else:
+                    export_grid_indices = tuple(
+                        slice(s.start + offset, s.stop + offset)
+                        for s, offset in zip(
+                            objects[export_source.name].grid_slice,
+                            info["symmetry_mid_abs"],
+                        )
+                    )
             else:
-                export_grid_indices = objects[source.name].grid_slice
+                export_grid_indices = objects[export_source.name].grid_slice
 
         else:
             native_grid = self.grid_info_dict.get("epsilon_map")
@@ -5805,6 +6803,7 @@ class N_Ports(BaseDevice):
 
         self.port_monitor_slices_native[slice_name] = native_grid_indices
         self.port_monitor_slices_export[slice_name] = export_grid_indices
+        self.port_monitor_slices[slice_name] = monitor_slice
 
         return monitor_slice
 
@@ -5816,6 +6815,21 @@ class N_Ports(BaseDevice):
         direction: str,
         coords,
     ):
+        """
+        Construct a ``Slice``/``Slice3D`` indexer for a physical monitor definition on a specified coordinate grid.
+
+        Args:
+            center: Physical monitor center in micrometers.
+            size: Physical monitor extent in micrometers; the coordinate along the normal axis is ignored for width selection and becomes a single nearest grid index.
+            direction: Monitor normal/propagation direction label such as ``"x+"`` or ``"y-"``.
+            coords: Tuple of 1-D coordinate arrays, one per spatial axis.
+
+        Returns:
+            A ``Slice`` or ``Slice3D`` whose normal axis is a single integer index nearest to ``center[normal_axis]`` and whose transverse axes are contiguous ``slice`` objects spanning the physical interval ``center +/- size/2``.
+
+        Notes:
+            The transverse span uses pixel-center coverage selection. The returned indexer is therefore grid-specific; it must be rebuilt when moving between native, export, or auxiliary two-port grids.
+        """
         center = np.asarray(_as_3(center)[: self.dim], dtype=float)
         size = np.asarray(_as_3(size)[: self.dim], dtype=float)
         normal_axis = _axis_index(direction)
@@ -5844,7 +6858,23 @@ class N_Ports(BaseDevice):
         rel_height=None,
         direction: str = None,
     ):
+        """
+        Create a monitor slice from a configured port using relative longitudinal location and transverse width.
 
+        Args:
+            port_name: Key into ``self.port_cfgs``.
+            slice_name: Name stored in the monitor dictionaries.
+            rel_loc: Relative position along the port's propagation axis, measured from the low side of the port box.
+            rel_width: Transverse size multiplier. ``float("inf")`` expands the transverse monitor to the cell extent.
+            rel_height: Optional third-axis multiplier for 3-D ports; defaults to ``rel_width`` and is clamped to at least ``1``.
+            direction: Optional override of the port direction. If omitted, uses ``port_cfg["direction"]``.
+
+        Returns:
+            The ``Slice``/``Slice3D`` returned by ``add_monitor_slice``.
+
+        Notes:
+            The monitor is placed at ``center_normal - size_normal/2 + rel_loc*size_normal`` along the propagation axis, with that axis forced to zero width. In 3-D, ``rel_height`` controls the dimension orthogonal to the port plane.
+        """
         port_cfg = self.port_cfgs[port_name]
         direction = port_cfg["direction"] if direction is None else direction
         center = np.asarray(_as_3(port_cfg["center"])[: self.dim], dtype=float)
@@ -5886,6 +6916,24 @@ class N_Ports(BaseDevice):
     ):
         ## extend the farfield from range[0] to range[1] um along the direction
 
+        """
+        Construct a rectangular 2-D far-field integration region and register it as a monitor slice.
+
+        Args:
+            region_name: Name used in ``port_monitor_slices`` and ``port_monitor_slices_info``.
+            center: Physical center of the rectangular region in micrometers.
+            size: Physical ``(x, y)`` extent in micrometers.
+            direction: Propagation direction metadata, for example ``"x+"``.
+
+        Returns:
+            A ``Slice`` whose ``x`` and ``y`` index arrays span the requested rectangular region on the uniform optical grid.
+
+        Side Effects:
+            Stores the slice and physical coordinate arrays ``xs``/``ys`` in ``self.port_monitor_slices_info[region_name]``.
+
+        Notes:
+            The implementation assumes the 2-D uniform grid convention ``x=(index-(Nx-1)/2)*grid_step`` and ``y=(index-(Ny-1)/2)*grid_step`` when constructing physical coordinates.
+        """
         region_center = [
             int(round((c + offset / 2) / self.grid_step))
             for c, offset in zip(center, self.cell_size)
@@ -5925,6 +6973,23 @@ class N_Ports(BaseDevice):
         extension_range: Tuple[float, float] = (3, 6),
     ):
         ## extend the farfield from range[0] to range[1] um along the direction
+        """
+        Construct an extended 2-D far-field monitor spanning a specified physical distance range along ``x`` or ``y``.
+
+        Args:
+            region_name: Monitor identifier.
+            direction: Axis along which the extension range is defined; currently ``"x"`` or ``"y"``.
+            extension_range: Two physical coordinates in micrometers defining the near/far limits along the selected direction.
+
+        Returns:
+            A ``Slice`` covering the requested extension and the full transverse simulation span.
+
+        Raises:
+            ValueError: If ``direction`` is not ``"x"`` or ``"y"``.
+
+        Notes:
+            The generated metadata records physical ``xs``/``ys`` coordinates in micrometers and is later used by far-field radiation-monitor construction.
+        """
         if direction == "x":
             center = (sum(extension_range) / 2, 0)
             size = (
@@ -5990,9 +7055,34 @@ class N_Ports(BaseDevice):
         size: Tuple[float, float] = (0, 1),
         direction="x+",
     ):
+        """
+        Build and register a near-to-far-field monitor slice and check that it lies in a homogeneous medium.
+
+        Args:
+            slice_name: Monitor identifier.
+            center: Physical monitor center in micrometers.
+            size: Physical monitor extent in micrometers with one zero-width normal axis.
+            direction: Propagation/normal direction, for example ``"x+"``.
+
+        Returns:
+            The ``Slice``/``Slice3D`` monitor created by ``add_monitor_slice``.
+
+        Notes:
+            After construction, the method samples ``self.epsilon_map`` with
+            the native-grid slice and reports a warning when more than one
+            unique permittivity value is present. The returned slice remains
+            export-grid indexed for the public monitor API.
+        """
         monitor_slice = self.add_monitor_slice(slice_name, center, size, direction)
         ## need to check the slice of eps is homogeneous medium
-        eps_slice = self.epsilon_map[monitor_slice.x, monitor_slice.y]
+        native_slice = self.port_monitor_slices_native[slice_name]
+        if isinstance(native_slice, (tuple, list)):
+            monitor_index = tuple(native_slice)
+        else:
+            monitor_index = tuple(
+                getattr(native_slice, axis) for axis in self.axes[: self.dim]
+            )
+        eps_slice = self.epsilon_map[monitor_index]
         if not (np.unique(eps_slice).size == 1):
             print(
                 f"Near2far slice {slice_name} is not in a homogeneous medium",
@@ -6004,13 +7094,20 @@ class N_Ports(BaseDevice):
         self, monitor_name: str = "rad_slice", distance_to_PML=[0.2, 0.2]
     ):
         """
-        Currently, the way to build the radiation monitor is through
-        1. build a zeros_like epsilon map
-        2. set the surrounding region of the epsilon map to 1
-        3. set the ports region to 0 so that the monitor will not include the ports and the transmission will not be calculated as radiation
-        so the radiation monitor is a 2D boolean array, not like other monitors which are the Slice object
+        Build four side radiation monitors around the non-PML simulation region and exclude cells belonging to optical ports.
 
-        we need to make the monitor uniform, the radiation monitor should be a Slice object too
+        Args:
+            monitor_name: Prefix used for the four side monitors: ``_xp``, ``_xm``, ``_yp``, and ``_ym``.
+            distance_to_PML: Two physical offsets in micrometers controlling the gap between the radiation monitors and the PML on the horizontal/vertical transverse directions.
+
+        Returns:
+            Tuple ``(xp, xm, yp, ym)`` of export-grid ``Slice`` objects after port exclusion.
+
+        Side Effects:
+            Creates native and export monitor slices, then removes indices that intersect the boolean port-region mask. The final public ``self.port_monitor_slices`` entries are the export-grid slices.
+
+        Notes:
+            The radiation monitors are codimension-1 slices located at the four cell faces inside the PML. The monitor width is reduced by both the PML thickness and ``distance_to_PML``. Port exclusion is recomputed on each recorded grid (native vs export) so the returned slices remain grid-consistent.
         """
         xp_slice_name = monitor_name + "_xp"
         xp_center = (
@@ -6298,6 +7395,19 @@ class N_Ports(BaseDevice):
 
     def _check_object_on_symmetry_axis(self, input_slice_name, symmetry=(0, 0, 0)):
         # source_slice_size = self.port_monitor_slices_info[input_slice_name]["size"]
+        """
+        Check whether a configured source/monitor slice is centered on every active simulation symmetry axis.
+
+        Args:
+            input_slice_name: Key into ``self.port_monitor_slices_info``.
+            symmetry: Per-axis symmetry flags, conventionally a 3-tuple aligned with ``x/y/z``. Zero means no symmetry constraint on that axis.
+
+        Returns:
+            ``True`` when the slice center lies on every axis with nonzero symmetry; otherwise ``False``.
+
+        Notes:
+            The check uses the geometric cell center derived from ``self.cell_extend`` and a tolerance of ``1e-3`` in the device physical coordinate units. It is used when deciding whether fdtdx grid slices/fields can be unfolded across symmetry planes.
+        """
         source_slice_center = self.port_monitor_slices_info[input_slice_name]["center"]
         cell_extend = self.cell_extend
         if symmetry is not None:
@@ -6313,6 +7423,19 @@ class N_Ports(BaseDevice):
             return False
 
     def _check_object_symmetry(self, input_slice_name, symmetry=(0, 0, 0)):
+        """
+        Validate that a source slice is compatible with the active FDTD-X symmetry convention.
+
+        Args:
+            input_slice_name: Key into ``self.port_monitor_slices_info``.
+            symmetry: Per-axis symmetry flags, conventionally ``(sx, sy, sz)``.
+
+        Raises:
+            ValueError: If, on a symmetric axis, the source slice lies entirely on the lower half of the cell or crosses the symmetry plane without being centered on it.
+
+        Notes:
+            The current FDTD-X convention allows a slice centered on the symmetry plane or entirely on the upper/non-folded side. A slice on the lower side is rejected because the reduced-domain source representation cannot be unfolded consistently.
+        """
         source_slice_size = self.port_monitor_slices_info[input_slice_name]["size"]
         source_slice_center = self.port_monitor_slices_info[input_slice_name]["center"]
         cell_extend = self.cell_extend
@@ -6343,7 +7466,7 @@ class N_Ports(BaseDevice):
         input_slice_name: str,
         eps,
         type,
-        slice: Slice,
+        monitor_slice: Slice,
         wl_cen: float = 1.55,
         wl_width: float = 0,
         n_wl: int = 1,
@@ -6352,21 +7475,88 @@ class N_Ports(BaseDevice):
         field_grid_metadata: dict | None = None,
         slice_info: dict | None = None,
         on_native_grid: bool = False,
+        field_components: tuple = _PHASOR_COMPONENTS,
     ):
-        assert type in ("mode", "field", "flux"), f"Monitor type {type} not supported"
+        """
+        Construct FDTD-X mode, field, or flux monitor profiles for a port slice.
+
+        Args:
+            input_slice_name: Port/monitor identifier used to resolve physical slice metadata for mode monitors.
+            eps: Permittivity map used when solving mode profiles; it may be native- or export-grid data depending on ``on_native_grid``.
+            type: Monitor kind. Supported values are ``\"mode\"``, ``\"field\"``,
+                ``\"flux\"``, ``\"near2far\"``, ``\"design_region_field\"``,
+                and ``\"sparse_field\"``.
+            monitor_slice: Slice indexer defining the monitor plane. For mode monitors with ``slice_info``, the slice is rebuilt from physical coordinates on the selected grid.
+            wl_cen: Center wavelength in micrometers.
+            wl_width: Broadband wavelength span in micrometers.
+            n_wl: Number of wavelength samples.
+            source_modes: Modal identifiers such as ``\"Ez1\"`` or ``\"Hz1\"``.
+            direction: Propagation direction such as ``\"x+\"`` or ``\"y-\"``; the final sign character controls FDTD-X propagation direction.
+            field_grid_metadata: Optional native/export grid metadata used for epsilon resampling.
+            slice_info: Optional physical center/size/direction metadata used to rebuild the slice.
+            on_native_grid: Selects native optical grid mode solving instead of the uniform export grid.
+            field_components: Field components recorded by field detectors.
+                Sparse phasor mode uses the configured electric-only or
+                six-component convention.
+
+        Returns:
+            Mapping of detector keys to monitor metadata. Mode entries use
+            ``(wl, mode)`` keys and tuples
+            ``(detector, H_mode, E_mode, power_scale)``. Dense field-monitor
+            entries use ``((wl_cen, wl_width, n_wl), mode)``. Sparse field
+            entries add a support identifier as the third key element and a
+            native-grid bounds tuple as the fifth value:
+            ``(detector, None, None, power_scale, bounds)``. Sparse forward
+            supports include every design region, objective port, and enabled
+            design-centered visualization plane.
+
+        Notes:
+            Mode profiles are phase-normalized before conversion to complex
+            Torch tensors. FDTD-X ``Ez*`` modes use ``tm`` filtering and
+            ``Hz*`` modes use ``te`` filtering. Native-grid mode profiles use
+            recorded rectilinear boundaries, while export-grid mode profiles
+            use a uniform grid with ``self.grid_step`` spacing. On nonuniform
+            grids, physical modal apertures are converted to native cell bounds
+            at their actual location before the mode solve. Unplaced prototypes
+            retain the original physical metadata. During sparse
+            adjoint simulations, only the design-region detectors are placed;
+            objective-port and visualization detectors are forward-only.
+            ``MAPS_SPARSE_PHASOR_VISUALIZATION_PLANES=1`` (the default) adds
+            thin full-span ``xy``, ``xz``, and ``yz`` slabs through each design
+            region center. Identical slabs shared by multiple regions are
+            recorded once. If the device has no design regions, one set of
+            three slabs is centered at physical ``(0, 0, 0)`` using the native
+            rectilinear coordinates. Set the variable to ``0`` before importing
+            MAPS to minimize forward detector work when cross-section plots are
+            not needed.
+        """
+        assert type in (
+            "mode",
+            "field",
+            "flux",
+            "near2far",
+            "design_region_field",
+            "sparse_field",
+        ), f"Monitor type {type} not supported"
         # fdtdx, _ = _import_fdtdx_runtime()
         monitor_profile = {}
-        monitor_slice = slice
-        if (
-            type == "mode"
-            and slice_info is not None
-            and self.export_grid_metadata is not None
-        ):
+        # monitor_slice = slice
+        if type == "mode" and slice_info is not None:
+            grid_metadata = (
+                self.grid_info_dict.get("epsilon_map")
+                if on_native_grid
+                else self.export_grid_metadata
+            )
+            if grid_metadata is None:
+                raise ValueError(
+                    "Mode monitor coordinate metadata is unavailable for the "
+                    f"{'native' if on_native_grid else 'export'} grid."
+                )
             monitor_slice = self._monitor_slice_on_coords(
                 center=slice_info["center"],
                 size=slice_info["size"],
                 direction=direction,
-                coords=self.export_grid_metadata["coords"],
+                coords=grid_metadata["coords"],
             )
         partial_grid_shape, grid_slice_tuple = convert_to_fdtdx_grid_shape_loc_slice(
             monitor_slice, direction
@@ -6436,10 +7626,15 @@ class N_Ports(BaseDevice):
         if type == "mode":
             if on_native_grid:
                 eps = self.epsilon_map
-                grid = self.grid_info_dict["epsilon_map"]["grid"]
+                # grid = self.grid_info_dict["epsilon_map"]["grid"]
 
-                native = self.fdtdx_field_grid_metadata["native"]
-                boundaries = tuple(axis * MICRON_UNIT for axis in native["boundaries"])
+                # native = self.fdtdx_field_grid_metadata["native"]
+                # boundaries = tuple(axis * MICRON_UNIT for axis in native["boundaries"])
+                native_grid = self.grid_info_dict["epsilon_map"]
+                boundaries = tuple(
+                    axis * MICRON_UNIT for axis in native_grid["boundaries"]
+                )
+
                 edge_arrays = tuple(
                     jnp.asarray(axis, dtype=jnp.float32) for axis in boundaries
                 )
@@ -6478,10 +7673,27 @@ class N_Ports(BaseDevice):
             partial_grid_shape[direction_axis] = 1
             partial_real_shape[direction_axis] = None
 
+            objects = []
+            volume = fdtdx.SimulationVolume(
+                partial_grid_shape=grid_shape,
+                material=fdtdx.Material(permittivity=1.0),  # Dummy material
+            )
+            objects.append(volume)
+
+            inv_permittivities = 1 / jnp.asarray(eps[np.newaxis, ...]).astype(
+                config.dtype
+            )
+            # print(inv_permittivities.shape, jnp.min(inv_permittivities), jnp.max(inv_permittivities))
+            # inv_permeabilities = 1.0
+
+            unplaced_objects = {}
+            constraints = []
             for wl in wls:
                 for source_mode in source_modes:
-                    wave = fdtdx.WaveCharacter(wavelength=wl * MICRON_UNIT)
-                    name = f"mode_overlap_detector_{wl}_{source_mode}"
+                    wave = fdtdx.WaveCharacter(wavelength=float(wl * MICRON_UNIT))
+                    name = (
+                        f"{input_slice_name}_mode_overlap_detector_{wl}_{source_mode}"
+                    )
                     monitor = fdtdx.ModeOverlapDetector(
                         name=name,
                         partial_grid_shape=partial_grid_shape,
@@ -6493,49 +7705,54 @@ class N_Ports(BaseDevice):
                         scaling_mode="pulse",
                         filter_pol="tm" if source_mode.startswith("Ez") else "te",
                     )
-                    # print(eps.shape)
-                    inv_permittivities = 1 / jnp.asarray(eps[np.newaxis, ...]).astype(
-                        config.dtype
-                    )
-                    # print(inv_permittivities.shape)
-                    inv_permeabilities = 1.0
+                    unplaced_objects[name] = monitor
+                    if config.has_nonuniform_grid:
+                        from core.fdtd.fdtd import detector_native_placement
 
-                    objects = []
-                    volume = fdtdx.SimulationVolume(
-                        partial_grid_shape=grid_shape,
-                        material=fdtdx.Material(permittivity=1.0),  # Dummy material
-                    )
-                    objects.append(volume)
+                        monitor, detector_constraints = detector_native_placement(
+                            monitor, boundaries, grid
+                        )
+                        constraints.extend(detector_constraints)
                     objects.append(monitor)
-                    constraints = []
-                    objects, arrays, params, config, info = fdtdx.place_objects(
-                        object_list=objects,
-                        config=config,
-                        constraints=constraints,
-                        key=key,
-                    )
-                    self._check_object_symmetry(
-                        input_slice_name,
-                        symmetry=self.sim_cfg.get("symmetry", (0, 0, 0)),
-                    )
 
-                    if config.has_symmetry:
-                        symmetry_mid_abs = info["symmetry_mid_abs"]
-                        inv_permittivities = inv_permittivities[
-                            :,
-                            symmetry_mid_abs[0] :,
-                            symmetry_mid_abs[1] :,
-                            symmetry_mid_abs[2] :,
-                        ]
-                    arrays = arrays.at["inv_permittivities"].set(inv_permittivities)
-                    arrays = arrays.at["inv_permeabilities"].set(inv_permeabilities)
-                    arrays, objects, _ = fdtdx.apply_params(
-                        arrays=arrays,
-                        objects=objects,
-                        params=params,
-                        key=key,
+            # constraints.append(constraint)
+            objects, arrays, params, config, info = fdtdx.place_objects(
+                object_list=objects,
+                config=config,
+                constraints=constraints,
+                key=key,
+                override_inv_permittivities=inv_permittivities,
+            )
+            self._check_object_symmetry(
+                input_slice_name,
+                symmetry=self.sim_cfg.get("symmetry", (0, 0, 0)),
+            )
+
+            # if config.has_symmetry:
+            #     symmetry_mid_abs = info["symmetry_mid_abs"]
+            #     inv_permittivities = inv_permittivities[
+            #         :,
+            #         symmetry_mid_abs[0] :,
+            #         symmetry_mid_abs[1] :,
+            #         symmetry_mid_abs[2] :,
+            #     ]
+            # arrays = arrays.at["inv_permittivities"].set(inv_permittivities)
+            # arrays = arrays.at["inv_permeabilities"].set(inv_permeabilities)
+
+            # arrays, objects, _ = fdtdx.apply_params(
+            #     arrays=arrays,
+            #     objects=objects,
+            #     params=params,
+            #     key=key,
+            # )
+            # print(objects[name]._mode_H.shape)
+            from core.fdtd.fdtd import normalize_fields_phase
+
+            for wl in wls:
+                for source_mode in source_modes:
+                    name = (
+                        f"{input_slice_name}_mode_overlap_detector_{wl}_{source_mode}"
                     )
-                    # print(objects[name]._mode_H.shape)
                     if config.has_symmetry and self._check_object_on_symmetry_axis(
                         input_slice_name=input_slice_name,
                         symmetry=self.sim_cfg.get("symmetry", (0, 0, 0)),
@@ -6556,32 +7773,62 @@ class N_Ports(BaseDevice):
                     else:
                         _mode_E = objects[name]._mode_E[0]
                         _mode_H = objects[name]._mode_H[0]
-                    # print(_mode_E.shape, _mode_H.shape)
-                    from core.fdtd.fdtd import normalize_fields_phase
+                    #
 
                     _mode_E, _mode_H = normalize_fields_phase(_mode_E, _mode_H)
                     ht_m = _jax_to_torch(_mode_H).to(torch.complex64)[None, ...]
                     et_m = _jax_to_torch(_mode_E).to(torch.complex64)[None, ...]
-
-                    # import matplotlib.pyplot as plt
-                    # fig, axes = plt.subplots(2, 3)
-                    # ## plot ht_m and et_m's abs
-                    # print(ht_m.shape, et_m.shape)
-                    # axes[0, 0].imshow(ht_m[0, 0].abs().squeeze().cpu().numpy(), origin="lower")
-                    # axes[0, 1].imshow(ht_m[0, 1].abs().squeeze().cpu().numpy(), origin="lower")
-                    # axes[0, 2].imshow(ht_m[0, 2].abs().squeeze().cpu().numpy(), origin="lower")
-                    # axes[1, 0].imshow(et_m[0, 0].abs().squeeze().cpu().numpy(), origin="lower")
-                    # axes[1, 1].imshow(et_m[0, 1].abs().squeeze().cpu().numpy(), origin="lower")
-                    # axes[1, 2].imshow(et_m[0, 2].abs().squeeze().cpu().numpy(), origin="lower")
-                    # plt.savefig(f"mode_{wl}_{source_mode}.png")
-                    # exit(0)
-
                     monitor_profile[(wl, source_mode)] = (
-                        objects[name],  # source objective
+                        unplaced_objects[name],  # source objective
                         ht_m,  # h_m
                         et_m,  # e_m
                         1,  # power scale is not necessary for fdtd
                     )
+
+            ## we use grid_slice here to override the add_monitor_slice's grid_slice
+            if config.has_symmetry:
+                # print(objects[monitor.name].grid_slice)
+                ## we expand grid_slice only if the grid_slice is symmetric to the symmetry axis
+                if self._check_object_on_symmetry_axis(
+                    input_slice_name=input_slice_name,
+                    symmetry=self.sim_cfg.get("symmetry", (0, 0, 0)),
+                ):
+                    native_grid_indices = fdtdx.unfold_grid_slice(
+                        objects[monitor.name], config, info["symmetry_mid_abs"]
+                    )
+                else:
+                    # if the monitor is on the top half of the symmetry axis, we just use it. do not mirror it.
+                    ## simply because our slice has to be a continuous slice(start, stop), cannot have gap..
+                    native_grid_indices = tuple(
+                        slice(s.start + offset, s.stop + offset)
+                        for s, offset in zip(
+                            objects[monitor.name].grid_slice,
+                            info["symmetry_mid_abs"],
+                        )
+                    )
+                # print(native_grid_indices)
+                ## we record the reduced grid_slice for adjoint group check
+                self.port_monitor_slices_native_symmetry[input_slice_name] = objects[
+                    monitor.name
+                ].grid_slice
+            else:
+                native_grid_indices = objects[monitor.name].grid_slice
+
+            self.port_monitor_slices_native[input_slice_name] = native_grid_indices
+            # print(input_slice_name, _mode_E.shape, _mode_H.shape, native_grid_indices)
+            # import matplotlib.pyplot as plt
+            # fig, axes = plt.subplots(2, 3)
+            # ## plot ht_m and et_m's abs
+            # print(ht_m.shape, et_m.shape)
+            # axes[0, 0].imshow(ht_m[0, 0].abs().squeeze().cpu().numpy(), origin="lower")
+            # axes[0, 1].imshow(ht_m[0, 1].abs().squeeze().cpu().numpy(), origin="lower")
+            # axes[0, 2].imshow(ht_m[0, 2].abs().squeeze().cpu().numpy(), origin="lower")
+            # axes[1, 0].imshow(et_m[0, 0].abs().squeeze().cpu().numpy(), origin="lower")
+            # axes[1, 1].imshow(et_m[0, 1].abs().squeeze().cpu().numpy(), origin="lower")
+            # axes[1, 2].imshow(et_m[0, 2].abs().squeeze().cpu().numpy(), origin="lower")
+            # plt.savefig(f"mode_{wl}_{source_mode}.png")
+            # exit(0)
+
         elif type == "flux":
             for wl in wls:
                 monitor = fdtdx.PoyntingFluxDetector(
@@ -6603,15 +7850,14 @@ class N_Ports(BaseDevice):
                     wave_characters=tuple(
                         fdtdx.WaveCharacter(wavelength=wl * MICRON_UNIT) for wl in wls
                     ),
-                    components=_PHASOR_COMPONENTS,
+                    components=field_components,
                     scaling_mode="pulse",
                     plot=False,
                     switch=fdtdx.OnOffSwitch(
                         interval=8
                     ),  # we downsample by 8x, note that the field amplitude also reduce proprtionally
-                    ## we need the Yee's grid's gradients to create correct adjoint source.
-                    ## for objective computation (flux/eigenmode/overlap), we will do interpolation there
-                    exact_interpolation=False,
+                    exact_interpolation=True,
+                    # exact_interpolation=False,
                 )
                 ## this broadband phasor detector saves (num_frequencies, num_components, X, Y, Z) tensor for fields.
                 monitor_profile[((wl_cen, wl_width, n_wl), source_mode)] = (
@@ -6620,9 +7866,313 @@ class N_Ports(BaseDevice):
                     None,  # not used
                     1,  # power scale is not necessary for fdtd
                 )
+        elif type == "near2far":
+            if self.dim != 3:
+                raise ValueError(
+                    "near2far PhasorDetector monitors require a 3-D device"
+                )
+            if input_slice_name not in self.port_monitor_slices_native:
+                raise KeyError(
+                    f"Near2far slice {input_slice_name!r} is not registered on the native grid"
+                )
+            native_slice = self.port_monitor_slices_native[input_slice_name]
+            full_shape = tuple(int(size) for size in self.epsilon_map.shape)
+            native_bounds = []
+            for axis, axis_slice in enumerate(native_slice):
+                if isinstance(axis_slice, slice):
+                    start = 0 if axis_slice.start is None else int(axis_slice.start)
+                    stop = (
+                        full_shape[axis]
+                        if axis_slice.stop is None
+                        else int(axis_slice.stop)
+                    )
+                else:
+                    start = int(axis_slice)
+                    stop = start + 1
+                if start < 0 or stop > full_shape[axis] or stop <= start:
+                    raise ValueError(
+                        f"Near2far slice {input_slice_name!r} has invalid native "
+                        f"bounds on axis {axis}: {(start, stop)}"
+                    )
+                native_bounds.append((start, stop))
+            native_bounds = tuple(native_bounds)
+            detector_shape = tuple(stop - start for start, stop in native_bounds)
+            if sum(size == 1 for size in detector_shape) != 1:
+                raise ValueError(
+                    "near2far monitor must be a single-cell-thick planar surface, "
+                    f"got native shape {detector_shape}"
+                )
+            normal_axis = next(
+                axis for axis, size in enumerate(detector_shape) if size == 1
+            )
+            components = (
+                ("Ey", "Ez", "Hy", "Hz"),
+                ("Ex", "Ez", "Hx", "Hz"),
+                ("Ex", "Ey", "Hx", "Hy"),
+            )[normal_axis]
+            for source_mode in source_modes:
+                monitor = fdtdx.PhasorDetector(
+                    name=f"near2far_detector_{input_slice_name}_{source_mode}",
+                    partial_grid_shape=detector_shape,
+                    wave_characters=tuple(
+                        fdtdx.WaveCharacter(wavelength=wl * MICRON_UNIT) for wl in wls
+                    ),
+                    components=components,
+                    scaling_mode="pulse",
+                    switch=fdtdx.OnOffSwitch(interval=8),
+                    exact_interpolation=True,
+                )
+                monitor_profile[
+                    ((wl_cen, wl_width, n_wl), source_mode, input_slice_name)
+                ] = (monitor, None, None, 1, native_bounds)
+        elif type in {"design_region_field", "sparse_field"}:
+            visualization_supports = set()
+
+            def _register_visualization_monitors(support_name, center_bounds):
+                """Register unique forward-only slabs around one plot center.
+
+                Args:
+                    support_name: Design-region name or ``"origin"`` fallback.
+                    center_bounds: Three native half-open bounds whose midpoint
+                        defines the cross-section center.
+                """
+                if (
+                    type != "sparse_field"
+                    or not _MAPS_SPARSE_PHASOR_VISUALIZATION_PLANES
+                ):
+                    return
+                visualization_bounds = _design_region_visualization_bounds(
+                    center_bounds,
+                    self.epsilon_map.shape,
+                    self.sim_cfg.get("symmetry", (0, 0, 0)),
+                )
+                for plane_name, plane_bounds in visualization_bounds.items():
+                    plane_shape = tuple(stop - start for start, stop in plane_bounds)
+                    for source_mode in source_modes:
+                        support_signature = (source_mode, plane_bounds)
+                        if support_signature in visualization_supports:
+                            continue
+                        visualization_supports.add(support_signature)
+                        monitor = fdtdx.PhasorDetector(
+                            name=(
+                                f"field_detector_visualization_{support_name}_"
+                                f"{plane_name}_{source_mode}"
+                            ),
+                            partial_grid_shape=plane_shape,
+                            wave_characters=tuple(
+                                fdtdx.WaveCharacter(wavelength=wl * MICRON_UNIT)
+                                for wl in wls
+                            ),
+                            components=field_components,
+                            scaling_mode="pulse",
+                            switch=fdtdx.OnOffSwitch(interval=8),
+                            exact_interpolation=True,
+                        )
+                        monitor_profile[
+                            (
+                                (wl_cen, wl_width, n_wl),
+                                source_mode,
+                                f"visualization:{support_name}:{plane_name}",
+                            )
+                        ] = (
+                            monitor,
+                            None,
+                            None,
+                            1,
+                            plane_bounds,
+                        )
+
+            for region_name, region_mask in self.design_region_masks.items():
+                region_index = self._region_mask_to_index(region_mask)
+                if len(region_index) != 3:
+                    raise ValueError(
+                        "design_region_field requires 3-D design-region masks, "
+                        f"got {region_name!r} with {len(region_index)} axes"
+                    )
+                region_shape = tuple(
+                    int(axis_slice.stop) - int(axis_slice.start)
+                    for axis_slice in region_index
+                )
+                region_bounds = tuple(
+                    (int(axis_slice.start), int(axis_slice.stop))
+                    for axis_slice in region_index
+                )
+                if any(size <= 0 for size in region_shape):
+                    raise ValueError(
+                        f"Design region {region_name!r} has an empty grid slice: "
+                        f"{region_index}"
+                    )
+                for source_mode in source_modes:
+                    monitor = fdtdx.PhasorDetector(
+                        name=f"field_detector_{region_name}_{source_mode}",
+                        partial_grid_shape=region_shape,
+                        wave_characters=tuple(
+                            fdtdx.WaveCharacter(wavelength=wl * MICRON_UNIT)
+                            for wl in wls
+                        ),
+                        components=field_components,
+                        scaling_mode="pulse",
+                        switch=fdtdx.OnOffSwitch(interval=8),
+                        exact_interpolation=True,
+                    )
+                    monitor_profile[
+                        ((wl_cen, wl_width, n_wl), source_mode, region_name)
+                    ] = (
+                        monitor,  # source objective
+                        None,  # not used
+                        None,  # not used
+                        1,  # power scale is not necessary for fdtd
+                        region_bounds,
+                    )
+                _register_visualization_monitors(region_name, region_bounds)
+
+            if not self.design_region_masks:
+                origin_bounds = _origin_grid_cell_bounds(self.coords)
+                _register_visualization_monitors("origin", origin_bounds)
+            if type == "sparse_field":
+                full_shape = tuple(int(size) for size in self.epsilon_map.shape)
+                for port_name, port_slice in self.port_monitor_slices_native.items():
+                    if len(port_slice) != 3:
+                        raise ValueError(
+                            "sparse_field requires 3-D native port slices, "
+                            f"got {port_name!r} with {len(port_slice)} axes"
+                        )
+                    port_bounds = []
+                    for axis, axis_slice in enumerate(port_slice):
+                        if not isinstance(axis_slice, slice):
+                            start = int(axis_slice)
+                            stop = start + 1
+                        else:
+                            start = (
+                                0 if axis_slice.start is None else int(axis_slice.start)
+                            )
+                            stop = (
+                                full_shape[axis]
+                                if axis_slice.stop is None
+                                else int(axis_slice.stop)
+                            )
+                        if start < 0 or stop > full_shape[axis] or stop <= start:
+                            raise ValueError(
+                                f"Port {port_name!r} has invalid native bounds on "
+                                f"axis {axis}: {(start, stop)}, full_shape={full_shape}"
+                            )
+                        port_bounds.append((start, stop))
+                    port_bounds = tuple(port_bounds)
+                    port_shape = tuple(stop - start for start, stop in port_bounds)
+                    for source_mode in source_modes:
+                        monitor = fdtdx.PhasorDetector(
+                            name=f"field_detector_port_{port_name}_{source_mode}",
+                            partial_grid_shape=port_shape,
+                            wave_characters=tuple(
+                                fdtdx.WaveCharacter(wavelength=wl * MICRON_UNIT)
+                                for wl in wls
+                            ),
+                            components=field_components,
+                            scaling_mode="pulse",
+                            switch=fdtdx.OnOffSwitch(interval=8),
+                            exact_interpolation=True,
+                        )
+                        support_name = f"port:{port_name}"
+                        monitor_profile[
+                            ((wl_cen, wl_width, n_wl), source_mode, support_name)
+                        ] = (
+                            monitor,
+                            None,
+                            None,
+                            1,
+                            port_bounds,
+                        )
         else:
             raise ValueError(f"Monitor type {type} not supported")
         return monitor_profile
+
+    def insert_plane_wave_fdtd3d(
+        self,
+        source_slice_name: str,
+        eps,
+        slice: Slice,
+        wl_cen: float = 1.55,
+        wl_width: float = 0,
+        n_wl: int = 1,
+        grid_step=None,
+        power_scales: dict = None,
+        source_modes: Tuple[int] = ("Ez1",),
+        direction: str = "x+",
+    ):
+        """Create a native FDTD-X uniform TFSF plane source.
+
+        Args:
+            source_slice_name: Registered source-plane slice name.
+            eps: Retained for source-builder API compatibility.
+            slice: Retained for source-builder API compatibility.
+            wl_cen: Center wavelength in micrometers.
+            wl_width: Broadband wavelength span recorded in the profile key.
+            n_wl: Number of monitor wavelengths recorded in the profile key.
+            grid_step: Retained for source-builder API compatibility.
+            power_scales: Retained for source-builder API compatibility.
+            source_modes: Labels whose one-based suffix selects one of the two
+                transverse electric polarizations.
+            direction: Propagation direction such as ``"z+"``.
+
+        Returns:
+            Source profiles keyed by ``((wl_cen, wl_width, n_wl), mode)``.
+
+        Notes:
+            ``fdtdx.UniformPlaneSource`` is the concrete uniform-amplitude
+            implementation of FDTD-X's TFSF plane-source formulation. Its
+            ``amplitude`` and ``static_amplitude_factor`` retain the native
+            FDTD-X field-amplitude convention.
+        """
+        del eps, slice, grid_step, power_scales
+        if len(direction) != 2 or direction[0] not in "xyz" or direction[1] not in "+-":
+            raise ValueError(f"Invalid plane-wave direction {direction!r}")
+        source_info = self.port_monitor_slices_info[source_slice_name]
+        source_size = source_info["size"]
+        source_center = source_info["center"]
+        normal_axis = "xyz".index(direction[0])
+        transverse_axes = [axis for axis in range(3) if axis != normal_axis]
+        partial_grid_shape = [None, None, None]
+        partial_grid_shape[normal_axis] = 1
+        partial_real_shape = [size * MICRON_UNIT for size in source_size]
+        partial_real_shape[normal_axis] = None
+        wave = fdtdx.WaveCharacter(wavelength=wl_cen * MICRON_UNIT)
+        pulse = fdtdx.GaussianPulseProfile(
+            center_wave=wave,
+            spectral_width=fdtdx.WaveCharacter(wavelength=wl_cen * MICRON_UNIT * 10),
+        )
+        profiles = {}
+        for source_mode in source_modes:
+            try:
+                polarization_index = int(str(source_mode)[-1]) - 1
+            except ValueError as error:
+                raise ValueError(
+                    f"Plane-wave mode {source_mode!r} must end in 1 or 2"
+                ) from error
+            if polarization_index not in (0, 1):
+                raise ValueError(f"Plane-wave mode {source_mode!r} must end in 1 or 2")
+            electric_polarization = [0.0, 0.0, 0.0]
+            electric_polarization[transverse_axes[polarization_index]] = 1.0
+            source = fdtdx.UniformPlaneSource(
+                partial_real_position=tuple(
+                    coordinate * MICRON_UNIT for coordinate in source_center
+                ),
+                amplitude=1.0,
+                wave_character=wave,
+                direction=direction[-1],
+                fixed_E_polarization_vector=tuple(electric_polarization),
+                fixed_H_polarization_vector=None,
+                partial_grid_shape=tuple(partial_grid_shape),
+                partial_real_shape=tuple(partial_real_shape),
+                temporal_profile=pulse,
+                normalize_by_energy=False,
+            )
+            profiles[((wl_cen, wl_width, n_wl), source_mode)] = (
+                source,
+                None,
+                None,
+                1,
+            )
+        return profiles
 
     def insert_gaussian_beam_fdtd3d(
         self,
@@ -6642,6 +8192,29 @@ class N_Ports(BaseDevice):
     ):
         # for 3D FDTDX, the mode is not solved until the apply_params is called on source object every optimization iteration.
         # fdtdx, _ = _import_fdtdx_runtime()
+        """
+        Create normalized broadband Gaussian-plane source profiles for FDTD-X.
+
+        Args:
+            source_slice_name: Port slice name used to obtain physical source center and extent.
+            eps: Retained for API compatibility; the current Gaussian-plane implementation does not directly use the epsilon array.
+            slice: Port monitor slice used to determine the source-plane grid location.
+            wl_cen: Center wavelength in micrometers.
+            wl_width: Broadband wavelength span recorded in the source-profile key.
+            n_wl: Number of wavelength samples recorded in source metadata.
+            grid_step: Optional optical grid step, retained for compatibility.
+            power_scales: Optional mapping from ``(wavelength, mode)`` to an amplitude scale applied to the generated Gaussian source.
+            source_modes: Modal labels; for supported ``z`` propagation the final digit selects fixed transverse E polarization.
+            waist_radii: Gaussian waist radii. ``None`` derives a radius from the transverse source extent.
+            waist_distances: Beam-waist distances from the source plane.
+            direction: Propagation direction. The current Gaussian implementation supports ``z`` propagation.
+
+        Returns:
+            Dictionary keyed by ``((wl_cen, wl_width, n_wl), source_mode)``. Each value is ``(source_object, None, None, 1)``.
+
+        Normalization contract:
+            The FDTD-X source uses ``normalize_by_poynting_flux=True`` and ``normalize_by_energy=False`` with unit ``static_amplitude_factor`` by default so the launched full-domain optical power is one watt after discrete source-spectrum normalization. ``GaussianPlaneSourceTidy3d`` accounts for active symmetry multiplicity internally.
+        """
         mode_profiles = {}
         wls = np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl)
 
@@ -6696,10 +8269,11 @@ class N_Ports(BaseDevice):
                 )
 
             # Compute scaling factor based on symmetry
-            symmetry_factor = 1.0
-            for axis, sym in enumerate(self.sim_cfg.get("symmetry", [0, 0, 0])):
-                if sym != 0:
-                    symmetry_factor *= 2**0.5  # Each symmetric axis halves the domain
+            # [09/01/2026] comment out this: fdtdx internally handled symmetry multiplicity, so we don't need to scale the source amplitude by symmetry factor.
+            # symmetry_factor = 1.0
+            # for axis, sym in enumerate(self.sim_cfg.get("symmetry", [0, 0, 0])):
+            #     if sym != 0:
+            #         symmetry_factor *= 2**0.5  # Each symmetric axis halves the domain
 
             ## for original fdtdx.GaussianPlaneSource
             ## in tidy3d, waist_radius = √2 × σ
@@ -6719,7 +8293,11 @@ class N_Ports(BaseDevice):
                 fixed_H_polarization_vector=fixed_H_polarization_vector,
                 partial_grid_shape=partial_grid_shape,
                 partial_real_shape=partial_real_shape,
-                static_amplitude_factor=1 / symmetry_factor,
+                static_amplitude_factor=(
+                    1.0
+                    if power_scales is None
+                    else power_scales.get((wls[0], source_mode), 1.0)
+                ),
                 temporal_profile=pulse,
                 normalize_by_energy=False,  # launch unit power not energy.
                 normalize_by_poynting_flux=True,  # launch unit power not energy.
@@ -6732,7 +8310,7 @@ class N_Ports(BaseDevice):
                 None,  # not used
                 1,  # power scale is not necessary for fdtd
             )
-            return mode_profiles
+        return mode_profiles
 
     def insert_modes_fdtd3d(
         self,
@@ -6749,6 +8327,30 @@ class N_Ports(BaseDevice):
     ):
         # for 3D FDTDX, the mode is not solved until the apply_params is called on source object every optimization iteration.
         # fdtdx, _ = _import_fdtdx_runtime()
+        """
+        Create broadband FDTD-X eigenmode plane sources from a port slice.
+
+        Args:
+            source_slice_name: Port slice name used to obtain physical source center and extent.
+            eps: Retained for API compatibility; the current implementation builds the FDTD-X mode source without directly reading the epsilon tensor here.
+            slice: Port monitor slice used to determine the source-plane grid location.
+            wl_cen: Center wavelength in micrometers.
+            wl_width: Broadband wavelength span.
+            n_wl: Number of wavelength samples recorded in source metadata.
+            grid_step: Optional optical grid step, retained for compatibility.
+            power_scales: Optional mapping from ``(wavelength, mode)`` to an amplitude scale.
+            source_modes: Modal labels such as ``\"Ez1\"`` and ``\"Hz1\"``. The numeric suffix is converted from one-based user numbering to zero-based FDTD-X ``mode_index``.
+            direction: Propagation direction such as ``\"x+\"`` or ``\"y-\"``.
+
+        Returns:
+            Dictionary keyed by ``((wl_cen, wl_width, n_wl), source_mode)``. Each value is ``(ModePlaneSource, None, None, 1)``.
+
+        Symmetry contract:
+            The source is checked against device symmetry and its static amplitude is divided by ``sqrt(2)`` for each active symmetry axis.
+
+        Polarization contract:
+            ``Ez*`` sources use ``filter_pol=\"tm\"``; ``Hz*`` sources use ``filter_pol=\"te\"``.
+        """
         mode_profiles = {}
         wls = np.linspace(wl_cen - wl_width / 2, wl_cen + wl_width / 2, n_wl)
 
@@ -6766,7 +8368,7 @@ class N_Ports(BaseDevice):
             pulse = fdtdx.GaussianPulseProfile(
                 center_wave=wave,
                 spectral_width=fdtdx.WaveCharacter(
-                    wavelength=wl_cen * MICRON_UNIT * 10
+                    wavelength=wl_cen * MICRON_UNIT * 20
                 ),
             )
 
@@ -6779,7 +8381,46 @@ class N_Ports(BaseDevice):
                 if sym != 0:
                     symmetry_factor *= 2**0.5  # Each symmetric axis halves the domain
 
-            source = fdtdx.ModePlaneSource(
+            broadband_mode_method = self.sim_cfg.get(
+                "fdtdx_mode_source_method", "chebyshev_3"
+            )
+            chebyshev_orders = {
+                "chebyshev_3": 3,
+                "chebyshev_5": 5,
+            }
+            if broadband_mode_method not in (
+                "center",
+                "exact",
+                *chebyshev_orders,
+            ):
+                raise ValueError(
+                    "sim_cfg['fdtdx_mode_source_method'] must be 'center', "
+                    "'chebyshev_3', 'chebyshev_5', or 'exact', got "
+                    f"{broadband_mode_method!r}."
+                )
+            use_frequency_dependent_profiles = (
+                broadband_mode_method == "exact" and n_wl > 1 and wl_width > 0
+            )
+            use_chebyshev_profiles = (
+                broadband_mode_method in chebyshev_orders and n_wl > 1 and wl_width > 0
+            )
+            if use_frequency_dependent_profiles:
+                source_class = fdtdx.BroadbandModePlaneSource
+                broadband_source_kwargs = {
+                    "wave_characters": tuple(
+                        fdtdx.WaveCharacter(wavelength=float(wl) * MICRON_UNIT)
+                        for wl in wls
+                    )
+                }
+            elif use_chebyshev_profiles:
+                source_class = fdtdx.ChebyshevModePlaneSource
+                broadband_source_kwargs = {
+                    "num_freqs": chebyshev_orders[broadband_mode_method]
+                }
+            else:
+                source_class = fdtdx.ModePlaneSource
+                broadband_source_kwargs = {}
+            source = source_class(
                 name=f"input_mode_source_{source_mode}",
                 partial_grid_shape=partial_grid_shape,
                 partial_real_shape=partial_real_shape,
@@ -6791,12 +8432,13 @@ class N_Ports(BaseDevice):
                 mode_index=int(source_mode[2:]) - 1,
                 temporal_profile=pulse,
                 static_amplitude_factor=(
-                    1
+                    1.0
                     if power_scales is None
-                    else power_scales.get((wls[0], source_mode), 1)
+                    else power_scales.get((wls[0], source_mode), 1.0)
                 )
                 / symmetry_factor,
                 filter_pol="tm" if source_mode.startswith("Ez") else "te",
+                **broadband_source_kwargs,
             )
             ## We have broadband source, use wl_cen, wl_width, n_wl as key
             mode_profiles[((wl_cen, wl_width, n_wl), source_mode)] = (
@@ -6821,6 +8463,28 @@ class N_Ports(BaseDevice):
         dxs=None,
         dys=None,
     ):
+        """
+        Solve 2-D eigenmodes on the configured monitor slice and build per-wavelength source/field profiles.
+
+        Args:
+            eps: Permittivity map on the optical native grid used by the modal solver.
+            slice: ``Slice`` defining the transverse mode-solving plane.
+            wl_cen: Center wavelength in micrometers.
+            wl_width: Wavelength span in micrometers.
+            n_wl: Number of wavelength samples.
+            grid_step: Optional physical grid step in micrometers; defaults to ``self.grid_step``.
+            power_scales: Optional mapping from ``(wavelength, mode)`` to an amplitude scale applied to returned mode fields.
+            source_modes: Modal identifiers such as ``\"Ez1\"`` or ``\"Hz1\"`` passed to ``insert_mode``.
+            direction: Propagation direction such as ``\"x+\"`` or ``\"y-\"``.
+            dxs: Optional nonuniform x-cell widths in physical solver units.
+            dys: Optional nonuniform y-cell widths in physical solver units; ``dxs`` and ``dys`` must be supplied together when overriding spacing.
+
+        Returns:
+            Dictionary keyed by ``(wl, source_mode)`` with values ``[mode, H_mode, E_mode, power_scale]``.
+
+        Notes:
+            When ``dxs``/``dys`` are omitted, native-grid boundary metadata is used to derive the cell widths. This keeps modal solving consistent with nonuniform FDFD grids.
+        """
         grid_step = grid_step or self.grid_step
         dl = grid_step * MICRON_UNIT
         if dxs is None and dys is None:
@@ -6881,6 +8545,27 @@ class N_Ports(BaseDevice):
         direction: str = "x+",
         custom_source: np.ndarray | torch.Tensor = None,
     ):
+        """
+        Build a complex plane-wave source profile directly on a 2-D monitor slice.
+
+        Args:
+            eps: Permittivity array defining the source-map canvas; Torch is selected when ``custom_source`` is a Torch tensor.
+            slice: ``Slice`` defining the source plane.
+            wl_cen: Center wavelength in micrometers used for the phase increment between adjacent source planes.
+            wl_width: Wavelength span in micrometers.
+            n_wl: Number of wavelength samples.
+            source_modes: Mode labels used as dictionary keys; the plane wave is not eigenmode-solved.
+            grid_step: Physical grid step in micrometers.
+            power_scales: Optional mapping from ``(wavelength, mode)`` to source amplitude scaling.
+            direction: Propagation direction using ``x+``/``x-`` or ``y+``/``y-``.
+            custom_source: Optional NumPy or Torch source pattern replacing unit-amplitude values on the source slice.
+
+        Returns:
+            Dictionary keyed by ``(wl, source_mode)`` with values ``[source, H_profile, E_profile, power_scale]``.
+
+        Notes:
+            The source is written on the selected slice and one adjacent plane with a phase factor based on ``wl_cen`` and ``grid_step``; the direction sign selects which adjacent plane receives that phase-shifted copy.
+        """
         if isinstance(custom_source, torch.Tensor):
             lib = torch
             eps = torch.tensor(eps, dtype=torch.float32, device=custom_source.device)
@@ -6952,6 +8637,28 @@ class N_Ports(BaseDevice):
         dxs=None,
         dys=None,
     ):
+        """
+        Construct a 2-D frequency-domain simulation for the selected polarization and solver backend.
+
+        Args:
+            omega: Angular frequency in radians per second.
+            dl: Nominal grid spacing in physical solver units.
+            eps: Permittivity map.
+            NPML: PML thickness in cell counts. For nonuniform ``dxs``/``dys`` grids, native-grid counts are used.
+            solver: ``\"ceviche\"`` or ``\"ceviche_torch\"``.
+            pol: ``\"Ez\"`` or ``\"Hz\"``.
+            dxs: Optional native x-cell widths.
+            dys: Optional native y-cell widths.
+
+        Returns:
+            Solver object configured for the selected backend and polarization.
+
+        Raises:
+            ValueError: If only one of ``dxs``/``dys`` is provided or the polarization/backend is unsupported.
+
+        Notes:
+            ``Ez`` and ``Hz`` select the corresponding Ceviche formulation. With rectilinear spacing, PML cell counts are interpreted on the same native grid as ``dxs``/``dys``.
+        """
         if dxs is not None or dys is not None:
             if dxs is None or dys is None:
                 raise ValueError("dxs and dys must be provided together")
@@ -6997,6 +8704,11 @@ class N_Ports(BaseDevice):
         sim_sigma = self.electrical_conductivity_map
         native_grid = field_grid_metadata["native"]
         export_grid = field_grid_metadata["export"]
+        sim_sigma = self._resample_map_to_fdtdx_native(
+            sim_sigma,
+            map_name="electrical_conductivity_map",
+            native_grid=native_grid,
+        )
         # if not field_grid_metadata.get("native_equals_export", False):
         #     sim_eps = self.build_fdtdx_native_permittivity(
         #         eps,
@@ -7041,7 +8753,7 @@ class N_Ports(BaseDevice):
             n_wl,
             self.NPML,
         )
-        Ex, Ey, Ez, Hx, Hy, Hz = simulation.solve(
+        fields = simulation.solve(
             input_slice_name=input_slice_name,
             wl_cen=wl_cen,
             wl_width=wl_width,
@@ -7049,6 +8761,9 @@ class N_Ports(BaseDevice):
             mode=mode,
             eps_r=eps,
         )
+        if _MAPS_SPARSE_PHASOR:
+            return fields
+        Ex, Ey, Ez, Hx, Hy, Hz = fields
         return {"Ex": Ex, "Ey": Ey, "Ez": Ez, "Hx": Hx, "Hy": Hy, "Hz": Hz}
 
     def solve_ceviche(
@@ -7063,10 +8778,23 @@ class N_Ports(BaseDevice):
         dys=None,
     ):
         """
-        _summary_
+        Solve one 2-D frequency-domain source and return polarization-specific field components.
 
-        this is only called in the norm run through solve() in _norm_run(), so we can pass port_name and the mode to be 'Norm' directly
-        and there is no need to run the backward to store the adjoint source and adjoint fields, so we enable torch.no_grad() environment
+        Args:
+            eps: Permittivity map supplied to the selected FDFD backend.
+            source: Complex source profile.
+            wl: Wavelength in micrometers.
+            grid_step: Optional nominal grid step in micrometers.
+            solver: ``\"ceviche\"`` or ``\"ceviche_torch\"``.
+            pol: ``\"Ez\"`` or ``\"Hz\"``.
+            dxs: Optional native x-cell widths.
+            dys: Optional native y-cell widths.
+
+        Returns:
+            For ``Ez`` polarization, ``{\"Hx\": Fx, \"Hy\": Fy, \"Ez\": Fz}``; for ``Hz``, ``{\"Ex\": Fx, \"Ey\": Fy, \"Hz\": Fz}``.
+
+        Notes:
+            Angular frequency is computed from wavelength using ``MICRON_UNIT``. The Torch Ceviche normalization/reference path executes under ``torch.no_grad()``.
         """
         omega = 2 * np.pi * C_0 / (wl * MICRON_UNIT)
         grid_step = grid_step or self.grid_step
@@ -7107,19 +8835,22 @@ class N_Ports(BaseDevice):
         dxs=None,
         dys=None,
     ):
-        """_summary_
+        """
+        Run the configured 2-D FDFD solver for every source profile and collect fields by wavelength and mode.
 
         Args:
-            eps (_type_): _description_
-            source_profiles (_type_): _description_
-            solver (str, optional): _description_. Defaults to "ceviche".
-            grid_step (_type_, optional): _description_. Defaults to None.
-
-        Raises:
-            ValueError: _description_
+            eps: Device permittivity map.
+            source_profiles: Mapping keyed by ``(wl, mode)`` whose first tuple/list element is the source field.
+            solver: Backend identifier. The active implementation supports ``\"ceviche\"`` and ``\"ceviche_torch\"``; ``\"fdtdx\"`` currently raises ``NotImplementedError`` in this high-level method.
+            grid_step: Optional nominal grid step.
+            dxs: Optional native x-cell widths.
+            dys: Optional native y-cell widths.
 
         Returns:
-            fields: {(wl, mode): {"Hx": Hx, "Hy": Hy, "Ez": Ez}, ...}
+            Mapping keyed by ``(wl, mode)`` to polarization-specific field dictionaries. ``Ez*`` yields ``Hx``, ``Hy``, ``Ez``; ``Hz*`` yields ``Ex``, ``Ey``, ``Hz``.
+
+        Notes:
+            The supplied ``eps`` is reused for each source profile; this method does not perform a wavelength/temperature material-update loop itself.
         """
         grid_step = grid_step or self.grid_step
         fields = {}
@@ -7181,6 +8912,33 @@ class N_Ports(BaseDevice):
         plot=False,
         require_sim: bool = False,
     ):
+        """
+        Build and normalize auxiliary two-port source profiles used to establish target-power optical excitation.
+
+        Args:
+            source_modes: Modal identifiers such as ``\"Ez1\"`` or ``\"Hz1\"``.
+            input_port_name: Port key used by ``get_two_ports`` for the auxiliary normalization device.
+            input_slice_name: Launch-plane monitor name.
+            wl_cen: Center wavelength in micrometers.
+            wl_width: Wavelength span in micrometers.
+            n_wl: Number of wavelength samples.
+            solver: Optical backend, currently Ceviche variants or FDTD-X.
+            power: Target launched optical power.
+            source_type: ``\"mode\"``, ``\"plane_wave\"``, or ``\"gaussian_beam\"``.
+            waist_radii: Gaussian waist radii for the FDTD-X Gaussian source path.
+            waist_distances: Gaussian waist distances.
+            plot: Whether to export a diagnostic source/mode plot.
+            require_sim: Whether the profile is intended to be inserted as a simulation source.
+
+        Returns:
+            Source-profile dictionary keyed by wavelength/mode. The common tuple layout is ``[source_profile, H_mode, E_mode, power_or_scale, require_sim]``.
+
+        Normalization procedure:
+            In the FDFD path, an auxiliary two-port device runs an unscaled reference excitation, measures reference flux, and scales the source by ``sqrt(power / measured_flux)`` independently for each wavelength/mode. The normalized profiles are stored in ``self.port_sources_dict[input_slice_name]``.
+
+        Grid contract:
+            The auxiliary two-port raster grid can differ from the original device grid. Full-field source profiles and transverse mode fields are resampled back onto the original native grid before they are returned.
+        """
         assert source_type in {
             "mode",
             "plane_wave",
@@ -7205,6 +8963,19 @@ class N_Ports(BaseDevice):
                         source_modes=source_modes,
                         direction=direction,
                     )
+                elif source_type == "plane_wave":
+                    source_profiles = two_ports.insert_plane_wave_fdtd3d(
+                        input_slice_name,
+                        None,
+                        input_slice,
+                        wl_cen=wl_cen,
+                        wl_width=wl_width,
+                        n_wl=n_wl,
+                        power_scales=None,
+                        source_modes=source_modes,
+                        direction=direction,
+                        grid_step=self.grid_step,
+                    )
                 elif source_type == "gaussian_beam":
                     source_profiles = two_ports.insert_gaussian_beam_fdtd3d(
                         input_slice_name,
@@ -7221,17 +8992,31 @@ class N_Ports(BaseDevice):
                         grid_step=self.grid_step,
                     )
                 ## every FDTDX simulation need PhasorDetector(s) to record fields for this source (that requires simulation).
-                phasor_profiles = two_ports.insert_monitors_fdtd3d(
-                    input_slice_name,
-                    two_ports.epsilon_map,
-                    "field",
-                    input_slice,
-                    wl_cen=wl_cen,
-                    wl_width=wl_width,
-                    n_wl=n_wl,
-                    source_modes=source_modes,
-                    direction=direction,
-                )
+                if _MAPS_SPARSE_PHASOR:
+                    ### we need to insert phasor detectors for each design region
+                    phasor_profiles = self.insert_monitors_fdtd3d(
+                        input_slice_name,
+                        self.epsilon_map,
+                        "sparse_field",
+                        input_slice,
+                        wl_cen=wl_cen,
+                        wl_width=wl_width,
+                        n_wl=n_wl,
+                        source_modes=source_modes,
+                        direction=direction,
+                    )
+                else:
+                    phasor_profiles = two_ports.insert_monitors_fdtd3d(
+                        input_slice_name,
+                        two_ports.epsilon_map,
+                        "field",
+                        input_slice,
+                        wl_cen=wl_cen,
+                        wl_width=wl_width,
+                        n_wl=n_wl,
+                        source_modes=source_modes,
+                        direction=direction,
+                    )
                 # add requires_sim
                 phasor_profiles = {
                     k: list(v) + [False] for k, v in phasor_profiles.items()
@@ -7266,27 +9051,83 @@ class N_Ports(BaseDevice):
                         break
                     import matplotlib.pyplot as plt
 
-                    fig, axes = plt.subplots(3, 6, figsize=(12, 8))
+                    fig, axes = plt.subplots(3, 6, figsize=(20, 6))
                     ## row 0: abs; row 1: real; row 2: imag
                     ## col 0 Ex; col 1 Ey; col 2 Ez; col 3 Hx; col 4 Hy; col 5 Hz
+                    epsilon_map = two_ports.epsilon_map
+                    if isinstance(epsilon_map, torch.Tensor):
+                        epsilon_map = epsilon_map.detach().cpu().numpy()
+                    else:
+                        epsilon_map = np.asarray(epsilon_map)
+                    if np.iscomplexobj(epsilon_map):
+                        epsilon_map = np.abs(epsilon_map)
+                    grid_slice = self.port_monitor_slices_native[input_slice_name]
+                    epsilon_overlay = epsilon_map[grid_slice].T.squeeze()
+                    epsilon_overlay = np.flip(epsilon_overlay, axis=0)
+                    # if epsilon_map.ndim == 3:
+                    #     direction_axis = "xyz".index(direction[0])
+                    #     slice_axis = getattr(input_slice, "xyz"[direction_axis])
+                    #     if not isinstance(slice_axis, (int, np.integer)):
+                    #         slice_axis = epsilon_map.shape[direction_axis] // 2
+                    #     epsilon_overlay = np.take(
+                    #         epsilon_map,
+                    #         int(slice_axis),
+                    #         axis=direction_axis,
+                    #     ).T
+                    # elif epsilon_map.ndim == 2:
+                    #     epsilon_overlay = epsilon_map.T
+                    # else:
+                    #     epsilon_overlay = None
+
                     for i, component in enumerate(["Ex", "Ey", "Ez", "Hx", "Hy", "Hz"]):
                         ax = axes[0, i]
                         idx = i % 3
                         mode = ht_m if component[0] == "H" else et_m
 
                         data = mode[0, idx].data.cpu().squeeze().numpy().T
+                        data = np.flip(data, axis=0)
 
-                        im = ax.imshow(np.abs(data), cmap="viridis")
+                        im = ax.imshow(np.abs(data), cmap="magma")
+                        if (
+                            epsilon_overlay is not None
+                            and epsilon_overlay.shape == data.shape
+                        ):
+                            ax.imshow(
+                                epsilon_overlay,
+                                cmap="Grays",
+                                alpha=0.3,
+                                interpolation="nearest",
+                            )
                         ax.set_title(f"|{component}|")
                         fig.colorbar(im, ax=ax)
 
                         ax = axes[1, i]
                         im = ax.imshow(np.real(data), cmap="RdBu")
+                        if (
+                            epsilon_overlay is not None
+                            and epsilon_overlay.shape == data.shape
+                        ):
+                            ax.imshow(
+                                epsilon_overlay,
+                                cmap="Grays",
+                                alpha=0.3,
+                                interpolation="nearest",
+                            )
                         ax.set_title(f"Re({component})")
                         fig.colorbar(im, ax=ax)
 
                         ax = axes[2, i]
                         im = ax.imshow(np.imag(data), cmap="RdBu")
+                        if (
+                            epsilon_overlay is not None
+                            and epsilon_overlay.shape == data.shape
+                        ):
+                            ax.imshow(
+                                epsilon_overlay,
+                                cmap="Grays",
+                                alpha=0.3,
+                                interpolation="nearest",
+                            )
                         ax.set_title(f"Im({component})")
                         fig.colorbar(im, ax=ax)
                     filepath = os.path.join(
@@ -7297,7 +9138,7 @@ class N_Ports(BaseDevice):
                     if not os.path.exists(dirname):
                         os.makedirs(dirname)
                     plt.tight_layout()
-                    fig.savefig(filepath, dpi=150)
+                    fig.savefig(filepath, dpi=300)
                     plt.close()
                     break
 
@@ -7468,7 +9309,12 @@ class N_Ports(BaseDevice):
             if source_grid is not None and target_grid is not None:
                 source_shape = tuple(len(axis) for axis in source_grid["coords"])
                 target_shape = tuple(len(axis) for axis in target_grid["coords"])
-                if source_shape != target_shape:
+                grids_differ = source_shape != target_shape or not all(
+                    src.shape == dst.shape
+                    and np.allclose(src, dst, atol=1e-9, rtol=1e-6)
+                    for src, dst in zip(source_grid["coords"], target_grid["coords"])
+                )
+                if grids_differ:
                     for key, profile in source_profiles.items():
                         source_field = profile[0]
                         if tuple(source_field.shape[-self.dim :]) == source_shape:
@@ -7484,7 +9330,11 @@ class N_Ports(BaseDevice):
                                 )
                             source_profiles[key][0] = resampled_source
 
-                        transverse_axis = 1 if direction[0] == "x" else 0
+                        transverse_axes = {
+                            "x": (1, 2),
+                            "y": (0, 2),
+                            "z": (0, 1),
+                        }[direction[0]]
                         target_input_slice = self._monitor_slice_on_coords(
                             center=input_slice_info["center"],
                             size=input_slice_info["size"],
@@ -7499,29 +9349,33 @@ class N_Ports(BaseDevice):
                                 return np.arange(length)[value]
                             return np.asarray(value).reshape(-1)
 
-                        src_indices = _slice_indices(
-                            (native_input_slice.x, native_input_slice.y)[
-                                transverse_axis
-                            ],
-                            source_shape[transverse_axis],
+                        source_slice_indexers = tuple(
+                            getattr(native_input_slice, axis) for axis in two_ports.axes
                         )
-                        dst_indices = _slice_indices(
-                            (target_input_slice.x, target_input_slice.y)[
-                                transverse_axis
-                            ],
-                            target_shape[transverse_axis],
+                        target_slice_indexers = tuple(
+                            getattr(target_input_slice, axis) for axis in self.axes
                         )
-                        src_transverse_coords = (
-                            source_grid["coords"][transverse_axis][src_indices],
+                        src_transverse_coords = tuple(
+                            source_grid["coords"][axis][
+                                _slice_indices(
+                                    source_slice_indexers[axis], source_shape[axis]
+                                )
+                            ]
+                            for axis in transverse_axes
                         )
-                        dst_transverse_coords = (
-                            target_grid["coords"][transverse_axis][dst_indices],
+                        dst_transverse_coords = tuple(
+                            target_grid["coords"][axis][
+                                _slice_indices(
+                                    target_slice_indexers[axis], target_shape[axis]
+                                )
+                            ]
+                            for axis in transverse_axes
                         )
                         for profile_index in (1, 2):
                             mode_field = profile[profile_index]
-                            if mode_field.ndim != 1:
-                                continue
-                            if mode_field.shape[0] != len(src_transverse_coords[0]):
+                            if mode_field.ndim < 2 or tuple(
+                                mode_field.shape[-2:]
+                            ) != tuple(len(coords) for coords in src_transverse_coords):
                                 continue
                             was_numpy = isinstance(mode_field, np.ndarray)
                             resampled_mode = two_ports.resample_map_between_coords(
@@ -8019,7 +9873,13 @@ class N_Ports(BaseDevice):
             runtime_material_maps=runtime_material_maps,
         )
         field_grid_metadata = self._build_fdtdx_native_grid_metadata()
+        native_grid = field_grid_metadata["native"]
         if field_grid_metadata.get("native_equals_export", False):
+            base_state["electrical_conductivity"] = self._resample_map_to_fdtdx_native(
+                base_state.get("electrical_conductivity"),
+                map_name="electrical_conductivity_map",
+                native_grid=native_grid,
+            )
             base_state["field_grid_metadata"] = field_grid_metadata
             base_state["native_eps"] = base_state["eps"]
             base_state["native_design_region_masks"] = (
@@ -8031,7 +9891,6 @@ class N_Ports(BaseDevice):
             return base_state
 
         export_grid = field_grid_metadata["export"]
-        native_grid = field_grid_metadata["native"]
         # print(permittivity.shape)
         native_base_permittivity = self.build_fdtdx_native_permittivity(
             permittivity,
@@ -8059,10 +9918,10 @@ class N_Ports(BaseDevice):
             native_eps = native_base_permittivity
         native_electrical_conductivity = None
         if base_state.get("electrical_conductivity") is not None:
-            native_electrical_conductivity = self.resample_map_between_coords(
+            native_electrical_conductivity = self._resample_map_to_fdtdx_native(
                 base_state["electrical_conductivity"],
-                src_coords=self.thermal_coords,
-                dst_coords=native_grid["coords"],
+                map_name="electrical_conductivity_map",
+                native_grid=native_grid,
             )
         base_state.update(
             {
@@ -8267,7 +10126,7 @@ class N_Ports(BaseDevice):
             region_name=region_name,
         )
 
-    def copy(self, resolution: int | None = None, **sim_cfg_updates):
+    def copy(self, resolution: int | None = None, **overrides):
         if not hasattr(self, "_constructor_kwargs"):
             raise RuntimeError(
                 f"{self.__class__.__name__} was not constructed through a captured "
@@ -8279,7 +10138,11 @@ class N_Ports(BaseDevice):
         sim_cfg = copy.deepcopy(kwargs.get("sim_cfg", self.sim_cfg))
         if resolution is not None:
             sim_cfg["resolution"] = resolution
-        sim_cfg.update(sim_cfg_updates)
+        for name, value in overrides.items():
+            if name in kwargs:
+                kwargs[name] = copy.deepcopy(value)
+            else:
+                sim_cfg[name] = copy.deepcopy(value)
 
         kwargs["sim_cfg"] = sim_cfg
 

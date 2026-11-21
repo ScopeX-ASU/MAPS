@@ -1,0 +1,609 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "MAPS Runtime Architecture",
+    "locale": "en",
+    "output": "docs/architecture/maps-runtime.architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/ScopeX-ASU/MAPS",
+      "revision": "7063a8efd2f33374440d96f8e053338c39173e20",
+      "link_mode": "local-only"
+    },
+    "legend": {
+      "mode": "auto",
+      "entries": {
+        "frontend": {
+          "label": "Entry Workflows"
+        },
+        "backend": {
+          "label": "Core Modules & Solvers"
+        },
+        "messagebus": {
+          "label": "Autograd / FoM Dispatch"
+        },
+        "security": {
+          "label": "Fab & Variation Guards"
+        },
+        "database": {
+          "label": "Datasets & Run Artifacts"
+        },
+        "external": {
+          "label": "Callers & Configs"
+        }
+      }
+    },
+    "views": [
+      {
+        "id": "invdes_loop",
+        "label": "MAPS-InvDes Loop",
+        "focus": [
+          "callers",
+          "entrypoints",
+          "invdesign",
+          "device_layer",
+          "objective_engine",
+          "fdtd_3d",
+          "fab_nearfield",
+          "run_artifacts"
+        ],
+        "note": "Iterative adjoint optimization from parameters to permittivity, fields, scalar FoM, and GDSII/checkpoint exports."
+      },
+      {
+        "id": "physics_backends",
+        "label": "2D/3D Multi-Physics Solvers",
+        "focus": [
+          "device_layer",
+          "objective_engine",
+          "fdfd_2d",
+          "fdtd_3d",
+          "heat_fem",
+          "fab_nearfield"
+        ],
+        "note": "PyTorch autograd bridges 2D Ceviche/Pardiso FDFD, 3D JAX FDTD-X broadband adjoints, and JAX-FEM thermo-optic heat."
+      },
+      {
+        "id": "ai_pipeline",
+        "label": "MAPS-Data & MAPS-Train",
+        "focus": [
+          "callers",
+          "entrypoints",
+          "data_gen",
+          "h5_datasets",
+          "nn_trainer",
+          "objective_engine",
+          "fdfd_2d"
+        ],
+        "note": "Multi-GPU solver sweeps build HDF5 Maxwell datasets to train FNO/NeurOLight surrogates for accelerated simulation."
+      },
+      {
+        "id": "fab_robustness",
+        "label": "Fabrication & Variation",
+        "focus": [
+          "invdesign",
+          "device_layer",
+          "objective_engine",
+          "fab_nearfield",
+          "run_artifacts"
+        ],
+        "note": "Level-set projection, CUDA subpixel rasterization, stochastic corner sampling, and erosion/dilation penalties."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "callers",
+      "type": "external",
+      "label": "Researchers",
+      "sublabel": "YAML \u00b7 Python scripts",
+      "pos": [
+        15,
+        240
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "data_gen",
+      "type": "backend",
+      "label": "MAPS-Data",
+      "sublabel": "multi-GPU solver sweeps",
+      "tag": "data/fdfd \u00b7 data/fdtd",
+      "pos": [
+        245,
+        55
+      ],
+      "size": [
+        165,
+        60
+      ],
+      "sources": [
+        {
+          "path": "data/fdfd/dataset_generation_launcher.py",
+          "line": 15,
+          "end_line": 39,
+          "label": "Multi-GPU sweep launcher"
+        }
+      ]
+    },
+    {
+      "id": "entrypoints",
+      "type": "frontend",
+      "label": "Entry Workflows",
+      "sublabel": "train.py \u00b7 train_NN \u00b7 CLI",
+      "pos": [
+        245,
+        240
+      ],
+      "size": [
+        165,
+        60
+      ],
+      "sources": [
+        {
+          "path": "train.py",
+          "line": 28,
+          "end_line": 99,
+          "label": "InvDes CLI loop"
+        },
+        {
+          "path": "core/builder.py",
+          "line": 562,
+          "end_line": 605,
+          "label": "Top-level builder"
+        }
+      ]
+    },
+    {
+      "id": "run_artifacts",
+      "type": "database",
+      "label": "Run Manager",
+      "sublabel": "ckpt \u00b7 GDSII \u00b7 3D plots",
+      "tag": "runs/ \u00b7 figs/",
+      "pos": [
+        245,
+        355
+      ],
+      "size": [
+        165,
+        60
+      ],
+      "sources": [
+        {
+          "path": "core/invdes/run_management.py",
+          "line": 89,
+          "end_line": 120,
+          "label": "OptimizationRunManager"
+        }
+      ]
+    },
+    {
+      "id": "h5_datasets",
+      "type": "database",
+      "label": "HDF5 Datasets",
+      "sublabel": "eps \u00b7 E/H fields \u00b7 S-mat",
+      "pos": [
+        505,
+        55
+      ],
+      "size": [
+        170,
+        60
+      ],
+      "sources": [
+        {
+          "path": "core/builder.py",
+          "line": 52,
+          "end_line": 112,
+          "label": "Dataset collate & loader"
+        }
+      ]
+    },
+    {
+      "id": "invdesign",
+      "type": "backend",
+      "label": "InvDesign & BaseOpt",
+      "sublabel": "schedulers \u00b7 robust opt",
+      "tag": "core/invdes",
+      "pos": [
+        505,
+        240
+      ],
+      "size": [
+        170,
+        60
+      ],
+      "sources": [
+        {
+          "path": "core/invdes/invdesign.py",
+          "line": 126,
+          "end_line": 166,
+          "label": "InvDesign runner"
+        },
+        {
+          "path": "core/invdes/models/base_optimization.py",
+          "line": 3230,
+          "end_line": 3275,
+          "label": "BaseOptimization.forward"
+        },
+        {
+          "path": "core/invdes/variation/robust.py",
+          "line": 195,
+          "end_line": 245,
+          "label": "RobustForward"
+        }
+      ]
+    },
+    {
+      "id": "device_layer",
+      "type": "backend",
+      "label": "N_Ports & Parametrize",
+      "sublabel": "level-set \u00b7 CUDA subpixel",
+      "tag": "gpu_subpixel",
+      "pos": [
+        505,
+        445
+      ],
+      "size": [
+        170,
+        60
+      ],
+      "sources": [
+        {
+          "path": "core/invdes/models/layers/device_base.py",
+          "line": 1047,
+          "end_line": 1100,
+          "label": "N_Ports geometry & ports"
+        },
+        {
+          "path": "core/invdes/models/layers/parametrization/__init__.py",
+          "line": 52,
+          "end_line": 97,
+          "label": "Parametrization builder"
+        },
+        {
+          "path": "gpu_subpixel/subpixel.py",
+          "line": 403,
+          "end_line": 455,
+          "label": "GPUSubpixelRasterizer"
+        }
+      ]
+    },
+    {
+      "id": "nn_trainer",
+      "type": "backend",
+      "label": "MAPS-Train",
+      "sublabel": "FNO \u00b7 NeurOLight \u00b7 PDE",
+      "tag": "core/train",
+      "pos": [
+        770,
+        55
+      ],
+      "size": [
+        175,
+        60
+      ],
+      "sources": [
+        {
+          "path": "train_NN.py",
+          "line": 533,
+          "end_line": 580,
+          "label": "Surrogate training loop"
+        },
+        {
+          "path": "core/train/builder.py",
+          "line": 139,
+          "end_line": 185,
+          "label": "Surrogate model registry"
+        }
+      ]
+    },
+    {
+      "id": "objective_engine",
+      "type": "messagebus",
+      "label": "SimulatedFoM",
+      "sublabel": "S-matrix \u00b7 flux \u00b7 VJP",
+      "tag": "SI normalized",
+      "pos": [
+        770,
+        228
+      ],
+      "size": [
+        175,
+        84
+      ],
+      "sources": [
+        {
+          "path": "core/invdes/models/layers/fom_layer.py",
+          "line": 18,
+          "end_line": 90,
+          "label": "SimulatedFoM autograd"
+        },
+        {
+          "path": "core/invdes/models/layers/objective.py",
+          "line": 2510,
+          "end_line": 2575,
+          "label": "ObjectiveFunc"
+        }
+      ]
+    },
+    {
+      "id": "fab_nearfield",
+      "type": "security",
+      "label": "Near2Far & Fab ED",
+      "sublabel": "Stratton-Chu \u00b7 morph ED",
+      "pos": [
+        770,
+        445
+      ],
+      "size": [
+        175,
+        60
+      ],
+      "sources": [
+        {
+          "path": "core/nearfield/dispatch.py",
+          "line": 375,
+          "end_line": 430,
+          "label": "Near-to-far projector"
+        },
+        {
+          "path": "core/invdes/models/layers/objective.py",
+          "line": 2216,
+          "end_line": 2265,
+          "label": "ErosionDilationPenalty"
+        }
+      ]
+    },
+    {
+      "id": "fdfd_2d",
+      "type": "backend",
+      "label": "2D FDFD Solver",
+      "sublabel": "Ceviche \u00b7 Pardiso \u00b7 VJP",
+      "tag": "core/fdfd",
+      "pos": [
+        1085,
+        85
+      ],
+      "size": [
+        155,
+        60
+      ],
+      "sources": [
+        {
+          "path": "core/fdfd/fdfd.py",
+          "line": 36,
+          "end_line": 113,
+          "label": "2D FDFD operator"
+        },
+        {
+          "path": "core/fdfd/solver.py",
+          "line": 656,
+          "end_line": 715,
+          "label": "SparseSolveTorch VJP"
+        }
+      ]
+    },
+    {
+      "id": "fdtd_3d",
+      "type": "backend",
+      "label": "3D FDTD-X Solver",
+      "sublabel": "Chebyshev \u00b7 sparse VJP",
+      "tag": "core/fdtd",
+      "pos": [
+        1085,
+        240
+      ],
+      "size": [
+        155,
+        60
+      ],
+      "sources": [
+        {
+          "path": "core/fdtd/fdtd.py",
+          "line": 773,
+          "end_line": 835,
+          "label": "fdtd3d wrapper"
+        },
+        {
+          "path": "core/fdtd/solver.py",
+          "line": 3492,
+          "end_line": 3526,
+          "label": "FDTDXSolveTorch VJP"
+        },
+        {
+          "path": "thirdparty/fdtdx/__init__.py",
+          "line": 18,
+          "end_line": 61,
+          "label": "Public fdtdx compat"
+        }
+      ]
+    },
+    {
+      "id": "heat_fem",
+      "type": "backend",
+      "label": "FEM Heat Solver",
+      "sublabel": "JAX-FEM \u00b7 dn/dT shift",
+      "tag": "core/heat",
+      "pos": [
+        1085,
+        395
+      ],
+      "size": [
+        155,
+        60
+      ],
+      "sources": [
+        {
+          "path": "core/heat/problem.py",
+          "line": 1540,
+          "end_line": 1595,
+          "label": "SteadyStateHeatProblem"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "MAPS Python Runtime (PyTorch / JAX / CUDA)",
+      "wraps": [
+        "data_gen",
+        "entrypoints",
+        "run_artifacts",
+        "h5_datasets",
+        "invdesign",
+        "device_layer",
+        "nn_trainer",
+        "objective_engine",
+        "fab_nearfield",
+        "fdfd_2d",
+        "fdtd_3d",
+        "heat_fem"
+      ]
+    },
+    {
+      "kind": "security-group",
+      "label": "Differentiable Physics Backends",
+      "wraps": [
+        "fdfd_2d",
+        "fdtd_3d",
+        "heat_fem"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "caller-entry",
+      "from": "callers",
+      "to": "entrypoints",
+      "label": "CLI / YAML",
+      "variant": "emphasis"
+    },
+    {
+      "id": "entry-datagen",
+      "from": "entrypoints",
+      "to": "data_gen",
+      "label": "sweeps"
+    },
+    {
+      "id": "datagen-h5",
+      "from": "data_gen",
+      "to": "h5_datasets",
+      "label": "write HDF5"
+    },
+    {
+      "id": "h5-nntrain",
+      "from": "h5_datasets",
+      "to": "nn_trainer",
+      "label": "batches"
+    },
+    {
+      "id": "nntrain-surrogate",
+      "from": "nn_trainer",
+      "to": "objective_engine",
+      "label": "surrogate",
+      "variant": "dashed"
+    },
+    {
+      "id": "entry-invdes",
+      "from": "entrypoints",
+      "to": "invdesign",
+      "label": "optimize()",
+      "variant": "emphasis"
+    },
+    {
+      "id": "invdes-artifacts",
+      "from": "invdesign",
+      "to": "run_artifacts",
+      "label": "ckpt & GDS",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "right"
+    },
+    {
+      "id": "invdes-device",
+      "from": "invdesign",
+      "to": "device_layer",
+      "label": "params",
+      "variant": "emphasis"
+    },
+    {
+      "id": "invdes-fom",
+      "from": "invdesign",
+      "to": "objective_engine",
+      "label": "eps & step",
+      "variant": "emphasis"
+    },
+    {
+      "id": "device-nearfield",
+      "from": "device_layer",
+      "to": "fab_nearfield",
+      "label": "density"
+    },
+    {
+      "id": "fom-nearfield",
+      "from": "objective_engine",
+      "to": "fab_nearfield",
+      "label": "penalize",
+      "variant": "security"
+    },
+    {
+      "id": "fom-fdfd",
+      "from": "objective_engine",
+      "to": "fdfd_2d",
+      "label": "2D FDFD",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "fom-fdtd",
+      "from": "objective_engine",
+      "to": "fdtd_3d",
+      "label": "3D FDTD-X",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "fom-heat",
+      "from": "objective_engine",
+      "to": "heat_fem",
+      "label": "FEM heat",
+      "fromSide": "right",
+      "toSide": "left"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Inverse-Design Loop (MAPS-InvDes)",
+      "items": [
+        "InvDesign drives sharpness/LR schedules and minimizes -results['obj']",
+        "BaseOptimization materializes permittivity via N_Ports, level-sets, and CUDA gpu_subpixel",
+        "RobustForward optionally aggregates sequential fabrication/source variation scenarios"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Multi-Physics & SI Normalization",
+      "items": [
+        "SimulatedFoM & ObjectiveFunc bridge PyTorch autograd to 2D FDFD, 3D FDTD-X, and JAX-FEM heat",
+        "Chebyshev broadband modes, sparse phasors, and SI surface-area quadrature normalize power",
+        "Stratton-Chu / angular-spectrum projection and ErosionDilationPenalty evaluate far-field & DRC"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "AI Surrogate Pipeline (Data & Train)",
+      "items": [
+        "MAPS-Data launches multi-GPU FDFD/FDTD device sweeps into structured HDF5 datasets",
+        "MAPS-Train fits FNO / NeurOLight operators with data + Maxwell PDE residual losses",
+        "Trained surrogates plug into ObjectiveFunc as fast forward/adjoint neural solvers"
+      ]
+    }
+  ]
+}

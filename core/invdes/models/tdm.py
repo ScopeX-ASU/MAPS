@@ -7,7 +7,10 @@ from core.invdes.models.base_optimization import (
 
 
 class DefaultConfig(DefaultOptimizationConfig):
+    """Default thermal-mode-dependent objective configuration for TDM."""
+
     def __init__(self):
+        """Initialize the TDM default configuration, including heater states."""
         super().__init__()
         off_currents = [dict(heater_1=0.0)]
         on_currents = [dict(heater_1=7.5e-3)]
@@ -202,6 +205,27 @@ class DefaultConfig(DefaultOptimizationConfig):
 
 
 class TDMOptimization(BaseOptimization):
+    """Inverse-design model for a thermo-optic mode switch/demultiplexer.
+
+    Args:
+        device: Simulation-resolution TDM device containing heater-aware
+            geometry, ports, and design regions.
+        hr_device: Higher-resolution device used for design parameterization.
+        design_region_param_cfgs: Optional per-region overrides. Matching
+            regions are merged into the built-in level-set configuration.
+        sim_cfg: Overrides for the default ``ceviche_torch`` configuration.
+        obj_cfgs: Objective overrides for ``off`` and ``on`` heater-current states,
+            including transmission, crosstalk, reflection, radiation, and an
+            optional S-matrix.
+        operation_device: PyTorch device for optimization tensors.
+
+    Notes:
+        The default design uses ``rho_resolution=[100,100]``, blur ``mfs=0.08``
+        in ``xy``, binarization, ``init_method="ones"``, Gaussian-linear
+        interpolation, and binary projection thresholds of 100. The default
+        heater states are 0 A and 7.5e-3 A through ``heater_1``.
+    """
+
     def __init__(
         self,
         device,

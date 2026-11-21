@@ -13,11 +13,13 @@ sys.path.insert(
 import numpy as np
 import torch
 from pyutils.config import Config
+from pyutils.general import logger
 
 from core.invdes.invdesign import InvDesign
 from core.invdes.models import WDMOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import WDM
+from core.invdes.run_management import OptimizationRunManager
 from core.utils import set_torch_deterministic
 
 sys.path.pop(0)
@@ -41,15 +43,30 @@ if __name__ == "__main__":
     wl_width = 0.04
     n_wl = 2
     mode = "Hz1"
-    exp_name = f"wdm_opt-port-{num_outports}_Si_3d_{mdm_region_size[0]}x{mdm_region_size[1]}x{mdm_region_size[2]}"
+    sidewall_angle = 0.0
+    # exp_name = f"wdm_opt-port-{num_outports}_Si_3d_{mdm_region_size[0]}x{mdm_region_size[1]}x{mdm_region_size[2]}"
+    # exp_name = f"wdm_opt-port-{num_outports}_Si_3d_{mdm_region_size[0]}x{mdm_region_size[1]}x{mdm_region_size[2]}_broad"
+    exp_name = f"wdm_opt-port-{num_outports}_Si_3d_{mdm_region_size[0]}x{mdm_region_size[1]}x{mdm_region_size[2]}_center_0.04"
+    # exp_name = f"wdm_opt-port-{num_outports}_Si_3d_{mdm_region_size[0]}x{mdm_region_size[1]}x{mdm_region_size[2]}_chebyshev_3_0.04"
+    work_root = "./runs"
+    resume_checkpoint = os.environ.get("MAPS_RESUME_CHECKPOINT")
+
+    run_manager = OptimizationRunManager(
+        root=work_root,
+        experiment="wdm_3d",
+        tag=exp_name,
+        resume=resume_checkpoint is not None,
+        resume_from=resume_checkpoint,
+    )
+    run_manager.attach_logger(logger)
 
     sim_cfg.update(
         dict(
             solver="fdtdx",
+            max_time=8e-13,
             # border_width=[port_len, port_len, 2, 2],
             border_width=[0, 0, 1.5, 1.5, 0.7, 0.7],
             resolution=25,
-            plot_root=f"./figs/{exp_name}",
             PML=[0.2, 0.2, 0.2],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -57,8 +74,11 @@ if __name__ == "__main__":
             wl_cen=wl_cen,
             wl_width=wl_width,
             n_wl=n_wl,
+            fdtdx_mode_source_method="center",
+            # fdtdx_mode_source_method="chebyshev_3",
         )
     )
+    run_manager.bind_simulation_config(sim_cfg)
 
     def fom_func(breakdown):
         ## maximization fom
@@ -93,7 +113,7 @@ if __name__ == "__main__":
         ## this sum-of-log formulation is more numerically stable and also encourages all transmissions to be high (since log is dominated by the smallest value)
         # for i in range(1, n_wl + 1):
         #     product = product + torch.log(trans_list[i - 1] + 1e-3)
-        fom = fom  # + product * 10
+        # fom = fom  + product * 10
         return fom, {"trans_product": {"weight": 1, "value": product}}
 
     def build_wdm_obj_cfgs(
@@ -232,8 +252,8 @@ if __name__ == "__main__":
                 mode="regular",
             ),
             dims=(0, 1),
-            extrude_direction="-",
-            extrude_angle=90.0,
+            reference_plane="middle",
+            extrude_angle=sidewall_angle,
         )
 
     print(device)
@@ -298,19 +318,20 @@ if __name__ == "__main__":
     ## then switch to Adam for further optimization and better convergence
     invdesign = InvDesign(
         devOptimization=opt,
+        run_manager=run_manager,
         optimizer=dict(
             # name="lbfgs",
             # lr=0.5,
             # line_search_fn="strong_wolfe",
             name="Adam",
-            lr=0.2,
+            lr=0.03,
         ),
         run=Config(
             n_epochs=50,
         ),
         lr_scheduler=Config(
             name="cosine",
-            lr_min=0.002,
+            lr_min=0.01,
         ),
         sharp_scheduler=Config(
             mode="linear",
@@ -341,6 +362,8 @@ if __name__ == "__main__":
             ckpt_name=f"{exp_name}",
             dump_gds=True,
             gds_name=f"{exp_name}",
+            load_ckpt=resume_checkpoint,
+            resume=resume_checkpoint is not None,
         ),
     )
     invdesign.optimize()

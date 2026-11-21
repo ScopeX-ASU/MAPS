@@ -22,12 +22,14 @@ sys.path.insert(
 
 import torch
 from pyutils.config import Config
+from pyutils.general import logger
 
 from core.invdes import builder
 from core.invdes.invdesign import InvDesign
 from core.invdes.models import MDMOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import MDM
+from core.invdes.run_management import OptimizationRunManager
 from core.utils import set_torch_deterministic
 
 sys.path.pop(0)
@@ -58,8 +60,20 @@ if __name__ == "__main__":
     # num_outports = 2
     # exp_name = f"mdm_3d_opt-port-{num_outports}_SiN_{mdm_region_size[0]}x{mdm_region_size[1]}x{mdm_region_size[2]}_adam"
     # exp_name = f"mdm_3d_opt-port-{num_outports}_SiN_{mdm_region_size[0]}x{mdm_region_size[1]}x{mdm_region_size[2]}_nesterov_bb_static_2d"
+    sidewall_angle = 0.0
     exp_name = f"mdm_3d_opt-port-{num_outports}_SiN_{mdm_region_size[0]}x{mdm_region_size[1]}x{mdm_region_size[2]}_cg_prp_2d"
     # exp_name = f"mdm_3d_opt-port-{num_outports}_SiN_{mdm_region_size[0]}x{mdm_region_size[1]}x{mdm_region_size[2]}_lbfgs"
+    work_root = "./runs"
+    resume_checkpoint = os.environ.get("MAPS_RESUME_CHECKPOINT")
+
+    run_manager = OptimizationRunManager(
+        root=work_root,
+        experiment="mdm_SiN_3d",
+        tag=exp_name,
+        resume=resume_checkpoint is not None,
+        resume_from=resume_checkpoint,
+    )
+    run_manager.attach_logger(logger)
 
     sim_cfg.update(
         dict(
@@ -67,7 +81,6 @@ if __name__ == "__main__":
             # border_width=[port_len, port_len, 2, 2],
             border_width=[0, 0, 1.1, 1.1, 0.9, 0.9],
             resolution=20,
-            plot_root=f"./figs/{exp_name}",
             PML=[0.2, 0.2, 0.2],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -77,6 +90,7 @@ if __name__ == "__main__":
             n_wl=n_wl,
         )
     )
+    run_manager.bind_simulation_config(sim_cfg)
 
     def fom_func(breakdown):
         ## maximization fom
@@ -210,8 +224,8 @@ if __name__ == "__main__":
                 mode="regular",
             ),
             dims=(0, 1),
-            extrude_direction="-",
-            extrude_angle=90.0,
+            reference_plane="middle",
+            extrude_angle=sidewall_angle,
         )
 
     opt = MDMOptimization(
@@ -224,6 +238,7 @@ if __name__ == "__main__":
     ).to(operation_device)
     invdesign = InvDesign(
         devOptimization=opt,
+        run_manager=run_manager,
         run=Config(
             n_epochs=50,
             # norm_grad="abs_mean",
@@ -280,8 +295,8 @@ if __name__ == "__main__":
             ckpt_name=f"{exp_name}",
             dump_gds=True,
             gds_name=f"{exp_name}",
-            resume=True,
-            load_ckpt="/data/jiaqigu/projects/MAPS_fdtdx/figs/mdm_opt-port-5_SiN_neff1.7_20x9_lbfgs/mdm_opt-port-5_SiN_neff1.7_20x9_lbfgs_epoch-49_err-4.8937_epoch-49.pt",
+            load_ckpt=resume_checkpoint,
+            resume=resume_checkpoint is not None,
         ),
     )
     invdesign.optimize()

@@ -12,11 +12,13 @@ sys.path.insert(
 )
 import torch
 from pyutils.config import Config
+from pyutils.general import logger
 
 from core.invdes.invdesign import InvDesign
 from core.invdes.models import CrossingOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import Crossing
+from core.invdes.run_management import OptimizationRunManager
 from core.utils import set_torch_deterministic
 
 sys.path.pop(0)
@@ -39,6 +41,7 @@ if __name__ == "__main__":
     wl_width = 0.06
     n_wl = 7
     resolution = 25
+    sidewall_angle = 0.0
     exp_name = (
         f"crossing_3d_Si_{crossing_region_size[0]}x"
         # f"{crossing_region_size[1]}x{crossing_region_size[2]}_cg_hs-dy"
@@ -46,13 +49,23 @@ if __name__ == "__main__":
         # f"{crossing_region_size[1]}x{crossing_region_size[2]}_cg_ls"
         f"{crossing_region_size[1]}x{crossing_region_size[2]}_adam"
     )
+    work_root = "./runs"
+    resume_checkpoint = os.environ.get("MAPS_RESUME_CHECKPOINT")
+
+    run_manager = OptimizationRunManager(
+        root=work_root,
+        experiment="crossing_3d",
+        tag=exp_name,
+        resume=resume_checkpoint is not None,
+        resume_from=resume_checkpoint,
+    )
+    run_manager.attach_logger(logger)
 
     sim_cfg.update(
         dict(
             solver="fdtdx",
             border_width=[0, 0, 0, 0, 0.7, 0.7],
             resolution=resolution,
-            plot_root=f"./figs/{exp_name}",
             PML=[0.2, 0.2, 0.2],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -62,6 +75,7 @@ if __name__ == "__main__":
             n_wl=n_wl,
         )
     )
+    run_manager.bind_simulation_config(sim_cfg)
 
     device = Crossing(
         material_r1="Si",
@@ -70,6 +84,7 @@ if __name__ == "__main__":
         port_len=(port_len, port_len),
         port_width=(port_width, port_width),
         port_height=(thickness, thickness),
+        port_sidewall_angle=sidewall_angle,
         is_3d=True,
         mode=mode,
         device=operation_device,
@@ -182,8 +197,8 @@ if __name__ == "__main__":
                 mode="regular",
             ),
             dims=(0, 1),
-            extrude_direction="-",
-            extrude_angle=90.0,
+            reference_plane="middle",
+            extrude_angle=sidewall_angle,
         )
 
     opt = CrossingOptimization(
@@ -197,6 +212,7 @@ if __name__ == "__main__":
 
     invdesign = InvDesign(
         devOptimization=opt,
+        run_manager=run_manager,
         optimizer=Config(
             name="Adam",
             lr=0.2,
@@ -243,6 +259,8 @@ if __name__ == "__main__":
             dump_gds=True,
             gds_name=f"{exp_name}",
             upsample_eps_to_1nm=True,
+            load_ckpt=resume_checkpoint,
+            resume=resume_checkpoint is not None,
         ),
     )
 

@@ -4,7 +4,10 @@ from .base_optimization import BaseOptimization, DefaultOptimizationConfig
 
 
 class DefaultConfig(DefaultOptimizationConfig):
+    """Default simulation and three-output objective configuration for FourPort."""
+
     def __init__(self):
+        """Initialize the default FourPort configuration tree."""
         super().__init__()
         self.update(
             dict(
@@ -90,6 +93,26 @@ class DefaultConfig(DefaultOptimizationConfig):
 
 
 class FourPortOptimization(BaseOptimization):
+    """Inverse-design model for a four-port photonic device.
+
+    Args:
+        device: Simulation-resolution device containing four-port geometry and
+            design-region definitions.
+        hr_device: Higher-resolution device used by parameterization transforms.
+        design_region_param_cfgs: Optional mapping of design-region parameterization
+            settings. If empty, a default level-set configuration is generated.
+        sim_cfg: Overrides for the default simulation settings.
+        obj_cfgs: Objective overrides; ``override=True`` clears defaults first.
+        operation_device: PyTorch execution device for optimization state.
+
+    Notes:
+        The default parameterization uses ``rho_resolution=[100, 100]``, mirror
+        symmetry along dimension 1, Gaussian-linear interpolation, blur with
+        ``mfs=0.08`` in ``xy``, and binary projection thresholds of 100.
+        The default S-matrix maps the input port to three output ports in the
+        ``+x``, ``+y``, and ``-y`` directions.
+    """
+
     def __init__(
         self,
         device,
@@ -99,33 +122,40 @@ class FourPortOptimization(BaseOptimization):
         obj_cfgs=dict(),
         operation_device=torch.device("cuda:0"),
     ):
-        design_region_param_cfgs = dict()
-        for region_name in device.design_region_cfgs.keys():
-            design_region_param_cfgs[region_name] = dict(
-                method="levelset",
-                rho_resolution=[100, 100],
-                transform=[
-                    dict(type="mirror_symmetry", dims=[1]),
-                    dict(
-                        type="blur",
-                        mfs=0.08,
-                        resolutions=[hr_device.resolution, hr_device.resolution],
-                        dim="xy",
+        if not design_region_param_cfgs:
+            design_region_param_cfgs = dict()
+            for region_name in device.design_region_cfgs.keys():
+                design_region_param_cfgs[region_name] = dict(
+                    method="levelset",
+                    rho_resolution=[100, 100],
+                    transform=[
+                        dict(type="mirror_symmetry", dims=[1]),
+                        dict(
+                            type="blur",
+                            mfs=0.08,
+                            resolutions=[hr_device.resolution, hr_device.resolution],
+                            dim="xy",
+                        ),
+                        dict(type="binarize"),
+                    ],
+                    init_method="random",
+                    denorm_mode="linear_eps",
+                    # interpolation="bilinear",
+                    interpolation="gaussian_linear",
+                    binary_projection=dict(
+                        fw_threshold=100,
+                        bw_threshold=100,
+                        mode="regular",
                     ),
-                    dict(type="binarize"),
-                ],
-                init_method="random",
-                denorm_mode="linear_eps",
-                # interpolation="bilinear",
-                interpolation="gaussian_linear",
-                binary_projection=dict(
-                    fw_threshold=100,
-                    bw_threshold=100,
-                    mode="regular",
-                ),
-            )
+                )
 
         cfgs = DefaultConfig()  ## this is default configurations
+        override_obj = obj_cfgs.pop(
+            "override", False
+        )  # remove this key to avoid confusion later
+        if override_obj:
+            print("Override default obj_cfgs with the provided obj_cfgs", flush=True)
+            cfgs.obj_cfgs = {}
         cfgs.update(
             dict(
                 design_region_param_cfgs=design_region_param_cfgs,

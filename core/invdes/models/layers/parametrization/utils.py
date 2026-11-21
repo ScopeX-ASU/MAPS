@@ -10,11 +10,40 @@ from torch import Tensor, nn
 
 
 class ClipLayer(nn.Module):
+    """Apply a configurable lower, upper, or two-sided limit while preserving gradients.
+
+    Args:
+        mode (str): Limit mode. Supported values are ``"lower_limit"``, ``"upper_limit"``,
+            and ``"both"``.
+    """
+
     def __init__(self, mode: str) -> None:
+        """Initialize the clipping mode.
+
+        Args:
+            mode (str): Limit mode. Supported values are ``"lower_limit"``,
+                ``"upper_limit"``, and ``"both"``.
+        """
         super().__init__()
         self.mode = mode
 
     def forward(self, x: Tensor, upper_limit=None, lower_limit=None) -> Tensor:
+        """Clip ``x`` using the mode-selected limit(s).
+
+        Args:
+            x (Tensor): Input tensor to limit.
+            upper_limit (Tensor | float | None): Upper bound required for ``"upper_limit"``
+                and ``"both"`` modes. Defaults to None.
+            lower_limit (Tensor | float | None): Lower bound required for ``"lower_limit"``
+                and ``"both"`` modes. Defaults to None.
+
+        Returns:
+            Tensor: Clipped tensor with the same shape as ``x``.
+
+        Raises:
+            AssertionError: If the selected mode is given incompatible bound arguments.
+            ValueError: If ``self.mode`` is unsupported.
+        """
         if self.mode == "lower_limit":
             assert upper_limit is None and lower_limit is not None
             x = ApplyLowerLimit.apply(x, lower_limit)
@@ -66,11 +95,32 @@ class BinaryProjection(torch.autograd.Function):
 
 
 class BinaryProjectionLayer(nn.Module):
+    """Module wrapper around the custom binary projection autograd function.
+
+    Args:
+        threshold (float): Backward-gradient temperature threshold used by
+            ``BinaryProjection``. Defaults to 0.05.
+    """
+
     def __init__(self, threshold: float = 0.05) -> None:
+        """Initialize the binary projection layer.
+
+        Args:
+            threshold (float): Backward-gradient temperature threshold. Defaults to 0.05.
+        """
         super().__init__()
         self.threshold = threshold
 
     def forward(self, x: Tensor, t_bny: float) -> Tensor:
+        """Project a normalized permittivity/density tensor toward binary values.
+
+        Args:
+            x (Tensor): Input normalized permittivity or density tensor.
+            t_bny (float): Forward projection temperature/broadening parameter.
+
+        Returns:
+            Tensor: Projected tensor with the same shape as ``x``.
+        """
         permittivity = BinaryProjection.apply(x, t_bny, self.threshold)
         return permittivity
 
@@ -129,10 +179,12 @@ class ApplyUpperLimit(torch.autograd.Function):
 class ApplyBothLimit(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, upper_limit, lower_limit):
+        upper_t = torch.as_tensor(upper_limit, dtype=x.dtype, device=x.device)
+        lower_t = torch.as_tensor(lower_limit, dtype=x.dtype, device=x.device)
         ctx.save_for_backward(x)
-        ctx.upper_limit = upper_limit
-        ctx.lower_limit = lower_limit
-        return torch.minimum(torch.maximum(x, lower_limit), upper_limit)
+        ctx.upper_limit = upper_t
+        ctx.lower_limit = lower_t
+        return torch.minimum(torch.maximum(x, lower_t), upper_t)
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -168,12 +220,12 @@ class HeavisideProjectionLayer(torch.autograd.Function):
         else:
             return torch.where(
                 x < eta,
-                torch.tensor(0, dtype=torch.float32, device=x.device),
-                torch.tensor(1, dtype=torch.float32, device=x.device),
+                torch.tensor(0, dtype=x.dtype, device=x.device),
+                torch.tensor(1, dtype=x.dtype, device=x.device),
             )
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx, grad_output: Tensor):
         x, eta = ctx.saved_tensors
         bw_threshold = ctx.bw_threshold
         beta = ctx.beta
@@ -222,43 +274,105 @@ class HeavisideProjectionLayer(torch.autograd.Function):
 
 
 class HeavisideProjection(nn.Module):
+    """Apply regular or straight-through Heaviside projection and optionally clip to ``[0, 1]``.
+
+    Args:
+        fw_threshold (float): Forward beta threshold above which the custom layer
+            uses hard binary output. Defaults to 200.
+        bw_threshold (float): Backward beta threshold used for straight-through
+            gradient stabilization. Defaults to 80.
+        mode (str): Projection mode, typically ``"regular"`` or ``"ste"``.
+            Defaults to ``"regular"``.
+        clip (bool): Whether to clamp the projected output to ``[0, 1]`` using
+            straight-through ``ClipLayer``. Defaults to True.
+    """
+
     def __init__(
-        self, fw_threshold: float = 200, bw_threshold: float = 80, mode: str = "regular"
+        self,
+        fw_threshold: float = 200,
+        bw_threshold: float = 80,
+        mode: str = "regular",
+        clip: bool = True,
     ) -> None:
+        """Initialize a Heaviside projection module.
+
+        Args:
+            fw_threshold (float): Forward beta threshold. Defaults to 200.
+            bw_threshold (float): Backward beta threshold. Defaults to 80.
+            mode (str): Projection mode. Defaults to ``"regular"``.
+            clip (bool): Whether to clamp output to ``[0, 1]``. Defaults to True.
+        """
         super().__init__()
         self.fw_threshold = fw_threshold  # leave threshold here for future use STE
         self.bw_threshold = bw_threshold
         self.mode = mode
+        self.clip = bool(clip)
         self.clip_layer = ClipLayer(mode="both")
         self.upper_limit = torch.tensor(1.0)
         self.lower_limit = torch.tensor(0.0)
 
-    def forward(self, x: Tensor, beta: Tensor, eta: Tensor, **kwargs) -> Tensor:
-        if self.mode == "regular":
-            x = (torch.tanh(beta * eta) + torch.tanh(beta * (x - eta))) / (
-                torch.tanh(beta * eta) + torch.tanh(beta * (1 - eta))
-            )
-            ### heaviside cannot guanratee the value is between 0 and 1
-            if self.upper_limit.device != x.device:
-                self.upper_limit = self.upper_limit.to(x.device)
-                self.lower_limit = self.lower_limit.to(x.device)
+    def forward(
+        self,
+        x: Tensor,
+        beta: float | Tensor,
+        eta: float | Tensor = 0.5,
+        clip: bool | None = None,
+        **kwargs,
+    ) -> Tensor:
+        """Project ``x`` using the configured regular or straight-through mode.
 
+        Args:
+            x (Tensor): Input normalized density/permittivity tensor.
+            beta (float | Tensor): Projection sharpness parameter.
+            eta (float | Tensor): Projection midpoint. Defaults to 0.5.
+            clip (bool | None): Optional per-call override for output clamping to ``[0, 1]``.
+            **kwargs (Any): Additional keyword arguments accepted for interface compatibility.
+
+        Returns:
+            Tensor: Projected tensor, optionally clipped to ``[0, 1]``.
+        """
+        do_clip = self.clip if clip is None else bool(clip)
+        if self.mode == "regular":
+            return tanh_projection(x, beta=beta, eta=eta, clip=do_clip)
         elif self.mode.lower() == "ste":
+            beta_t = torch.as_tensor(beta, dtype=x.dtype, device=x.device)
+            eta_t = torch.as_tensor(eta, dtype=x.dtype, device=x.device)
             x = HeavisideProjectionLayer.apply(
-                x, beta, eta, self.fw_threshold, self.bw_threshold
+                x, beta_t, eta_t, self.fw_threshold, self.bw_threshold
             )  # STE
-        x = self.clip_layer(
-            x, upper_limit=self.upper_limit, lower_limit=self.lower_limit
-        )
+        if do_clip:
+            if self.upper_limit.device != x.device or self.upper_limit.dtype != x.dtype:
+                self.upper_limit = self.upper_limit.to(device=x.device, dtype=x.dtype)
+                self.lower_limit = self.lower_limit.to(device=x.device, dtype=x.dtype)
+            x = self.clip_layer(
+                x, upper_limit=self.upper_limit, lower_limit=self.lower_limit
+            )
         return x
 
 
-def tanh_projection(x: Tensor, beta: float | Tensor, eta: float | Tensor) -> Tensor:
-    """Numerically safe tanh projection matching fdtdx's projection convention."""
+def tanh_projection(
+    x: Tensor,
+    beta: float | Tensor,
+    eta: float | Tensor = 0.5,
+    clip: bool = False,
+) -> Tensor:
+    """Compute a numerically safe tanh projection with explicit zero/inf beta handling.
+
+    Args:
+        x (Tensor): Input normalized density/permittivity tensor.
+        beta (float | Tensor): Projection sharpness. Non-positive values are handled as a
+            clipped identity limit and infinity as a hard threshold at ``eta``.
+        eta (float | Tensor): Projection midpoint. Defaults to 0.5.
+        clip (bool): If True, clamp the output to ``[0, 1]`` via straight-through
+            ``ApplyBothLimit`` autograd Function. Defaults to False.
+
+    Returns:
+        Tensor: Projected tensor with the same shape, dtype, and device as ``x``.
+    """
     beta_t = torch.as_tensor(beta, dtype=x.dtype, device=x.device)
     eta_t = torch.as_tensor(eta, dtype=x.dtype, device=x.device)
     is_inf = torch.isinf(beta_t)
-    is_zero = beta_t == 0
+    is_zero = beta_t <= 0
 
     safe_beta = torch.where(
         is_inf | is_zero,
@@ -270,14 +384,28 @@ def tanh_projection(x: Tensor, beta: float | Tensor, eta: float | Tensor) -> Ten
     projected = dividend / divisor
 
     inf_projected = torch.where(x > eta_t, torch.ones_like(x), torch.zeros_like(x))
-    zero_projected = x.clamp(0, 1)
-    return torch.where(
+    zero_projected = ApplyBothLimit.apply(x, 1.0, 0.0) if clip else x.clamp(0, 1)
+    out = torch.where(
         is_zero, zero_projected, torch.where(is_inf, inf_projected, projected)
     )
+    if clip:
+        out = ApplyBothLimit.apply(out, 1.0, 0.0)
+    return out
 
 
 def _gradient_2d_by_index(x: Tensor) -> tuple[Tensor, Tensor]:
-    """Torch equivalent of ``jnp.gradient`` for a 2D array with unit spacing."""
+    """Compute a 2-D unit-spacing gradient using forward/backward edge differences.
+
+    Args:
+        x (Tensor): Exactly 2-D tensor. Unit spacing is assumed on both axes.
+
+    Returns:
+        tuple[Tensor, Tensor]: Gradients along the first and second tensor axes,
+        each with the same shape, dtype, and device as ``x``.
+
+    Raises:
+        ValueError: If ``x`` is not 2-D.
+    """
     if x.ndim != 2:
         raise ValueError(f"Expected a 2D tensor, got shape {tuple(x.shape)}")
 
@@ -309,12 +437,22 @@ def subpixel_smoothed_projection(
     eta: float | Tensor = 0.5,
     resolution: float | Tensor = 1.0,
 ) -> Tensor:
-    """Subpixel-smoothed projection adapted from fdtdx for 2D Torch tensors.
+    """Apply a 2-D subpixel-smoothed tanh projection near material interfaces.
 
-    ``rho_filtered`` should already be spatially smooth. Around pixels that
-    contain the projected interface, this integrates a local fill fraction
-    instead of applying a pointwise Heaviside/tanh value. This keeps useful
-    interface gradients even for very large or infinite ``beta``.
+    Args:
+        rho_filtered (Tensor): Exactly 2-D spatially filtered density tensor.
+        beta (float | Tensor): Projection sharpness parameter; zero and infinity are
+            handled by ``tanh_projection``.
+        eta (float | Tensor): Projection midpoint. Defaults to 0.5.
+        resolution (float | Tensor): Spatial resolution in pixels per physical unit,
+            used to set the smoothing radius. Defaults to 1.0.
+
+    Returns:
+        Tensor: Projected density with local fill-fraction smoothing near interface
+        crossings. The output has the same shape, dtype, and device as ``rho_filtered``.
+
+    Raises:
+        ValueError: If ``rho_filtered`` is not 2-D.
     """
     if rho_filtered.ndim != 2:
         raise ValueError(f"Expected a 2D tensor, got shape {tuple(rho_filtered.shape)}")
@@ -366,12 +504,10 @@ def subpixel_smoothed_projection(
 
 
 class SubpixelSmoothedProjection(nn.Module):
-    """2D subpixel-smoothed projection layer.
+    """Module wrapper for the 2-D subpixel-smoothed projection function.
 
-    Compared with a pointwise tanh/Heaviside projection, this uses local
-    first-order interface fill fractions near threshold crossings. It is most
-    useful after a smoothing/filtering step and remains differentiable around
-    interfaces when ``beta`` is large.
+    The wrapper uses the same implementation for gradient and no-gradient paths,
+    but switches the latter to ``torch.inference_mode`` and consumes ``x.data``.
     """
 
     def __init__(
@@ -379,6 +515,14 @@ class SubpixelSmoothedProjection(nn.Module):
         projection_midpoint: float = 0.5,
         resolution: float | None = None,
     ) -> None:
+        """Initialize subpixel projection settings.
+
+        Args:
+            projection_midpoint (float): Default threshold midpoint used when ``eta`` is
+                omitted in ``forward``. Defaults to 0.5.
+            resolution (float | None): Default spatial resolution in pixels per physical
+                unit used when ``resolution`` is omitted in ``forward``. Defaults to None.
+        """
         super().__init__()
         self.projection_midpoint = projection_midpoint
         self.resolution = resolution
@@ -393,6 +537,22 @@ class SubpixelSmoothedProjection(nn.Module):
         eta: float | Tensor | None = None,
         resolution: float | Tensor | None = None,
     ) -> Tensor:
+        """Project a 2-D tensor with subpixel interface smoothing.
+
+        Args:
+            x (Tensor): Exactly 2-D density tensor.
+            beta (float | Tensor): Projection sharpness parameter.
+            eta (float | Tensor | None): Projection midpoint. Defaults to None; the
+                stored ``projection_midpoint`` is used.
+            resolution (float | Tensor | None): Spatial resolution. Defaults to None;
+                the stored ``resolution`` is used and must be non-None after fallback.
+
+        Returns:
+            Tensor: Subpixel-smoothed projected density.
+
+        Raises:
+            ValueError: If no resolution is available after applying the fallback.
+        """
         eta = self.projection_midpoint if eta is None else eta
         resolution = self.resolution if resolution is None else resolution
         if resolution is None:

@@ -13,6 +13,28 @@ __all__ = ["Crossing"]
 
 
 class Crossing(N_Ports):
+    """Define a four-port waveguide crossing device with optional 3-D geometry.
+
+    Args:
+        material_r1 (str | Any): Primary waveguide material key or direct value. Defaults to ``"Si_eff"``.
+        material_r2 (str | Any): Design-region background material key or direct value. Defaults to ``"SiO2"``.
+        thickness_r1 (float): Effective primary-material thickness for ``*_eff`` models. Defaults to 0.22.
+        thickness_r2 (float): Effective secondary-material thickness. Defaults to 0.
+        material_bg (str | Any): Simulation background material key or direct value. Defaults to ``"SiO2"``.
+        sim_cfg (dict): Optical simulation configuration. Defaults to the built-in configuration.
+        box_size (tuple[float, float] | Sequence[float]): Crossing design-region size in micrometers;
+            in 3-D the implementation also reads ``box_size[2]`` for monitor-height calculations.
+            Defaults to ``(1.5, 1.5)``.
+        port_len (tuple[float, float]): x- and y-directed port lengths in micrometers. Defaults to ``(1.8, 1.8)``.
+        port_width (tuple[float, float]): x- and y-directed port widths in micrometers. Defaults to ``(0.48, 0.48)``.
+        port_height (tuple[float, float]): z extents for x- and y-directed ports in micrometers. Defaults to ``(0, 0)``.
+        port_sidewall_angle (float): Port sidewall angle in degrees. Defaults to 0.0.
+        device (torch.device): Device used by the underlying ``N_Ports`` state. Defaults to ``torch.device("cuda:0")``.
+        is_3d (bool): Whether to include the z dimension in ports/design-region calculations. Defaults to False.
+        mode (str): Mode used by normalization-source construction. Defaults to ``"Ez1"``.
+        verbose (bool): Whether to emit initialization/monitor diagnostics. Defaults to True.
+    """
+
     def __init__(
         self,
         material_r1: str = "Si_eff",  # waveguide material
@@ -38,11 +60,32 @@ class Crossing(N_Ports):
         port_len: Tuple[float] = (1.8, 1.8),
         port_width: Tuple[float] = (0.48, 0.48),
         port_height: Tuple[float] = (0, 0),
+        port_sidewall_angle: float = 0.0,
         device: torch.device = torch.device("cuda:0"),
         is_3d: bool = False,
         mode: str = "Ez1",
         verbose: bool = True,
     ):
+        """Initialize materials, four orthogonal ports, and the crossing design region.
+
+        Args:
+            material_r1 (str | Any): Primary material key or direct value. Defaults to ``"Si_eff"``.
+            material_r2 (str | Any): Design-region background key or direct value. Defaults to ``"SiO2"``.
+            thickness_r1 (float): Primary effective thickness. Defaults to 0.22.
+            thickness_r2 (float): Secondary effective thickness. Defaults to 0.
+            material_bg (str | Any): Simulation background key or direct value. Defaults to ``"SiO2"``.
+            sim_cfg (dict): Optical simulation configuration. Defaults to the built-in configuration.
+            box_size (tuple[float, float] | Sequence[float]): Crossing-region size in micrometers.
+                Defaults to ``(1.5, 1.5)``.
+            port_len (tuple[float, float]): x/y port lengths in micrometers. Defaults to ``(1.8, 1.8)``.
+            port_width (tuple[float, float]): x/y port widths in micrometers. Defaults to ``(0.48, 0.48)``.
+            port_height (tuple[float, float]): x/y port z extents in micrometers. Defaults to ``(0, 0)``.
+            port_sidewall_angle (float): Port sidewall angle in degrees. Defaults to 0.0.
+            device (torch.device): Underlying device state device. Defaults to ``torch.device("cuda:0")``.
+            is_3d (bool): Whether to construct 3-D geometry. Defaults to False.
+            mode (str): Normalization/source mode. Defaults to ``"Ez1"``.
+            verbose (bool): Whether to log initialization information. Defaults to True.
+        """
         # ----------------------------------
         # |                                |
         # |                                |
@@ -54,6 +97,7 @@ class Crossing(N_Ports):
         # ----------------------------------
         self.is_3d = is_3d
         self.mode = mode
+        self.box_size = box_size
         if box_size[0] != box_size[1]:
             warnings.warn(
                 "Crossing region width and length are not equal, this is not a square crossing region."
@@ -73,7 +117,13 @@ class Crossing(N_Ports):
         else:
             eps_r2_fn = lambda wl: material_r2
 
-        eps_bg_fn = material_fn_dict[material_bg]
+        if isinstance(material_bg, str):
+            eps_bg_fn = material_fn_dict[material_bg]
+            if "_eff" in material_bg:
+                eps_bg_fn = partial(eps_bg_fn, thickness=thickness_r2)
+        else:
+            eps_bg_fn = lambda wl: material_bg
+
         box_size = list(box_size)
         grid_step = 1 / sim_cfg["resolution"]
 
@@ -88,6 +138,7 @@ class Crossing(N_Ports):
                     + ([port_height[0]] if is_3d else [])
                 ),
                 eps=eps_r1_fn(wl_cen),
+                port_sidewall_angle=port_sidewall_angle,
             ),
             out_port_1=dict(
                 type="box",
@@ -99,6 +150,7 @@ class Crossing(N_Ports):
                     + ([port_height[0]] if is_3d else [])
                 ),
                 eps=eps_r1_fn(wl_cen),
+                port_sidewall_angle=port_sidewall_angle,
             ),
             top_port=dict(
                 type="box",
@@ -110,6 +162,7 @@ class Crossing(N_Ports):
                     + ([port_height[1]] if is_3d else [])
                 ),
                 eps=eps_r1_fn(wl_cen),
+                port_sidewall_angle=port_sidewall_angle,
             ),
             bot_port=dict(
                 type="box",
@@ -121,6 +174,7 @@ class Crossing(N_Ports):
                     + ([port_height[1]] if is_3d else [])
                 ),
                 eps=eps_r1_fn(wl_cen),
+                port_sidewall_angle=port_sidewall_angle,
             ),
         )
 
@@ -146,14 +200,33 @@ class Crossing(N_Ports):
         )
 
     def init_monitors(self, verbose: bool = True):
-        rel_width = 3
-        pml_x, pml_y, _ = self.sim_cfg["PML"]
+        """Build source/reflection/output/cross-port monitor slices and a 2-D radiation monitor.
+
+        Args:
+            verbose (bool): Whether to log monitor/source construction. Defaults to True.
+
+        Returns:
+            tuple: In 2-D, ``(src_slice, out_slice, refl_slice, top_slice, bot_slice, radiation_monitor)``.
+            In 3-D, ``(src_slice, out_slice, refl_slice, top_slice, bot_slice)`` without a radiation monitor.
+        """
+        rel_width = 4
+        pml_x, pml_y = self.sim_cfg["PML"][:2]
         offset_x, offset_y = 0.2 + pml_x, 0.2 + pml_y
         port_len_x = self.port_cfgs["in_port_1"]["size"][0]
         port_len_y = self.port_cfgs["top_port"]["size"][1]
         rel_height = None
         if self.is_3d:
-            rel_height = 4.5
+            rel_height = (
+                (
+                    self.box_size[2]
+                    + self.sim_cfg["border_width"][4]
+                    + self.sim_cfg["border_width"][5]
+                    - self.sim_cfg["PML"][-1] * 2
+                )
+                / self.box_size[2]
+                if self.is_3d
+                else None
+            )
         if verbose:
             logger.info("Start generating sources and monitors ...")
         src_slice = self.build_port_monitor_slice(
@@ -205,6 +278,17 @@ class Crossing(N_Ports):
         return src_slice, out_slice, refl_slice, top_slice, bot_slice
 
     def norm_run(self, verbose: bool = True):
+        """Build normalization profiles for all four crossing ports.
+
+        Args:
+            verbose (bool): Whether to log normalization-run construction. Defaults to True.
+
+        Returns:
+            tuple[dict, dict, dict, dict, dict]: Normalization profile mappings for the
+            input, reflection, output, top, and bottom port/slice paths, respectively.
+            All profiles use ``self.mode`` and the configured solver; only the input profile
+            sets ``require_sim=True``.
+        """
         if verbose:
             logger.info("Start normalization run ...")
         # norm_run_sim_cfg = copy.deepcopy(self.sim_cfg)

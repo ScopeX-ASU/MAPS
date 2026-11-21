@@ -38,7 +38,7 @@ def bending_opt(
     perturb_probs=[0.1, 0.3, 0.5],
 ):
     set_torch_deterministic(int(device_id))
-    dump_data_path = f"./data/fdfd/bending/raw_opt_traj_ptb"
+    dump_data_path = f"./data/fdfd/bending/raw_opt_traj_ptb/mfs_50"
     sim_cfg = DefaultSimulationConfig()
     target_img_size = 256
     resolution = 50
@@ -61,7 +61,7 @@ def bending_opt(
             solver="ceviche_torch",
             border_width=[0, port_len, port_len, 0],
             resolution=resolution,
-            plot_root=f"./data/fdfd/bending/plot_opt_traj_ptb/bending_{device_id}",
+            plot_root=f"./data/fdfd/bending/plot_opt_traj_ptb/mfs_50/bending_{device_id}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
@@ -71,12 +71,13 @@ def bending_opt(
 
     device = Bending(
         sim_cfg=sim_cfg,
-        box_size=bending_region_size,
+        bending_region_size=bending_region_size,
         port_len=(port_len, port_len),
         port_width=(input_port_width, output_port_width),
         device=operation_device,
     )
-    hr_device = device.copy(resolution=310)
+    # hr_device = device.copy(resolution=310)
+    hr_device = device.copy(resolution=1000)
     print(device)
     opt = BendingOptimization(
         device=device,
@@ -167,7 +168,8 @@ def bending_opt(
         # results = opt.forward(sharpness=256)
         print(f"Step {step}:", end=" ")
         for k, obj in results["breakdown"].items():
-            print(f"{k}: {obj['value']:.3f}", end=", ")
+            # print(f"{k}: {obj['value']:.3f}", end=", ")
+            print(f"{k}: {obj['value'].detach().item():.3f}", end=", ")
         print()
 
         (-results["obj"]).backward()
@@ -215,9 +217,19 @@ def bending_opt(
             cosine_similarity = compare_designs(
                 last_design_region_dict, current_design_region_dict
             )
-            if cosine_similarity < 0.996 or step == n_epoch - 1 or each_step:
+            if (
+                cosine_similarity < 0.998
+                or step == n_epoch - 1
+                or each_step
+                or step % 5 == 0
+            ):
+                # if cosine_similarity < 0.996 or step == n_epoch - 1 or each_step:
                 opt.dump_data(
-                    filename_h5=filename_h5, filename_yml=filename_yml, step=step
+                    filename_h5=filename_h5,
+                    filename_yml=filename_yml,
+                    step=step,
+                    use_high_res_eps=True,
+                    binarize_eps=True,
                 )
                 last_design_region_dict = current_design_region_dict
                 dumped_data = True
@@ -249,11 +261,10 @@ def main():
     parser.add_argument("--gpu_id", type=int, default=0)
     parser.add_argument("--each_step", type=int, default=0)
     parser.add_argument("--include_perturb", type=int, default=0)
-    args = parser.parse_args()
-    random_seed = args.random_seed
-    gpu_id = args.gpu_id
-    each_step = args.each_step
-    include_perturb = args.include_perturb
+    random_seed = parser.parse_args().random_seed
+    gpu_id = parser.parse_args().gpu_id
+    each_step = parser.parse_args().each_step
+    include_perturb = parser.parse_args().include_perturb
     torch.cuda.set_device(gpu_id)
     device = torch.device("cuda:" + str(gpu_id))
     torch.backends.cudnn.benchmark = True

@@ -1,4 +1,4 @@
-# Reproducible Installation for MAPS_fdtdx
+# Reproducible Installation for MAPS
 
 This document describes the installation procedure that was derived from the repository itself and from the currently working `python311venv` environment referenced by the repository owner. It is split into a reproducible default path for the 2D FDFD and training workflows, plus optional packages for the 3D `fdtdx`, JAX heat-solver, and Gradio app workflows.
 
@@ -15,7 +15,7 @@ The current validation host reports `glibc 2.28`. On that host, the prebuilt PyG
 ## Files generated for installation
 
 - `install.sh`: end-to-end bootstrap and installation script
-- `environment.yml`: Conda environment definition for the compiled Conda-managed base stack
+- `environment.yaml`: Conda environment definition for the compiled Conda-managed base stack
 - `verify_install.py`: import and runtime smoke test
 - `pyproject.toml`: minimal packaging metadata so `pip install -e .` works
 
@@ -24,10 +24,10 @@ The current validation host reports `glibc 2.28`. On that host, the prebuilt PyG
 The dependency set below was derived from these sources in this repository:
 
 - `requirements.txt`
-- `environment.yml` from the existing working environment export
+- `environment.yaml` from the existing working environment export
 - `app/requirements-app.txt`
 - `README.md` and `app/README.md`
-- direct imports under `app/`, `core/`, `data/`, `drc/`, top-level scripts, and `thirdparty/`
+- direct imports under `core/`, `data/`, `gpu_subpixel/`, top-level scripts, and `thirdparty/`
 - `core/fdfd/cudss_spsolve/setup.py`
 
 No root `pyproject.toml`, `setup.py`, `setup.cfg`, `Dockerfile`, or CI workflow existed before this change.
@@ -36,8 +36,7 @@ No root `pyproject.toml`, `setup.py`, `setup.cfg`, `Dockerfile`, or CI workflow 
 
 - Validated working version: `Python 3.11.10`
 - Evidence:
-  - repository `environment.yml` pinned `python=3.11.10`
-  - user-provided working interpreter was `/home/jiaqigu/pkgs/miniforge3/envs/python311venv/bin/python`
+  - repository `environment.yaml` pinned `python=3.11.10`
   - the current working environment reports `Python 3.11.10`
 
 ## Dependency classification
@@ -95,7 +94,6 @@ These are required for the default validated 2D FDFD plus training and inference
 - `ryaml==0.4.0`
 - `scikit-learn==1.5.2`
 - `svglib==1.5.1`
-- `tensorflow==2.20.0`
 - `tensorly==0.8.1`
 - `tensorly-torch==0.5.0`
 - `tidy3d==2.11.2`
@@ -115,22 +113,20 @@ Why the install order matters:
 4. `pyutility` must be installed by cloning `https://github.com/JeremieMelo/pyutility.git` and running `./setup.sh`, per the repository owner’s instruction, because `pip install torchonn-pyutils --no-build-isolation` does not work properly.
 5. `pydiso` is installed through Conda with `mkl-devel`, matching the validated fix `mamba install pydiso --channel conda-forge mkl-devel`, because the clean-machine pip build failed with missing `mkl-sdl` metadata.
 
-### Optional pip packages for the app and layout workflows
+### Optional pip packages for layout export workflows
 
 Installed by default in `install.sh` unless `INSTALL_OPTIONAL_APP=0` is set:
 
 - `gdsfactory==9.14.1`
 - `gdspy==1.6.13`
 - `gdstk==0.9.55`
-- `gradio==6.8.0`
 - `klayout==0.30.3`
 
 ### Optional pip packages for the 3D `fdtdx` and JAX heat workflows
-*Currently depend on private internal fdtdx-adjoint library to support adjoint 3D FDTD inverse design*
-*Public fdtdx does not support adjoint solve*
+
 Installed only when `INSTALL_OPTIONAL_3D=1`:
 
-- `fdtdx==0.6.2`
+- `fdtdx @ git+https://github.com/ymahlau/fdtdx.git@77b4bc523a8e98cb7dd388e99481a0000f71dd4d` *(pinned post-`0.6.2` upstream commit; **do NOT install `fdtdx==0.6.2` from PyPI**)*
 - `jax==0.9.2`
 - `jaxlib==0.9.2`
 - `jax-cuda12-pjrt==0.9.2`
@@ -140,6 +136,8 @@ Installed only when `INSTALL_OPTIONAL_3D=1`:
 - `gmsh==4.15.2`
 - `fenics-basix==0.10.0`
 - supporting exact versions used in the working environment: `equinox==0.13.6`, `loguru==0.7.3`, `moviepy==2.2.0`, `optax==0.2.8`, `rich==14.1.0`, `trimesh==4.11.5`
+
+> **Important (`fdtdx` commit vs. PyPI `0.6.2`)**: Upstream `fdtdx` at commit `77b4bc523a8e98cb7dd388e99481a0000f71dd4d` is 68 commits ahead of the `v0.6.2` release tag (including `RectilinearGrid`, custom mode-overlap detectors, and symmetry fixes), yet its package metadata still reports version `0.6.2`. Consequently, `pip freeze` / `pip list` shows `0.6.2`, which previously misled manual setups into installing the incompatible PyPI `fdtdx==0.6.2` wheel. Both `install.sh` and `verify_install.py` check `direct_url.json` Git commit provenance and reject PyPI `fdtdx==0.6.2`.
 
 The repository owner explicitly noted that `fdtdx` is not required for the 2D FDFD path. `tidy3d` and `tidy3d-extras` are treated as part of the default install because they are also used in the 2D workflows.
 
@@ -155,7 +153,7 @@ The repository owner explicitly noted that `fdtdx` is not required for the 2D FD
 - `cupy-cuda12x==14.0.1`
 - `pydiso==0.2.0` via Conda together with `mkl-devel`
 - default path: `tidy3d==2.11.2`, `tidy3d-extras`
-- optional 3D path: `jax-cuda12-pjrt==0.9.2`, `jax-cuda12-plugin==0.9.2`, `fdtdx==0.6.2`
+- optional 3D path: `jax-cuda12-pjrt==0.9.2`, `jax-cuda12-plugin==0.9.2`, `fdtdx @ git+https://github.com/ymahlau/fdtdx.git@77b4bc523a8e98cb7dd388e99481a0000f71dd4d`
 
 ## External system libraries
 
@@ -181,7 +179,7 @@ These are included because OpenCV, plotting, and wheel fallback builds commonly 
 ## Editable local packages
 
 - Root repository: installed with `pip install -e .`
-- No separate editable install is required for `thirdparty/ceviche` or `thirdparty/PreFab`; they are imported through the repository package tree and become available through the root editable install.
+- No separate editable install is required for `thirdparty/ceviche`, `thirdparty/fdtdx`, or `gpu_subpixel`; they are imported through the repository package tree and become available through the root editable install.
 
 ## Local compiled extensions
 

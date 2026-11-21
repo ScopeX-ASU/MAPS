@@ -7,7 +7,10 @@ from core.invdes.models.base_optimization import (
 
 
 class DefaultConfig(DefaultOptimizationConfig):
+    """Default FDFD modal-conversion and crosstalk objective configuration."""
+
     def __init__(self):
+        """Initialize the default ModeCvtMux configuration tree."""
         super().__init__()
         self.update(
             dict(
@@ -215,6 +218,30 @@ class DefaultConfig(DefaultOptimizationConfig):
 
 
 class ModeCvtMuxOptimization(BaseOptimization):
+    """Inverse-design model for mode conversion/multiplexing.
+
+    Args:
+        device: Simulation-resolution device defining the modal-converter
+            geometry, ports, and design regions.
+        hr_device: Higher-resolution device used by the design parameterization.
+        design_region_param_cfgs: Optional mapping of design-region settings.
+            The current implementation constructs a level-set configuration
+            for each design region regardless of the supplied mapping.
+        sim_cfg: Overrides for the default ``ceviche_torch`` simulation settings.
+        obj_cfgs: Objective overrides for mode-1/mode-2 transmission, reflection,
+            and radiation penalties.
+        operation_device: PyTorch optimization device.
+        verbose: Passed to the underlying base optimization model for runtime
+            logging.
+
+    Notes:
+        The default parameterization uses ``rho_resolution=[25,25]``, blur with
+        ``mfs=0.1`` in ``xy``, binarization, random initialization, bilinear
+        interpolation, and binary projection thresholds of 100. The active
+        objective evaluates mode-conversion transmission at 1.55 um and uses
+        ``Ez1``/``Ez2`` output-mode conventions.
+    """
+
     def __init__(
         self,
         device,

@@ -4,7 +4,10 @@ from .base_optimization import BaseOptimization, DefaultOptimizationConfig
 
 
 class DefaultConfig(DefaultOptimizationConfig):
+    """Default simulation and objective configuration for Edge Coupler optimization."""
+
     def __init__(self):
+        """Initialize the Edge Coupler default configuration tree."""
         super().__init__()
         self.update(
             dict(
@@ -85,6 +88,26 @@ class DefaultConfig(DefaultOptimizationConfig):
 
 
 class EdgeCouplerOptimization(BaseOptimization):
+    """Inverse-design optimization model for an edge coupler.
+
+    Args:
+        device: Simulation-resolution device defining geometry and design regions.
+        hr_device: Higher-resolution device used for parameterization transforms.
+        design_region_param_cfgs: Optional design-region mapping. The current
+            implementation constructs the default level-set mapping for all
+            device design regions regardless of the supplied value.
+        sim_cfg: Overrides for the default simulation configuration.
+        obj_cfgs: Objective configuration overrides.
+        operation_device: PyTorch device used for optimization tensors.
+
+    Notes:
+        The built-in parameterization uses ``rho_resolution=[25, 25]``, mirror
+        symmetry along dimension 1, blur with ``mfs=0.05`` in ``xy``, binarization,
+        bilinear interpolation, and linear-epsilon denormalization. The default
+        objectives include forward flux, reflected flux-minus-source, and a
+        Gaussian intensity-shape penalty with width ``2.5 / 4``.
+    """
+
     def __init__(
         self,
         device,

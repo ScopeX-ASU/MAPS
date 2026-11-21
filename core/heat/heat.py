@@ -92,6 +92,26 @@ class HeatSolver(nn.Module):
                     "residual_atol": 1e-8,
                 },
             }
+        if backend == "amjax":
+            return {
+                "dirichlet_mode": "reduced_free_dof",
+                "amjax_solver": {
+                    "method": "cg",
+                    "pyamg_solver": "rootnode",  # robust for high-contrast jumps
+                    "pyamg_kwargs": {
+                        "strength": ("symmetric", {"theta": 0.05}),
+                    },
+                    "cycle": "V",
+                    "tol": 1e-8,
+                    "atol": 1e-8,
+                    "maxiter": 200,
+                    "solve_dtype": "float64",
+                    "reuse_hierarchy": True,
+                    "check_residual": True,
+                    "residual_rtol": 1e-6,
+                    "residual_atol": 1e-8,
+                },
+            }
         if backend == "pydiso":
             return {
                 "dirichlet_mode": "reduced_free_dof",
@@ -126,7 +146,10 @@ class HeatSolver(nn.Module):
             "pydiso": "pydiso_solver",
             "scipy": "spsolve_solver",
             "petsc": "petsc_solver",
+            "amjax": "amjax_solver",
         }.get(backend)
+        if backend == "jax" and "jax_matrix_free_solver" in options:
+            backend_option_key = "jax_matrix_free_solver"
         if backend_option_key is None:
             raise ValueError("Unsupported heat backend: %r" % (backend,))
 

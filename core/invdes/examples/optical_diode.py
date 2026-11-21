@@ -19,11 +19,13 @@ sys.path.insert(
 )
 import torch
 from pyutils.config import Config
+from pyutils.general import logger
 
 from core.invdes.invdesign import InvDesign
 from core.invdes.models import OpticalDiodeOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
 from core.invdes.models.layers import OpticalDiode
+from core.invdes.run_management import OptimizationRunManager
 from core.utils import SharpnessScheduler, set_torch_deterministic
 
 sys.path.pop(0)
@@ -68,6 +70,17 @@ def generate_optical_diode(gpu_id, mfs):
     final_mfs = mfs
 
     exp_name = f"optical_diode_mfs{mfs * 1000:.0f}_500_100ls"
+    work_root = "./runs"
+    resume_checkpoint = os.environ.get("MAPS_RESUME_CHECKPOINT")
+
+    run_manager = OptimizationRunManager(
+        root=work_root,
+        experiment="optical_diode",
+        tag=exp_name,
+        resume=resume_checkpoint is not None,
+        resume_from=resume_checkpoint,
+    )
+    run_manager.attach_logger(logger)
 
     sim_cfg.update(
         dict(
@@ -75,14 +88,13 @@ def generate_optical_diode(gpu_id, mfs):
             # border_width=[port_len, port_len, 2, 2],
             border_width=[0, 0, 2, 2],
             resolution=50,
-            # plot_root=f"./figs/{exp_name}_{opticaldiode_region_size[0]}_{opticaldiode_region_size[1]}",
-            plot_root=f"./figs/{exp_name}",
             PML=[0.5, 0.5],
             neural_solver=None,
             numerical_solver="solve_direct",
             use_autodiff=False,
         )
     )
+    run_manager.bind_simulation_config(sim_cfg)
 
     def fom_func(breakdown):
         ## maximization fom
@@ -150,6 +162,7 @@ def generate_optical_diode(gpu_id, mfs):
     ).to(operation_device)
     invdesign = CustomInvDesign(
         devOptimization=opt,
+        run_manager=run_manager,
         optimizer=Config(
             # name="adam",
             name="nesterov",
@@ -180,6 +193,8 @@ def generate_optical_diode(gpu_id, mfs):
             dump_gds=True,
             gds_name=f"{exp_name}",
             upsample_eps_to_1nm=True,
+            load_ckpt=resume_checkpoint,
+            resume=resume_checkpoint is not None,
         ),
     )
     invdesign.optimize()

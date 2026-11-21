@@ -4,7 +4,15 @@ from .base_optimization import BaseOptimization, DefaultOptimizationConfig
 
 
 class DefaultConfig(DefaultOptimizationConfig):
+    """Default simulation and multi-port objective configuration for Crossing.
+
+    The default objective stack measures forward transmission, reflection,
+    top/bottom cross-talk, radiation, and an optional four-output S-matrix at
+    wavelength 1.55 um using the ``Ez1`` mode convention.
+    """
+
     def __init__(self):
+        """Initialize the default Crossing configuration tree."""
         super().__init__()
         self.update(
             dict(
@@ -173,6 +181,30 @@ class DefaultConfig(DefaultOptimizationConfig):
 
 
 class CrossingOptimization(BaseOptimization):
+    """Inverse-design optimization model for a four-way waveguide crossing.
+
+    Args:
+        device: Simulation-resolution crossing device defining the geometry,
+            grids, ports, monitors, and design regions.
+        hr_device: Higher-resolution device representation used for design
+            parameterization and fabrication-aware transforms.
+        design_region_param_cfgs: Mapping of design-region names to parameterization
+            settings. If empty, the default level-set, symmetry, blur, and
+            binarization pipeline is generated per region.
+        sim_cfg: Overrides for the default simulation configuration.
+        obj_cfgs: Overrides for default forward/reflection/cross-talk/radiation
+            objectives. ``override=True`` clears the defaults first.
+        operation_device: PyTorch device used for optimization state.
+        verbose: Whether the underlying base optimization model should emit
+            verbose construction/runtime logging.
+
+    Notes:
+        The default design parameterization uses ``rho_resolution=[50, 50]``,
+        transpose/mirror symmetry, ``mfs=0.08`` blur in ``xy``,
+        ``init_method="diamond_0.3"``, Gaussian-linear interpolation, and
+        binary projection thresholds of 100 in both forward and backward modes.
+    """
+
     def __init__(
         self,
         device,

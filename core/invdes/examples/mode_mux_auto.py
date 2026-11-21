@@ -13,12 +13,14 @@ sys.path.insert(
 
 import torch
 from pyutils.config import Config
+from pyutils.general import logger
 
 from core.invdes.autotune import AutoTune
 from core.invdes.invdesign import InvDesign
-from core.invdes.models import ModeMuxOptimization
+from core.invdes.models import ModeCvtMuxOptimization
 from core.invdes.models.base_optimization import DefaultSimulationConfig
-from core.invdes.models.layers import ModeMux
+from core.invdes.models.layers import ModeCvtMux
+from core.invdes.run_management import OptimizationRunManager
 from core.utils import set_torch_deterministic
 
 sys.path.pop(0)
@@ -48,19 +50,27 @@ if __name__ == "__main__":
         etch_thickness = params["etch_thickness"]
 
         exp_comment = f"{etch_thickness}"
+        exp_name = f"mode_mux_{iter}_{mode_mux_region_size[0]}x{mode_mux_region_size[1]}_{exp_comment}"
+
+        run_manager = OptimizationRunManager(
+            root="./runs",
+            experiment="mode_mux_auto",
+            tag=exp_name,
+        )
+        run_manager.attach_logger(logger)
 
         sim_cfg.update(
             dict(
                 solver="ceviche_torch",
                 border_width=[0, 0, 2, 2],
                 resolution=50,
-                plot_root=f"./figs/{root}",
                 PML=[0.5, 0.5],
                 neural_solver=None,
                 numerical_solver="solve_direct",
                 use_autodiff=False,
             )
         )
+        run_manager.bind_simulation_config(sim_cfg)
 
         def fom_func(breakdown):
             ## maximization fom
@@ -74,7 +84,7 @@ if __name__ == "__main__":
             return fom, {"trans_product": {"weight": 1, "value": product}}
 
         obj_cfgs = dict(_fusion_func=fom_func)
-        device = ModeMux(
+        device = ModeCvtMux(
             etch_thickness=etch_thickness,
             sim_cfg=sim_cfg,
             box_size=mode_mux_region_size,
@@ -85,16 +95,16 @@ if __name__ == "__main__":
 
         hr_device = device.copy(resolution=310)
         print(device)
-        opt = ModeMuxOptimization(
+        opt = ModeCvtMuxOptimization(
             device=device,
             hr_device=hr_device,
             sim_cfg=sim_cfg,
             obj_cfgs=obj_cfgs,
             operation_device=operation_device,
-            verbose=False,
         ).to(operation_device)
         invdesign = InvDesign(
             devOptimization=opt,
+            run_manager=run_manager,
             optimizer=Config(
                 # name="adam",
                 name="nesterov",
@@ -114,19 +124,25 @@ if __name__ == "__main__":
                 init_sharp=0.1,
                 final_sharp=20,
             ),
+            plot_cfgs=Config(
+                plot=True,
+                interval=1,
+                plot_name=exp_name,
+                objs=["mode1_trans", "mode2_trans"],
+                field_keys=[
+                    ("in_slice_1", 1.55, "Ez1", 300),
+                    ("in_slice_2", 1.55, "Ez1", 300),
+                ],
+                in_slice_names=["in_slice_1", "in_slice_2"],
+                exclude_slice_names=[],
+            ),
+            checkpoint_cfgs=Config(
+                save_model=False,
+                ckpt_name=exp_name,
+                dump_gds=False,
+            ),
         )
-        invdesign.optimize(
-            plot=True,
-            plot_filename=f"mode_mux_{iter}_{mode_mux_region_size[0]}x{mode_mux_region_size[1]}_{exp_comment}",
-            objs=["mode1_trans", "mode2_trans"],
-            field_keys=[
-                ("in_slice_1", 1.55, "Ez1", 300),
-                ("in_slice_2", 1.55, "Ez1", 300),
-            ],
-            in_slice_names=["in_slice_1", "in_slice_2"],
-            exclude_slice_names=[],
-            verbose=False,
-        )
+        invdesign.optimize(verbose=False)
 
         obj = invdesign.results["obj"].item()
         return obj, invdesign

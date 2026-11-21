@@ -2,18 +2,32 @@ import torch
 
 
 class Adahessian(torch.optim.Optimizer):
-    """
-    Implements the AdaHessian algorithm from "ADAHESSIAN: An Adaptive Second OrderOptimizer for Machine Learning"
+    """Implement AdaHessian with Hutchinson Hessian-trace estimates.
+
+    The optimizer maintains exponential moving averages of the gradient and an
+    estimated Hessian diagonal/trace contribution, then scales the parameter
+    update by a configurable power of the Hessian statistic.
 
     Arguments:
-        params (iterable) -- iterable of parameters to optimize or dicts defining parameter groups
-        lr (float, optional) -- learning rate (default: 0.1)
-        betas ((float, float), optional) -- coefficients used for computing running averages of gradient and the squared hessian trace (default: (0.9, 0.999))
-        eps (float, optional) -- term added to the denominator to improve numerical stability (default: 1e-8)
-        weight_decay (float, optional) -- weight decay (L2 penalty) (default: 0.0)
-        hessian_power (float, optional) -- exponent of the hessian trace (default: 1.0)
-        update_each (int, optional) -- compute the hessian trace approximation only after *this* number of steps (to save time) (default: 1)
-        n_samples (int, optional) -- how many times to sample `z` for the approximation of the hessian trace (default: 1)
+        params (iterable): Parameters or parameter-group dictionaries accepted by
+            :class:`torch.optim.Optimizer`.
+        lr (float): Learning rate. Defaults to 0.1.
+        betas (tuple[float, float]): Exponential decay factors for gradient and
+            Hessian statistics. Defaults to ``(0.9, 0.999)``.
+        eps (float): Denominator stabilizer. Defaults to ``1e-8``.
+        weight_decay (float): AdamW-style decoupled weight decay. Defaults to 0.0.
+        hessian_power (float): Exponent applied to the estimated Hessian statistic.
+            Defaults to 1.0.
+        update_each (int): Recompute the Hessian estimate every this many optimizer
+            steps. Defaults to 1.
+        n_samples (int): Number of Hutchinson Rademacher samples per Hessian update.
+            Defaults to 1.
+        average_conv_kernel (bool): For 4-D tensors, spatially average the absolute
+            Hessian statistic before the update. Defaults to False.
+
+    Raises:
+        ValueError: If ``lr``, ``eps``, ``betas``, or ``hessian_power`` is outside
+            the supported range.
     """
 
     def __init__(
@@ -28,6 +42,23 @@ class Adahessian(torch.optim.Optimizer):
         n_samples=1,
         average_conv_kernel=False,
     ):
+        """Initialize optimizer defaults and per-parameter Hessian state.
+
+        Args:
+            params: Iterable of parameters or parameter-group dictionaries.
+            lr (float): Learning rate. Defaults to 0.1.
+            betas (tuple[float, float]): Gradient and Hessian EMA coefficients.
+                Defaults to ``(0.9, 0.999)``.
+            eps (float): Denominator stabilizer. Defaults to ``1e-8``.
+            weight_decay (float): Decoupled weight decay coefficient. Defaults to 0.0.
+            hessian_power (float): Hessian statistic exponent in ``[0, 1]``.
+                Defaults to 1.0.
+            update_each (int): Number of optimizer steps between Hessian recomputations.
+                Defaults to 1.
+            n_samples (int): Number of Hutchinson samples per recomputation. Defaults to 1.
+            average_conv_kernel (bool): Whether to spatially average 4-D Hessian estimates.
+                Defaults to False.
+        """
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
         if not 0.0 <= eps:
@@ -60,19 +91,22 @@ class Adahessian(torch.optim.Optimizer):
             self.state[p]["hessian step"] = 0
 
     def get_params(self):
-        """
-        Gets all parameters in all param_groups with gradients
-        """
+        """Yield all trainable parameters in all optimizer parameter groups.
 
+        Returns:
+            iterator: Parameters whose ``requires_grad`` flag is true.
+        """
         return (
             p for group in self.param_groups for p in group["params"] if p.requires_grad
         )
 
     def zero_hessian(self):
-        """
-        Zeros out the accumalated hessian traces.
-        """
+        """Clear stored Hessian estimates when their scheduled update is due.
 
+        Parameters whose Hessian estimate is still a scalar initialization value
+        are left unchanged; tensor estimates are zeroed only when the associated
+        ``hessian step`` counter is divisible by ``update_each``.
+        """
         for p in self.get_params():
             if (
                 not isinstance(p.hess, float)
@@ -82,10 +116,14 @@ class Adahessian(torch.optim.Optimizer):
 
     @torch.no_grad()
     def set_hessian(self):
-        """
-        Computes the Hutchinson approximation of the hessian trace and accumulates it for each trainable parameter.
-        """
+        """Estimate and accumulate Hessian statistics with Hutchinson sampling.
 
+        For scheduled parameters with existing gradients, this method samples
+        Rademacher vectors and uses ``torch.autograd.grad`` to estimate the
+        Hessian-vector products. The resulting ``z * (H @ z)`` estimates are
+        accumulated into each parameter's ``p.hess`` field and averaged over
+        ``n_samples`` samples.
+        """
         params = []
         for p in filter(lambda p: p.grad is not None, self.get_params()):
             if (
@@ -125,12 +163,22 @@ class Adahessian(torch.optim.Optimizer):
 
     @torch.no_grad()
     def step(self, closure=None):
-        """
-        Performs a single optimization step.
-        Arguments:
-            closure (callable, optional) -- a closure that reevaluates the model and returns the loss (default: None)
-        """
+        """Perform one AdaHessian parameter update.
 
+        Args:
+            closure (Callable[[], torch.Tensor] | None): Optional closure that
+                reevaluates the objective and returns the loss. Defaults to None.
+
+        Returns:
+            torch.Tensor | None: The closure's loss when a closure is supplied;
+            otherwise None.
+
+        Notes:
+            Each step refreshes scheduled Hessian estimates, updates first- and
+            second-moment state with the configured ``betas``, applies decoupled
+            weight decay, and scales the update by the bias-corrected Hessian
+            statistic raised to ``hessian_power / 2``.
+        """
         loss = None
         if closure is not None:
             loss = closure()

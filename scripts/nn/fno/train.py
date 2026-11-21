@@ -142,15 +142,10 @@ if __name__ == "__main__":
     # mlflow.set_experiment(configs.run.experiment)  # set experiments first
 
     tasks = [
-        # [0.0, "metacoupler", "FNO3d", 150, 225, 7, "full_mode", 0, 50, 0.002, "nmse", 1, 0, "none", 2],
-        # [0.0, "metacoupler", "FNO3d", 30, 45, 8, "less_mode", 1, 50, 0.002, "nmse", 1, 0, "none", 2],
-        # [0.0, "metacoupler", "FNO3d", 30, 45, 9, "less_mode_ripped_dataset", 2, 50, 0.002, "nmse", 1, 0, "none", 2],
-        # [0.0, "metacoupler", "FNO3d", 30, 45, 10, "less_mode_maxwell_loss", 0, 50, 0.002, "nmse", 1, 0.0, 0.0, 0.5, "none", 2],
         # [0.0, "bending", "FNO3d", 33, 66, 0, "plain", 0, 50, 0.002, "nmse", 1, 0.0, 0.0, 0.0, "none", 2],
         # [0.0, "bending", "FNO3d", 10, 20, 1, "plain_lessmodes", 0, 50, 0.002, "nmse", 1, 0.0, 0.0, 0.0, "none", 2],
         # [0.0, "bending", "FNO3d", 33, 66, 2, "plain_lessvar", 0, 50, 0.002, "nmse", 1, 0.0, 0.0, 0.0, "none", 2],
         # [0.0, "bending", "FNO3d", 10, 20, 3, "test_more_batchsize", 1, 50, 0.002, "nmse", 1, 0.0, 0.0, 0.0, "none", 16],
-        # [0.0, "metacoupler", "FNO3d", True, 20, 280, 5, "single_layer_coupler_less_x_mode", 0, 50, 0.002, "nmse", 1, 0.0, 0.0, 0.0, "none", 12],
         # [0.0, "bending", "FNO3d", True, True, 33, 66, 4, "fourier_feature_pml_layer_draw", 0, 50, 0.002, "nmse", 1, 0.0, 0.0, 0.0, "./checkpoint/fdfd/fno/train/FNO3d_model-FNO3d_dev-bending_id-4_dcrp-fourier_feature_pml_layer_err-0.0643_epoch-44.pt", 2],
         # [0.0, "bending", "FNO3d", True, True, 33, 66, 5, "LFF", 0, 50, 0.002, "nmse", 1, 0.0, 0.0, 0.0, "none", 2],
         # [0.0, "bending", "FNO3d", True, True, 33, 66, 6, "LFF_err_corr", 0, 50, 0.002, "nmse", 1, 0.0, 0.0, 0.0, "none", 2],

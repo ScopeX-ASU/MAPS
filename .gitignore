@@ -9,7 +9,8 @@ __pycache__/
 *.jpg
 *.gds
 *.out
-data/*
+# data/*
+# !data/fdfd/*.py
 
 # Distribution / packaging
 .Python
@@ -169,8 +170,12 @@ cython_debug/
 *.h5
 *.json
 *.pt
+*.npy
+/checkpoint
+/runs
+/results
+/outputs
 /wandb/*
-/data/fdfd/metacoupler/*
 /data/fdfd/bending/*
 /plot/*
 *.csv
@@ -185,12 +190,14 @@ data/fdfd/wdm/raw_test/*.yml
 data/fdfd/tdm/raw_test/*.yml
 data/fdfd/optical_diode/raw_test/*.yml
 data/fdfd/crossing/raw_test/*.yml
-unitest/*.mp4
-unitest/*.mp4
-
+data/fdfd/**/*.jsonl
+data/experiment/**/*.jsonl
 # Ignore all .yml files
 *.yml
 
 # Exclude the ./config directory and its subdirectories
-!config/
-!config/**/*.yml
+!configs/
+!configs/**/*.yml
+!docs/
+!docs/**/*.json
+.codegraph/

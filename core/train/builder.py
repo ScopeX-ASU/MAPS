@@ -11,6 +11,7 @@ we only request the train_loader, valid_loader and test_loader in the training p
 and the dataloader should be returned by the datasets submodules
 """
 
+import random
 from typing import Tuple
 
 import torch
@@ -20,6 +21,7 @@ from pyutils.datasets import get_dataset
 from pyutils.lr_scheduler.warmup_cosine_restart import CosineAnnealingWarmupRestarts
 from pyutils.optimizer.sam import SAM
 from pyutils.typing import DataLoader, Optimizer, Scheduler
+from torch.types import Device
 
 from core.utils import train_configs as configs
 
@@ -49,8 +51,6 @@ from .utils import (
 __all__ = [
     "make_dataloader",
     "make_model",
-    "make_weight_optimizer",
-    "make_arch_optimizer",
     "make_optimizer",
     "make_scheduler",
     "make_criterion",

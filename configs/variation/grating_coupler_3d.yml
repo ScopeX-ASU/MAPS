@@ -1,0 +1,43 @@
+# Length deviations are in micrometers. Disable symmetry for lateral offsets.
+variation:
+  enabled: true
+  seed: 42
+  num_samples: 4
+  resample_every: 1
+  strategy: iid
+  aggregation:
+    mode: mean_std
+    penalty: 0.2
+  distributions:
+    - params: [grating_layer_1.dx, grating_layer_1.dy]
+      backend: scipy
+      type: multivariate_normal
+      mean: [0.0, 0.0]
+      cov: [[0.0001, 0.00005], [0.00005, 0.0001]]
+      min: -0.03
+      max: 0.03
+    - params: [grating_layer_2.dx, grating_layer_2.dy]
+      backend: scipy
+      type: norm
+      loc: 0.0
+      scale: 0.02
+      min: -0.06
+      max: 0.06
+    # Additive etch-depth error, not absolute etch depth.
+    - params: [grating_layer_1.etch_depth]
+      backend: scipy
+      type: uniform
+      min: -0.01
+      max: 0.01
+    - params: [silicon_thickness_error]
+      backend: scipy
+      type: uniform
+      min: -0.005
+      max: 0.005
+    - params: [source.in_slice_1.dx, source.in_slice_1.dy]
+      backend: scipy
+      type: norm
+      loc: 0.0
+      scale: 0.02
+      min: -0.06
+      max: 0.06

@@ -1,5 +1,14 @@
-"""
-Description:
+"""Shared constants and device defaults used by InvDes model definitions.
+
+The material constants are relative refractive indices/permittivities used by
+legacy model configurations. SI electromagnetic constants such as ``MU0``,
+``EPSILON0``, and ``C`` are provided for numerical formulations. Length-scale
+constants use microns: ``L0 = 1e-6`` m and ``PIXEL_SIZE = dL * L0``.
+
+The module-level ``device`` defaults to ``torch.device("cuda:0")`` and is a
+legacy execution-device convenience; callers should prefer explicit device
+arguments in newer APIs.
+
 Author: Jiaqi Gu (jqgu@utexas.edu)
 Date: 2022-01-19 23:05:54
 LastEditors: Jiaqi Gu (jqgu@utexas.edu)

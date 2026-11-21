@@ -11,9 +11,8 @@ from pyutils.typing import DataLoader, Optimizer, Scheduler
 from torch.types import Device
 from torch.utils.data import Sampler
 
-from core.drc.models import *
+from core.invdes.models import *
 from core.train.datasets import *
-from core.train.datasets.ilt import ILTDataset
 from core.train.models import *
 
 from .utils import (
@@ -42,9 +41,8 @@ from .utils import (
 
 __all__ = [
     "make_dataloader",
+    "make_device",
     "make_model",
-    "make_weight_optimizer",
-    "make_arch_optimizer",
     "make_optimizer",
     "make_scheduler",
     "make_criterion",
@@ -501,28 +499,6 @@ def make_dataloader(
             )
             for split in ["train", "valid", "test"]
         )
-    elif name == "ilt":
-        train_dataset, validation_dataset, test_dataset = (
-            (
-                ILTDataset(
-                    root=configs.dataset.root,
-                    data_dir=configs.dataset.data_dir,  # e.g., mmi
-                    split=split,
-                    test_ratio=configs.dataset.test_ratio,
-                    patch_size=configs.dataset.patch_size,  # 128
-                    context=configs.dataset.context,  # 128
-                    stride=configs.dataset.stride,  # 32
-                    train_valid_split_ratio=configs.dataset.train_valid_split_ratio,  # [0.8, 0.2]
-                    processed_dir=configs.dataset.processed_dir,  # processed
-                    border_size=configs.dataset.border_size,
-                    transform=configs.dataset.transform,  # basic or augment
-                    target_resolution=configs.dataset.resolution,
-                )
-                if split in splits
-                else None
-            )
-            for split in ["train", "valid", "test"]
-        )
     else:
         train_dataset, test_dataset = get_dataset(
             name,
@@ -634,35 +610,22 @@ def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
             ),
             device=device,
         ).to(device)
-    elif "metalens" in configs.model.name.lower():
-        model = eval(configs.model.name)(
-            ridge_height_max=configs.model.ridge_height_max,
-            sub_height=configs.model.sub_height,
-            aperture=configs.model.aperture,
-            f_min=configs.model.f_min,
-            f_max=configs.model.f_max,
-            eps_r=configs.model.eps_r,
-            eps_bg=configs.model.eps_bg,
-            sim_cfg=configs.model.sim_cfg,
-            ls_cfg=configs.model.ls_cfg,
-            mfs=configs.model.mfs,
-            binary_projection_threshold=configs.model.binary_projection_threshold,
-            build_method=configs.model.build_method,
-            center_ridge=configs.model.center_ridge,
-            max_num_ridges_single_side=configs.model.max_num_ridges_single_side,
-            operation_device=device,
-            aspect_ratio=configs.model.aspect_ratio,
-            initial_point=configs.model.initial_point,
-            if_constant_period=configs.model.if_constant_period,
-            focal_constant=configs.model.focal_constant,
-        ).to(device)
-    elif configs.model.name.lower() == "metacoupleroptimization":
-        model = eval(configs.model.name)(
-            device=kwargs["optDevice"],
-            sim_cfg=configs.model.sim_cfg,
-        ).to(device)
     elif "simplecnn" in configs.model.name.lower():
         model = eval(configs.model.name)().to(device)
+    elif configs.model.name.lower().endswith("optimization"):
+        opt_device = kwargs["optDevice"]
+        hr_res = getattr(configs.model, "hr_resolution", None)
+        hr_device = opt_device.copy(resolution=hr_res) if hr_res is not None else opt_device
+        model = eval(configs.model.name)(
+            device=opt_device,
+            hr_device=hr_device,
+            design_region_param_cfgs=getattr(
+                configs.model, "design_region_param_cfgs", {}
+            ),
+            sim_cfg=configs.model.sim_cfg,
+            obj_cfgs=getattr(configs.model, "obj_cfg", {}),
+            operation_device=device,
+        ).to(device)
     elif "neurolight" in configs.model.name.lower():
         model = eval(configs.model.name)(
             in_channels=configs.model.in_channels,
@@ -734,15 +697,6 @@ def make_model(device: Device, random_state: int = None, **kwargs) -> nn.Module:
             ffn=configs.model.ffn,
             ffn_dwconv=configs.model.ffn_dwconv,
         ).to(device)
-    elif configs.model.name.lower().endswith("iltmodel"):
-        model = eval(configs.model.name)(
-            device=device,
-            patch_size=configs.dataset.patch_size,
-            context=configs.dataset.context,
-            **configs.model,
-        ).to(device)
-    elif configs.model.name.lower() == "drvfixer":
-        model = eval(configs.model.name)(device=device, **configs.model).to(device)
     else:
         raise NotImplementedError(f"Not supported model name: {configs.model.name}")
     return model
